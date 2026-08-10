@@ -1,0 +1,7 @@
+# Raw geodata and bulk downloads — re-fetchable, ~165 MB and growing.
+# Provenance lives in fetch.py, not in git.
+data/
+.venv/
+__pycache__/
+*.pyc
+out/
