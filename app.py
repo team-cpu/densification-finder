@@ -43,6 +43,23 @@ SHORTLIST = 50
 # prints into its own QR code.
 OEREB_PDF = "https://api.geo.ag.ch/v2/oereb/extract/pdf/?EGRID="
 
+# The AGIS map link, and the one step the brief keeps manual: Philipp looks up
+# ownership there himself with his e-government login. Format taken from his own
+# browser (2026-08-11) rather than guessed — there is no EGRID parameter, the
+# parcel card is opened by `info=E,N,2`, which is what a click on the map sends.
+# `center` positions the view on the same point. z=13 is his parcel-level zoom.
+AGIS_MAP = (
+    "https://www.ag.ch/geoportal/apps/onlinekarten/?welcome="
+    "&basemap=base_landeskarten_sw::topicmaps.geo.ag.ch,1,true"
+    "&center={e},{n}&z=13&info={e},{n},2"
+)
+
+
+def agis_link(east, north):
+    if east is None or north is None or pd.isna(east) or pd.isna(north):
+        return None
+    return AGIS_MAP.format(e=f"{east:.2f}", n=f"{north:.2f}")
+
 st.set_page_config(page_title="Verdichtungspotenzial Aargau", layout="wide")
 
 
@@ -303,11 +320,14 @@ view = pd.DataFrame(
         "AZ": final["az"],
         "Potenzial m² (Schätzung)": final["delta"].round(0),
         f"≈ Whg. (à {SQM_PER_UNIT} m²)": (final["delta"] / SQM_PER_UNIT).round(1),
+        # Two links, because they answer different questions. AGIS is where
+        # ownership gets looked up — the manual step the brief deliberately
+        # keeps manual — and the ÖREB extract is the binding list of public-law
+        # restrictions, which carries no ownership at all.
+        "AGIS": final.apply(lambda r: agis_link(r["e"], r["n"]), axis=1),
         # Blank rather than a broken link where the parcel carries no EGRID.
         "ÖREB": final["egrid"].map(lambda e: OEREB_PDF + e if e else None),
         "Status": final.apply(status, axis=1),
-        "Fläche m²": final["area"].round(0),
-        "bestehend m²": final["existing"].round(0),
     }
 )
 
@@ -319,6 +339,7 @@ st.dataframe(
     height=min(len(view), 20) * 35 + 40,
     hide_index=True,
     column_config={
+        "AGIS": st.column_config.LinkColumn("AGIS", display_text="Karte", width="small"),
         "ÖREB": st.column_config.LinkColumn("ÖREB", display_text="PDF", width="small"),
         "Potenzial m² (Schätzung)": st.column_config.NumberColumn(format="%.0f"),
         # The address is the row's identity, so it gets the width it needs.
@@ -328,8 +349,17 @@ st.dataframe(
         # (Densbüren → Asp, Küttigen → Rombach), which is also the dimension
         # the filter above works in.
         "Adresse": st.column_config.TextColumn(width="large"),
+        "Zone": st.column_config.TextColumn(width="medium"),
         # Truncation here is acceptable: the deciding word comes first.
         "Status": st.column_config.TextColumn(width="medium"),
+        # Header shortened to buy that width back. "≈" plus the tooltip and the
+        # caption below carry the assumption the brief asks to be explicit about.
+        f"≈ Whg. (à {SQM_PER_UNIT} m²)": st.column_config.NumberColumn(
+            "≈ Whg.",
+            help=f"Grobe Umrechnung des Potenzials in mögliche zusätzliche "
+                 f"Wohnungen — Annahme {SQM_PER_UNIT} m² pro Wohnung, keine "
+                 f"Planungsgrösse.",
+        ),
     },
 )
 
@@ -353,5 +383,8 @@ st.caption(
     "Schätzung und eher zu tief als zu hoch. Baujahr ist das des ältesten "
     "Gebäudes auf der Parzelle, AZ der flächengewichtete Wert über alle "
     "berührten Zonen. Eigentümerdaten werden nicht erhoben. "
-    "Der ÖREB-Auszug ist der rechtsverbindliche Katasterauszug des Kantons."
+    "«Karte» öffnet die Parzelle im AGIS-Geoportal — dort lassen sich die "
+    "Eigentumsverhältnisse mit dem eigenen eGovernment-Login nachschlagen. "
+    "Der ÖREB-Auszug ist der rechtsverbindliche Katasterauszug des Kantons; "
+    "er listet alle Eigentumsbeschränkungen, aber keine Eigentümer."
 )

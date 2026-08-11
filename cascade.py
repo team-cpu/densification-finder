@@ -260,10 +260,18 @@ class Engine:
                 continue
 
             address, built, use = self._describe(r)
+            # The AGIS map link works by simulated click: info=E,N pops the
+            # parcel card at that LV95 coordinate (format from Philipp's own
+            # browser, 2026-08-11 — there is no EGRID parameter). The
+            # representative point is guaranteed inside the polygon, where a
+            # centroid of an L-shaped parcel can land on the neighbour.
+            pt = g.representative_point()
             candidates.append(
                 {
                     "parcel": num,
                     "egrid": r["parcel"]["egrid"],
+                    "east": round(pt.x, 2),
+                    "north": round(pt.y, 2),
                     "address": address,
                     "built": built,
                     "use": use,

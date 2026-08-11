@@ -97,7 +97,8 @@ def fetch_parcels(bfs, retries=3):
 COLUMNS = [
     ("bfs", "INTEGER NOT NULL"), ("municipality", "TEXT"), ("parcel", "TEXT NOT NULL"),
     ("egrid", "TEXT"), ("address", "TEXT"), ("built", "TEXT"), ("use_class", "TEXT"),
-    ("zone", "TEXT"), ("az", "REAL"), ("area", "REAL"), ("buildable", "REAL"),
+    ("zone", "TEXT"), ("az", "REAL"), ("e", "REAL"), ("n", "REAL"),
+    ("area", "REAL"), ("buildable", "REAL"),
     ("zone_share", "REAL"), ("buildings", "INTEGER"), ("existing", "REAL"),
     ("delta", "REAL"), ("heritage", "TEXT"), ("design_plan", "INTEGER"),
     ("calculated_at", "TEXT"),
@@ -193,7 +194,8 @@ def _row(bfs, name, r):
     return {
         "bfs": bfs, "municipality": name, "parcel": r["parcel"], "egrid": r["egrid"],
         "address": r["address"], "built": r["built"], "use_class": r["use"],
-        "zone": r["zone"], "az": r["az"], "area": r["area"], "buildable": r["buildable"],
+        "zone": r["zone"], "az": r["az"], "e": r["east"], "n": r["north"],
+        "area": r["area"], "buildable": r["buildable"],
         "zone_share": r["share"], "buildings": r["n"], "existing": r["existing"],
         "delta": r["delta"], "heritage": r["heritage"],
         "design_plan": int(r["design_plan"]),
