@@ -481,8 +481,13 @@ view = pd.DataFrame(
         "Google Maps": final.apply(
             lambda r: L.google_map_link(r["e"], r["n"]), axis=1
         ),
+        # Street View is asked from the building's ENTRANCE, not the parcel
+        # centre. Google returns a panorama only within roughly 50 m of the
+        # requested point, and a representative point sits 23–68 m inside the
+        # plot — far enough that the parcel centre reliably returned a black
+        # screen. The entrance faces the road, where the panoramas are.
         "Street View": final.apply(
-            lambda r: L.google_street_view_link(r["e"], r["n"]), axis=1
+            lambda r: L.google_street_view_link(r["sv_e"], r["sv_n"]), axis=1
         ),
     }
 )

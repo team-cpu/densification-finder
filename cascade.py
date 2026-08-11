@@ -126,9 +126,19 @@ class Engine:
 
     @staticmethod
     def _load_addresses():
-        """EGID -> street address. A building can carry several entrances; the
-        official one (DOFFADR=1) wins, and anything else is only a fallback so a
-        parcel still gets an address rather than a blank."""
+        """EGID -> (street address, entrance coordinate).
+
+        A building can carry several entrances; the official one (DOFFADR=1)
+        wins, and anything else is only a fallback so a parcel still gets an
+        address rather than a blank.
+
+        The entrance coordinate is kept because Street View needs it. A parcel's
+        representative point sits in the middle of the plot — 23 to 68 m from the
+        entrance on the parcels checked — and Google only returns a panorama
+        within roughly 50 m of the requested point, so linking from the parcel
+        centre yields a black screen. The entrance faces the road, where the
+        panoramas actually are. Verified against a live panorama.
+        """
         official, fallback = {}, {}
         if not os.path.exists(ENTRANCE_CSV):
             return official
@@ -144,10 +154,14 @@ class Engine:
                 text = " ".join(x for x in (street, nr) if x)
                 if plz or town:
                     text += ", " + " ".join(x for x in (plz, town) if x)
+                try:
+                    point = (float(row["DKODE"]), float(row["DKODN"]))
+                except (KeyError, TypeError, ValueError):
+                    point = None
                 target = official if (row.get("DOFFADR") or "").strip() == "1" else fallback
-                target.setdefault(egid, text)
-        for egid, text in fallback.items():
-            official.setdefault(egid, text)
+                target.setdefault(egid, (text, point))
+        for egid, value in fallback.items():
+            official.setdefault(egid, value)
         return official
 
     def _load_all_zones(self):
@@ -233,12 +247,14 @@ class Engine:
         biggest = max(r["buildings"], key=lambda b: b["footprint"], default=None)
         use = self._labels.get(("GKLAS", biggest["klass"]), "") if biggest else ""
 
-        address = ""
+        # The entrance of the same building the address came from, so the
+        # Street View link and the address always describe the same front door.
+        address, entrance = "", None
         for b in sorted(r["buildings"], key=lambda b: -b["footprint"]):
-            address = self._addresses.get(b["egid"], "")
+            address, entrance = self._addresses.get(b["egid"], ("", None))
             if address:
                 break
-        return address, built, use
+        return address, built, use, entrance
 
     def run(self, bfs):
         parcels = load_parcels(bfs)
@@ -342,7 +358,7 @@ class Engine:
             if delta < self.min_delta or not (self.min_area <= area <= self.max_area):
                 continue
 
-            address, built, use = self._describe(r)
+            address, built, use, entrance = self._describe(r)
             # The AGIS map link works by simulated click: info=E,N pops the
             # parcel card at that LV95 coordinate (format from Philipp's own
             # browser, 2026-08-11 — there is no EGRID parameter). The
@@ -355,6 +371,11 @@ class Engine:
                     "egrid": r["parcel"]["egrid"],
                     "east": round(pt.x, 2),
                     "north": round(pt.y, 2),
+                    # Where to stand to look at the building. Falls back to the
+                    # parcel point on vacant land, which has no front door — and
+                    # nothing to look at either.
+                    "sv_east": round(entrance[0], 2) if entrance else round(pt.x, 2),
+                    "sv_north": round(entrance[1], 2) if entrance else round(pt.y, 2),
                     "address": address,
                     "built": built,
                     "use": use,
