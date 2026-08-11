@@ -93,6 +93,8 @@ class Canton:
     floors_column: Optional[str]
     name_column: str
     bfs_column: str
+    use_code_column: Optional[str] = None
+    residential_use_codes: tuple = ()
 
 
 CANTONS = {
@@ -103,6 +105,11 @@ CANTONS = {
         floors_column="GZ",
         name_column="GDEBez",
         bfs_column="GDENR",
+        use_code_column="HNCode",
+        # Harmonised main-use codes: residential, mixed, and centre zones.
+        # Work/public/tourism zones can carry a utilization figure too, but an
+        # empty parcel there is not a residential development lead.
+        residential_use_codes=(11, 13, 14),
     ),
 }
 
@@ -110,6 +117,8 @@ CANTONS = {
 def columns_for(canton: Canton) -> list:
     """Every column the loader has to SELECT for this canton."""
     cols = [canton.bfs_column, canton.name_column]
+    if canton.use_code_column:
+        cols.append(canton.use_code_column)
     cols += [METRICS[k].column for k in canton.metrics]
     if canton.floors_column:
         cols.append(canton.floors_column)
@@ -139,6 +148,10 @@ def read_zone(canton: Canton, row: dict) -> Optional[dict]:
             "value": round(value, 3),
             "floors": floors,
             "name": row.get(canton.name_column),
+            "residential": (
+                not canton.residential_use_codes
+                or row.get(canton.use_code_column) in canton.residential_use_codes
+            ),
         }
     return None
 

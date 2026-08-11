@@ -24,8 +24,10 @@ unset the app serves that to anyone who finds the URL.
 ## What works on first deploy
 
 `results.sqlite` ships inside the image and is copied onto the volume the first
-time the page is opened, so the deployment is useful immediately: ~20,600
-assessed candidates across 165 municipalities, filters, and the ÖREB check.
+time the page is opened, so the deployment is useful immediately: 20,351
+original built-parcel candidates plus 13,986 vacant-parcel candidates across
+165 municipalities, filters, land-price references, direct map links, and the
+ÖREB check.
 
 ## What does not, and why
 

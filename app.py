@@ -25,6 +25,8 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+import land_prices as LP
+import links as L
 import oereb as O
 
 import paths
@@ -46,23 +48,6 @@ SHORTLIST = 50
 # query parameter — the same shape `oereb.py` records, and the URL the cadastre
 # prints into its own QR code.
 OEREB_PDF = "https://api.geo.ag.ch/v2/oereb/extract/pdf/?EGRID="
-
-# The AGIS map link, and the one step the brief keeps manual: Philipp looks up
-# ownership there himself with his e-government login. Format taken from his own
-# browser (2026-08-11) rather than guessed — there is no EGRID parameter, the
-# parcel card is opened by `info=E,N,2`, which is what a click on the map sends.
-# `center` positions the view on the same point. z=13 is his parcel-level zoom.
-AGIS_MAP = (
-    "https://www.ag.ch/geoportal/apps/onlinekarten/?welcome="
-    "&basemap=base_landeskarten_sw::topicmaps.geo.ag.ch,1,true"
-    "&center={e},{n}&z=13&info={e},{n},2"
-)
-
-
-def agis_link(east, north):
-    if east is None or north is None or pd.isna(east) or pd.isna(north):
-        return None
-    return AGIS_MAP.format(e=f"{east:.2f}", n=f"{north:.2f}")
 
 st.set_page_config(page_title="Verdichtungspotenzial Aargau", layout="wide")
 
@@ -105,6 +90,11 @@ def load():
     return parcels, runs
 
 
+@st.cache_data(ttl=60)
+def load_land_prices():
+    return LP.load()
+
+
 def read_oereb_cache():
     """Not cached by Streamlit: it changes as a run progresses, and a stale read
     would show the button's own results as still missing."""
@@ -143,6 +133,7 @@ def check_oereb(egrids, progress=None):
 
 paths.ensure_db()   # first deploy: seed an empty volume from the committed copy
 parcels, runs = load()
+land_price_references = load_land_prices()
 
 st.title("Verdichtungspotenzial — Kanton Aargau")
 
@@ -151,12 +142,20 @@ if parcels is None or parcels.empty:
     st.stop()
 
 # ── controls ────────────────────────────────────────────────────────────────
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 min_delta = c1.number_input("Mindestpotenzial (m² GF)", 0, 5000, 130, 10)
 area = c2.slider("Parzellenfläche (m²)", 0, 5000, (300, 5000), 50)
 municipalities = sorted(parcels["municipality"].dropna().unique())
 chosen = c3.multiselect("Gemeinde (leer = alle)", municipalities)
-top_n = c4.number_input("Anzahl Resultate", 5, 200, 20, 5)
+parcel_type = c4.selectbox(
+    "Grundstückstyp",
+    ("Bebaut", "Unbebaut", "Alle"),
+    help=(
+        "«Unbebaut» bedeutet: Im GWR ist kein stehendes Gebäude irgendeiner "
+        "Nutzungsklasse mit dieser Parzelle verknüpft."
+    ),
+)
+top_n = c5.number_input("Anzahl Resultate", 5, 200, 20, 5)
 
 import ingest as _ingest  # cheap: only reads module constants here
 
@@ -164,14 +163,14 @@ import ingest as _ingest  # cheap: only reads module constants here
 #: deployment, which carries the results but not the ~600 MB of source geodata.
 _full_run = _ingest.geodata_available()
 
-c5, c6, c7 = st.columns([2, 2, 1])
+c6, c7, c8 = st.columns([2, 2, 1])
 # The brief lists the year-built cutoff among the filter inputs. Unlike the
 # other six it is a pipeline parameter, not a display filter: the age rule runs
 # inside the cascade, where a parcel whose buildings are all certainly newer
 # never becomes a row at all. So it takes effect on the next recompute — and
 # where no recompute is possible it takes effect never, which is why the control
 # is disabled there rather than silently doing nothing.
-min_age = c7.number_input(
+min_age = c8.number_input(
     "Mindestalter (Jahre)", 0, 100, 15, 1,
     disabled=not _full_run,
     help=(
@@ -186,12 +185,12 @@ min_age = c7.number_input(
         "rechnen und mitdeployen."
     ),
 )
-hide_inventory = c5.checkbox(
+hide_inventory = c6.checkbox(
     "Inventarisierte Gebäude ausblenden", value=False,
     help="Bauinventar und Kurzinventar verbieten einen Ersatzneubau nicht, "
          "erschweren ihn aber. Geschützte Gebäude sind ohnehin ausgeschlossen.",
 )
-hide_design_plan = c6.checkbox(
+hide_design_plan = c7.checkbox(
     "Parzellen mit Gestaltungsplan ausblenden", value=False,
     help="Wo ein rechtsgültiger Gestaltungsplan gilt, kann er eigene "
          "Nutzungsziffern festlegen — die Ausnützungsziffer der Grundzone ist "
@@ -208,15 +207,28 @@ def select(src):
     ]
     if chosen:
         out = out[out["municipality"].isin(chosen)]
+    if parcel_type == "Bebaut":
+        out = out[out["buildings"] > 0]
+    elif parcel_type == "Unbebaut":
+        out = out[out["buildings"] == 0]
     if hide_inventory:
         out = out[out["heritage"].fillna("") == ""]
     if hide_design_plan:
         out = out[out["design_plan"] == 0]
-    # Ranked by the delta/existing ratio rather than the absolute delta: a 400 m²
-    # gain on a small old house is a better lead than the same gain on a large one.
-    return out.assign(ratio=out["delta"] / out["existing"].clip(lower=1)).sort_values(
-        "ratio", ascending=False
-    )
+    # Built parcels rank by delta/existing: a 400 m² gain on a small old house
+    # is a better lead than the same gain on a large one. That ratio has no
+    # meaning on vacant land, where existing=0, so vacant-only results rank by
+    # absolute developable floor area. In a mixed list, occupied leads retain
+    # their established order and vacant leads form a second, delta-ranked set.
+    ratio = out["delta"] / out["existing"].clip(lower=1)
+    if parcel_type == "Unbebaut":
+        return out.assign(ratio=ratio).sort_values("delta", ascending=False)
+    if parcel_type == "Alle":
+        return out.assign(
+            ratio=ratio,
+            _kind_order=(out["buildings"] == 0).astype(int),
+        ).sort_values(["_kind_order", "ratio", "delta"], ascending=[True, False, False])
+    return out.assign(ratio=ratio).sort_values("ratio", ascending=False)
 
 
 df = select(parcels)
@@ -369,6 +381,7 @@ def status(r):
     and ~1.5% where they change how the number should be read.
     """
     bits = [
+        "unbebaut (kein stehendes GWR-Gebäude)" if r["buildings"] == 0 else "",
         r["heritage"] or "",
         "Gestaltungsplan — AZ evtl. überlagert" if r["design_plan"] else "",
         r["_notable"] or "",
@@ -424,25 +437,53 @@ def short_use(text):
 # what the zone allows, then the answer. The diagnostics that explain how the
 # answer was reached sit after it — putting them first pushed the potential, the
 # unit estimate and the link off the right edge, which is the whole payload.
+final = final.copy()
+final["_land_price_ref"] = final.apply(
+    lambda r: LP.resolve(
+        land_price_references, r["bfs"], r["municipality"], r["zone"]
+    ),
+    axis=1,
+)
+final["_land_price"] = final["_land_price_ref"].map(
+    lambda ref: ref.price_chf_m2 if ref else None
+)
+final["_land_price_scope"] = final["_land_price_ref"].map(
+    lambda ref: ref.display if ref else "—"
+)
+final["_land_price_source"] = final["_land_price_ref"].map(
+    lambda ref: ref.source_url or None if ref else None
+)
+
 view = pd.DataFrame(
     {
         "Adresse": final["address"].fillna("—").replace("", "—"),
         "Gemeinde": final["municipality"],
         "Parzelle": final["parcel"],
+        "Typ": final["buildings"].map(lambda n: "unbebaut" if n == 0 else "bebaut"),
         "Baujahr": final["built"].map(short_year),
         "Nutzung": final["use_class"].map(short_use),
         "Zone": final["zone"].fillna("—").replace("", "—"),
         "Ziffer": final["az"],
         "Potenzial m² (Schätzung)": final["delta"].round(0),
         f"≈ Whg. (à {SQM_PER_UNIT} m²)": (final["delta"] / SQM_PER_UNIT).round(1),
-        # Two links, because they answer different questions. AGIS is where
-        # ownership gets looked up — the manual step the brief deliberately
-        # keeps manual — and the ÖREB extract is the binding list of public-law
-        # restrictions, which carries no ownership at all.
-        "AGIS": final.apply(lambda r: agis_link(r["e"], r["n"]), axis=1),
+        "Landpreis Ref. CHF/m²": final["_land_price"],
+        "≈ Ref.-Landwert CHF": (final["_land_price"] * final["area"]).round(-3),
+        "Preisstand": final["_land_price_scope"],
+        "Preisquelle": final["_land_price_source"],
+        "Status": final.apply(status, axis=1),
+        # The links answer different questions. AGIS is where ownership gets
+        # looked up — the manual step the brief deliberately keeps manual —
+        # ÖREB is the binding list of public-law restrictions, and Google makes
+        # the real-world site inspection one click instead of an address copy.
+        "AGIS": final.apply(lambda r: L.agis_link(r["e"], r["n"]), axis=1),
         # Blank rather than a broken link where the parcel carries no EGRID.
         "ÖREB": final["egrid"].map(lambda e: OEREB_PDF + e if e else None),
-        "Status": final.apply(status, axis=1),
+        "Google Maps": final.apply(
+            lambda r: L.google_map_link(r["e"], r["n"]), axis=1
+        ),
+        "Street View": final.apply(
+            lambda r: L.google_street_view_link(r["e"], r["n"]), axis=1
+        ),
     }
 )
 
@@ -456,7 +497,28 @@ st.dataframe(
     column_config={
         "AGIS": st.column_config.LinkColumn("AGIS", display_text="Karte", width="small"),
         "ÖREB": st.column_config.LinkColumn("ÖREB", display_text="PDF", width="small"),
+        "Google Maps": st.column_config.LinkColumn(
+            "Google", display_text="Karte", width="small"
+        ),
+        "Street View": st.column_config.LinkColumn(
+            "Street View", display_text="Öffnen", width="small"
+        ),
+        "Preisquelle": st.column_config.LinkColumn(
+            "Preisquelle", display_text="Quelle", width="small"
+        ),
         "Potenzial m² (Schätzung)": st.column_config.NumberColumn(format="%.0f"),
+        "Landpreis Ref. CHF/m²": st.column_config.NumberColumn(
+            format="CHF %.0f",
+            help=(
+                "Grobe Referenz, keine Parzellenbewertung. Genauere Gemeinde- "
+                "oder Zonenwerte aus land_prices.csv haben Vorrang vor dem "
+                "kantonalen Rückfallwert."
+            ),
+        ),
+        "≈ Ref.-Landwert CHF": st.column_config.NumberColumn(
+            format="CHF %.0f",
+            help="Parzellenfläche × Landpreisreferenz; ohne Gebäude-, Abbruch- oder Nebenkosten.",
+        ),
         # The address is the row's identity, so it gets the width it needs.
         # Gemeinde stays a column of its own despite looking redundant with it:
         # the postal town differs from the political municipality on 28% of
@@ -501,5 +563,12 @@ st.caption(
     "«Karte» öffnet die Parzelle im AGIS-Geoportal — dort lassen sich die "
     "Eigentumsverhältnisse mit dem eigenen eGovernment-Login nachschlagen. "
     "Der ÖREB-Auszug ist der rechtsverbindliche Katasterauszug des Kantons; "
-    "er listet alle Eigentumsbeschränkungen, aber keine Eigentümer."
+    "er listet alle Eigentumsbeschränkungen, aber keine Eigentümer. Google "
+    "Maps und Street View öffnen die aus der LV95-Parzellenkoordinate "
+    "umgerechnete Position; Street View springt zum nächstgelegenen verfügbaren "
+    "Panorama. Landpreis und Referenz-Landwert sind grobe Benchmarks, keine "
+    "Bewertung: Der mitgelieferte Rückfallwert von CHF 950/m² ist der von "
+    "Wüest Partner publizierte Aargauer Median für voll erschlossenes, "
+    "unbebautes EFH-Bauland mit tiefer Ausnützung (Q2 2021). Genauere "
+    "Gemeinde-/Zonenwerte können in land_prices.csv ergänzt werden."
 )

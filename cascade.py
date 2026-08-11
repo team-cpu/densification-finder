@@ -110,7 +110,7 @@ class Engine:
         self._zones = self._load_all_zones()
         self._labels = self._load_labels()
         self._addresses = self._load_addresses()
-        self._gwr = self._load_gwr()
+        self._gwr, self._occupied_egrids = self._load_gwr()
 
     @staticmethod
     def _load_labels():
@@ -174,23 +174,35 @@ class Engine:
         return by_bfs
 
     def _load_gwr(self):
-        """One pass over the 52 MB extract; buildings grouped by municipality."""
-        by_bfs = {}
+        """Load target buildings and independently track occupied parcels.
+
+        Vacancy cannot be inferred from the target residential classes alone:
+        a parcel with a workshop, barn, or standing building whose area is
+        missing is occupied too. ``occupied`` therefore records every standing
+        GWR building with an EGRID, while ``by_bfs`` retains the narrower set
+        whose existing residential floor area can be estimated.
+        """
+        by_bfs, occupied = {}, {}
         with open(GWR_CSV, newline="", encoding="utf-8", errors="replace") as fh:
             for row in csv.DictReader(fh, delimiter="\t"):
-                if (row.get("GKLAS") or "").strip() not in TARGET_CLASSES:
-                    continue
                 if (row.get("GSTAT") or "").strip() not in STANDING:
-                    continue
-                a, f = (row.get("GAREA") or "").strip(), (row.get("GASTW") or "").strip()
-                if not a or not f:
                     continue
                 bfs = (row.get("GGDENR") or "").strip()
                 if not bfs.isdigit():
                     continue
+                bfs = int(bfs)
+                egrid = (row.get("EGRID") or "").strip()
+                if egrid:
+                    occupied.setdefault(bfs, set()).add(egrid)
+
+                if (row.get("GKLAS") or "").strip() not in TARGET_CLASSES:
+                    continue
+                a, f = (row.get("GAREA") or "").strip(), (row.get("GASTW") or "").strip()
+                if not a or not f:
+                    continue
                 by_bfs.setdefault(int(bfs), []).append(
                     {
-                        "egrid": (row.get("EGRID") or "").strip(),
+                        "egrid": egrid,
                         "egid": (row.get("EGID") or "").strip(),
                         "existing": float(a) * int(f),
                         "footprint": float(a),
@@ -199,7 +211,7 @@ class Engine:
                         "year": (row.get("GBAUJ") or "").strip(),
                     }
                 )
-        return by_bfs
+        return by_bfs, occupied
 
     def _describe(self, r):
         """The human-facing columns, derived from the buildings on one parcel.
@@ -250,6 +262,19 @@ class Engine:
             r["years"].append(b["year"])
             r["buildings"].append(b)
 
+        # Start truly vacant parcels at zero existing floor area. An absent
+        # EGRID is not enough evidence of vacancy, so those parcels are skipped
+        # rather than creating a false positive.
+        occupied = self._occupied_egrids.get(bfs, set())
+        for parcel in parcels:
+            if not parcel["egrid"] or parcel["egrid"] in occupied:
+                continue
+            per_parcel.setdefault(
+                parcel["nummer"],
+                {"parcel": parcel, "existing": 0.0, "n": 0, "periods": [],
+                 "years": [], "buildings": []},
+            )
+
         no_az = 0
         unassessable = {}   # reason -> count, so nothing is dropped silently
         candidates = []
@@ -264,6 +289,8 @@ class Engine:
             if zone_index is not None:
                 for i in zone_index.query(g):
                     z = zones[i]
+                    if not r["buildings"] and not z["residential"]:
+                        continue
                     inter = g.intersection(z["geom"]).area
                     if inter <= 1.0:
                         continue
@@ -285,11 +312,23 @@ class Engine:
                     unassessable[reason] += 1
                 continue
 
-            if all(C.is_recent(p, self.built_after, y)
-                   for p, y in zip(r["periods"], r["years"])):
+            if r["buildings"] and all(
+                C.is_recent(p, self.built_after, y)
+                for p, y in zip(r["periods"], r["years"])
+            ):
                 continue
 
-            found = C.heritage_for(self.heritage, self.tiers, g)
+            # The heritage sources describe buildings, not land. Probing them
+            # with a five-metre tolerance is useful for an existing house but
+            # would attach a neighbour's protected building to a vacant plot.
+            # For a putatively vacant parcel, an unbuffered hit is instead
+            # evidence that GWR missed a building, so it is not called vacant.
+            found = C.heritage_for(
+                self.heritage, self.tiers, g,
+                buffer_m=5.0 if r["buildings"] else 0.0,
+            )
+            if not r["buildings"] and found:
+                continue
             if found & C.HARD:
                 continue
             soft = sorted(found - C.HARD)
