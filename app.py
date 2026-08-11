@@ -211,13 +211,26 @@ known = shortlist["egrid"].isin(cache.index)
 pending = shortlist.loc[~known & shortlist["egrid"].notna() & (shortlist["egrid"] != ""), "egrid"]
 
 run_col, note_col = st.columns([1, 4])
+import ingest as _ingest  # cheap: only the module's constants are touched here
+
+_full_run = _ingest.geodata_available()
+
 run = run_col.button(
-    "▶ Neu berechnen",
+    "▶ Neu berechnen" if _full_run else "▶ ÖREB prüfen",
     type="primary",
-    help=f"Rechnet die Filterkaskade für alle {len(runs)} Gemeinden neu und fragt "
-         f"anschliessend den ÖREB-Kataster für die Shortlist ab. Rund zwei "
-         f"Minuten. Die Parzellengeometrien werden dabei nicht neu vom WFS "
-         f"geladen — dafür data/parcels_*.xml löschen.",
+    # The label and the help have to agree with what this environment can
+    # actually do. Deployed there is no geodata, so promising a recompute would
+    # be a lie the user only discovers by pressing the button.
+    help=(
+        f"Rechnet die Filterkaskade für alle {len(runs)} Gemeinden neu und fragt "
+        f"anschliessend den ÖREB-Kataster für die Shortlist ab. Rund zwei "
+        f"Minuten. Die Parzellengeometrien werden dabei nicht neu vom WFS "
+        f"geladen — dafür data/parcels_*.xml löschen."
+        if _full_run else
+        "Fragt den ÖREB-Kataster für die Shortlist ab. Die Kaskade kann hier "
+        "nicht neu gerechnet werden — dafür fehlen die Geodaten; das geschieht "
+        "lokal und wird mitdeployt."
+    ),
 )
 if pending.empty:
     note_col.success(f"Shortlist vollständig ÖREB-geprüft ({len(shortlist)} Parzellen).")
@@ -230,11 +243,24 @@ else:
 if run:
     import ingest
 
-    bar = st.progress(0.0, "Kaskade")
-    ingest.recompute(
-        progress=lambda f, t: bar.progress(f * 0.2, "Kaskade — " + t),
-        built_after=date.today().year - int(min_age),
-    )
+    # Deployed, the source geodata is not present, so only the ÖREB half can
+    # run. Asked up front rather than discovered: attempting it raised an
+    # IndexError from globbing an absent dataset, which would have reached the
+    # user as a traceback instead of an explanation.
+    full = ingest.geodata_available()
+    bar = st.progress(0.0, "Kaskade" if full else "ÖREB")
+    if full:
+        ingest.recompute(
+            progress=lambda f, t: bar.progress(f * 0.2, "Kaskade — " + t),
+            built_after=date.today().year - int(min_age),
+        )
+    else:
+        st.info(
+            "Geodaten in dieser Umgebung nicht vorhanden — die Kaskade wird "
+            "nicht neu gerechnet, nur der ÖREB-Kataster abgefragt. Die "
+            "Nutzungsplanung ändert sich jährlich, das GWR quartalsweise; "
+            "neu gerechnet wird lokal und das Resultat mitdeployt."
+        )
 
     # The shortlist the ÖREB step should pay for only exists once the table has
     # been rewritten, so the filters are applied a second time here rather than

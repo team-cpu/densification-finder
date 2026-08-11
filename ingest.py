@@ -158,6 +158,19 @@ def schema(con):
     con.commit()
 
 
+def geodata_available(canton="AG"):
+    """Whether a full recompute is possible in this environment.
+
+    The deployment carries `results.sqlite` but not the ~600 MB of source data,
+    so the cascade cannot run there — only the ÖREB half of the pipeline can.
+    Asked rather than attempted: globbing an absent dataset raises IndexError,
+    which is what the Run button used to die on when hosted.
+    """
+    import metrics as M
+
+    return bool(glob.glob(os.path.join(DATA, M.CANTONS[canton].dataset)))
+
+
 def recompute(progress=None, built_after=None):
     """Re-run the cascade over every municipality and rewrite the results.
 
@@ -177,6 +190,9 @@ def recompute(progress=None, built_after=None):
     """
     con = sqlite3.connect(DB)
     schema(con)
+    if not geodata_available():
+        con.close()
+        return None   # caller decides what to say; None ≠ "0 candidates"
     targets = municipalities_with_az()
 
     import cascade
