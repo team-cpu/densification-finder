@@ -16,6 +16,7 @@ and a filter change stays instant.
 """
 import concurrent.futures
 import os
+import re
 import sqlite3
 
 import pandas as pd
@@ -205,42 +206,95 @@ if final.empty:
 
 # ── table ───────────────────────────────────────────────────────────────────
 def status(r):
+    """Reports the exception, never the norm.
+
+    Two facts matter only when they are unusual: 92% of parcels lie entirely
+    inside the building zone and 98.5% carry a single building. As columns they
+    were twenty rows of "100%" and "1"; as status text they appear on the ~5%
+    and ~1.5% where they change how the number should be read.
+    """
     bits = [
         r["heritage"] or "",
         "Gestaltungsplan — AZ evtl. überlagert" if r["design_plan"] else "",
         r["_notable"] or "",
+        f"nur {r['zone_share'] * 100:.0f}% in der Bauzone" if r["zone_share"] < 0.95 else "",
+        f"{r['buildings']} Gebäude" if r["buildings"] > 1 else "",
         "" if r["_checked"] else "ÖREB offen",
     ]
     return " · ".join(x for x in bits if x) or "frei"
 
 
+# GWR's own wording is exact but repetitive — ten rows of "Gebäude mit einer
+# Wohnung" cost more width than they carry meaning.
+USE_SHORT = {"1110": "1 Whg.", "1121": "2 Whg.", "1122": "3+ Whg."}
+
+
+def short_year(text):
+    """"von 1946 bis 1960" is seventeen characters to say what "1946–60" says in
+    seven, and the column is competing for width with the address."""
+    t = (text or "").strip()
+    m = re.match(r"von (\d{4}) bis (\d{2})(\d{2})$", t)
+    if m:
+        return f"{m.group(1)}–{m.group(3)}"
+    m = re.match(r"nach (\d{4})$", t)
+    if m:
+        return f"ab {m.group(1)}"
+    return t or "—"
+
+
+def short_use(text):
+    t = (text or "").strip()
+    if "einer Wohnung" in t:
+        return USE_SHORT["1110"]
+    if "zwei" in t and "Wohnung" in t:
+        return USE_SHORT["1121"]
+    if "drei oder mehr" in t:
+        return USE_SHORT["1122"]
+    return t or "—"
+
+
+# Column order follows the brief: who and where, then how old and what, then
+# what the zone allows, then the answer. The diagnostics that explain how the
+# answer was reached sit after it — putting them first pushed the potential, the
+# unit estimate and the link off the right edge, which is the whole payload.
 view = pd.DataFrame(
     {
         "Adresse": final["address"].fillna("—").replace("", "—"),
         "Gemeinde": final["municipality"],
         "Parzelle": final["parcel"],
-        "Baujahr": final["built"].fillna("—").replace("", "—"),
-        "Nutzung": final["use_class"].fillna("—").replace("", "—"),
+        "Baujahr": final["built"].map(short_year),
+        "Nutzung": final["use_class"].map(short_use),
         "Zone": final["zone"].fillna("—").replace("", "—"),
         "AZ": final["az"],
-        "Fläche m²": final["area"].round(0),
-        "in Bauzone": (final["zone_share"] * 100).round(0).astype(int).astype(str) + "%",
-        "Geb.": final["buildings"],
-        "bestehend m²": final["existing"].round(0),
         "Potenzial m² (Schätzung)": final["delta"].round(0),
-        f"≈ Wohnungen (à {SQM_PER_UNIT} m², Annahme)": (final["delta"] / SQM_PER_UNIT).round(1),
-        "Status": final.apply(status, axis=1),
+        f"≈ Whg. (à {SQM_PER_UNIT} m²)": (final["delta"] / SQM_PER_UNIT).round(1),
         # Blank rather than a broken link where the parcel carries no EGRID.
-        "ÖREB-Auszug": final["egrid"].map(lambda e: OEREB_PDF + e if e else None),
+        "ÖREB": final["egrid"].map(lambda e: OEREB_PDF + e if e else None),
+        "Status": final.apply(status, axis=1),
+        "Fläche m²": final["area"].round(0),
+        "bestehend m²": final["existing"].round(0),
     }
 )
 
 st.dataframe(
     view,
     width="stretch",
+    # Tall enough that the full list is one glance rather than a scroll; the
+    # brief asks for a top 20 and 20 rows is the default.
+    height=min(len(view), 20) * 35 + 40,
     hide_index=True,
     column_config={
-        "ÖREB-Auszug": st.column_config.LinkColumn("ÖREB-Auszug", display_text="PDF")
+        "ÖREB": st.column_config.LinkColumn("ÖREB", display_text="PDF", width="small"),
+        "Potenzial m² (Schätzung)": st.column_config.NumberColumn(format="%.0f"),
+        # The address is the row's identity, so it gets the width it needs.
+        # Gemeinde stays a column of its own despite looking redundant with it:
+        # the postal town differs from the political municipality on 28% of
+        # these parcels, and sometimes names a different place entirely
+        # (Densbüren → Asp, Küttigen → Rombach), which is also the dimension
+        # the filter above works in.
+        "Adresse": st.column_config.TextColumn(width="large"),
+        # Truncation here is acceptable: the deciding word comes first.
+        "Status": st.column_config.TextColumn(width="medium"),
     },
 )
 
