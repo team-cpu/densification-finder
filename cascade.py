@@ -43,6 +43,20 @@ ENTRANCE_CSV = os.path.join(DATA, "gwr", "eingang_entree_entrata.csv")
 CODES_CSV = os.path.join(DATA, "gwr", "kodes_codes_codici.csv")
 TARGET_CLASSES = {"1110", "1121"}
 
+# GWR keeps a building's whole life cycle, not only what stands today. Counting
+# a demolished one as existing floor area inflates what is already built, which
+# lowers the computed potential and quietly buries the best leads — a parcel
+# whose house has been torn down is effectively vacant land.
+#
+#   1003 im Bau        counted: it will be there, and the parcel is not a target
+#   1004 bestehend     counted
+#   1005 nicht nutzbar counted: unusable, but physically standing
+#   1001 projektiert   not counted — not built
+#   1002 bewilligt     not counted — approved only
+#   1007 abgebrochen   not counted — demolished
+#   1008 nicht real.   not counted — never built
+STANDING = {"1003", "1004", "1005"}
+
 
 def load_parcels(bfs):
     """Exterior ring minus interior rings — parcels routinely exclude roads and
@@ -165,6 +179,8 @@ class Engine:
         with open(GWR_CSV, newline="", encoding="utf-8", errors="replace") as fh:
             for row in csv.DictReader(fh, delimiter="\t"):
                 if (row.get("GKLAS") or "").strip() not in TARGET_CLASSES:
+                    continue
+                if (row.get("GSTAT") or "").strip() not in STANDING:
                     continue
                 a, f = (row.get("GAREA") or "").strip(), (row.get("GASTW") or "").strip()
                 if not a or not f:
