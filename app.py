@@ -332,6 +332,16 @@ st.caption(
     f"{len(excluded)} durch ÖREB ausgeschlossen."
 )
 
+# Reported only when it is wrong, like the other exceptions in this interface.
+# Phrased as the consequence rather than the cause: "no volume mounted" means
+# nothing to the person using this, but losing the cadastre answers does.
+if paths.on_persistent_disk() is False:
+    st.warning(
+        "Kein persistenter Speicher eingebunden — abgefragte ÖREB-Auszüge gehen "
+        "bei jedem Deployment verloren und müssen neu abgefragt werden. "
+        "(Railway: Volume auf /data mounten.)"
+    )
+
 if final.empty:
     st.info("Keine Parzelle erfüllt diese Kriterien.")
     st.stop()

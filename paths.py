@@ -26,6 +26,28 @@ DB = os.environ.get("DENSIFICATION_DB") or os.path.join(HERE, "results.sqlite")
 SEED_DB = os.path.join(HERE, "results.sqlite")
 
 
+def on_persistent_disk():
+    """Whether DB sits on a mounted volume rather than the container filesystem.
+
+    Worth asking because the failure is silent: without a volume the app runs
+    correctly and simply forgets every ÖREB answer on each redeploy, which looks
+    like the cadastre being slow rather than like a misconfiguration. The path
+    alone cannot tell — DENSIFICATION_DB points at /data either way — so this
+    reads the mount table.
+
+    None when the question does not apply (no /proc, i.e. not on Linux).
+    """
+    if not os.path.exists("/proc/mounts"):
+        return None
+    target = os.path.dirname(os.path.abspath(DB))
+    try:
+        with open("/proc/mounts") as fh:
+            mounts = {line.split()[1] for line in fh if len(line.split()) > 1}
+    except OSError:
+        return None
+    return target in mounts
+
+
 def ensure_db():
     """Copy the committed results into place if the configured path has none.
 
