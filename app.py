@@ -121,22 +121,27 @@ hide_design_plan = c6.checkbox(
 )
 
 # ── filter and rank (cascade steps 1–4) ─────────────────────────────────────
-df = parcels[
-    (parcels["delta"] >= min_delta)
-    & (parcels["area"].between(area[0], area[1]))
-]
-if chosen:
-    df = df[df["municipality"].isin(chosen)]
-if hide_inventory:
-    df = df[df["heritage"].fillna("") == ""]
-if hide_design_plan:
-    df = df[df["design_plan"] == 0]
+def select(src):
+    """A function rather than inline code because the Run button has to apply
+    exactly these filters a second time, to the freshly recomputed table, before
+    it knows which parcels the ÖREB step should pay for."""
+    out = src[
+        (src["delta"] >= min_delta) & (src["area"].between(area[0], area[1]))
+    ]
+    if chosen:
+        out = out[out["municipality"].isin(chosen)]
+    if hide_inventory:
+        out = out[out["heritage"].fillna("") == ""]
+    if hide_design_plan:
+        out = out[out["design_plan"] == 0]
+    # Ranked by the delta/existing ratio rather than the absolute delta: a 400 m²
+    # gain on a small old house is a better lead than the same gain on a large one.
+    return out.assign(ratio=out["delta"] / out["existing"].clip(lower=1)).sort_values(
+        "ratio", ascending=False
+    )
 
-# Ranked by the delta/existing ratio rather than the absolute delta: a 400 m²
-# gain on a small old house is a better lead than the same gain on a large one.
-df = df.assign(ratio=df["delta"] / df["existing"].clip(lower=1)).sort_values(
-    "ratio", ascending=False
-)
+
+df = select(parcels)
 shortlist = df.head(SHORTLIST)
 
 # ── cascade step 5: ÖREB, shortlist only ────────────────────────────────────
@@ -146,12 +151,12 @@ pending = shortlist.loc[~known & shortlist["egrid"].notna() & (shortlist["egrid"
 
 run_col, note_col = st.columns([1, 4])
 run = run_col.button(
-    f"▶ Prüfen ({len(pending)} offen)",
+    "▶ Neu berechnen",
     type="primary",
-    disabled=pending.empty,
-    help="Fragt den ÖREB-Kataster für die Shortlist ab und schliesst Parzellen "
-         "mit einer harten Eigentumsbeschränkung aus. Rund eine Sekunde pro "
-         "Parzelle. Die Geometrie-Auswertung selbst ist vorberechnet (ingest.py).",
+    help="Rechnet die Filterkaskade für alle 163 Gemeinden neu und fragt "
+         "anschliessend den ÖREB-Kataster für die Shortlist ab. Rund zwei "
+         "Minuten. Die Parzellengeometrien werden dabei nicht neu vom WFS "
+         "geladen — dafür data/parcels_*.xml löschen.",
 )
 if pending.empty:
     note_col.success(f"Shortlist vollständig ÖREB-geprüft ({len(shortlist)} Parzellen).")
@@ -162,12 +167,28 @@ else:
     )
 
 if run:
-    bar = st.progress(0.0, "ÖREB")
-    check_oereb(list(pending), progress=lambda f, t: bar.progress(f, t))
+    import ingest
+
+    bar = st.progress(0.0, "Kaskade")
+    ingest.recompute(progress=lambda f, t: bar.progress(f * 0.2, "Kaskade — " + t))
+
+    # The shortlist the ÖREB step should pay for only exists once the table has
+    # been rewritten, so the filters are applied a second time here rather than
+    # reusing the selection made from the pre-run data.
+    load.clear()
+    fresh, _ = load()
+    fresh_short = select(fresh).head(SHORTLIST)
+    todo = fresh_short.loc[
+        ~fresh_short["egrid"].isin(read_oereb_cache().index)
+        & fresh_short["egrid"].notna()
+        & (fresh_short["egrid"] != ""),
+        "egrid",
+    ]
+    check_oereb(
+        list(todo),
+        progress=lambda f, t: bar.progress(0.2 + f * 0.8, t),
+    )
     bar.empty()
-    # The button's own label and the counters above were rendered from the state
-    # this run just invalidated; without a rerun the page would still offer to
-    # check the parcels it has only now finished checking.
     st.rerun()
 
 # Excluded: a hard restriction — in Aargau that means a Planungszone, a planning
