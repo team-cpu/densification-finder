@@ -91,23 +91,25 @@ def fetch_parcels(bfs, retries=3):
             time.sleep(5 * (attempt + 1))
 
 
+# Column -> declared type. Kept as data so a database written by an older
+# version is widened in place rather than needing a full re-ingest to be
+# readable; the new columns simply stay NULL until the next run fills them.
+COLUMNS = [
+    ("bfs", "INTEGER NOT NULL"), ("municipality", "TEXT"), ("parcel", "TEXT NOT NULL"),
+    ("egrid", "TEXT"), ("address", "TEXT"), ("built", "TEXT"), ("use_class", "TEXT"),
+    ("zone", "TEXT"), ("az", "REAL"), ("area", "REAL"), ("buildable", "REAL"),
+    ("zone_share", "REAL"), ("buildings", "INTEGER"), ("existing", "REAL"),
+    ("delta", "REAL"), ("heritage", "TEXT"), ("design_plan", "INTEGER"),
+    ("calculated_at", "TEXT"),
+]
+
+
 def schema(con):
+    cols = ",\n            ".join(f"{n:<13} {t}" for n, t in COLUMNS)
     con.executescript(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS parcel_results (
-            bfs           INTEGER NOT NULL,
-            municipality  TEXT,
-            parcel        TEXT NOT NULL,
-            egrid         TEXT,
-            area          REAL,
-            buildable     REAL,
-            zone_share    REAL,
-            buildings     INTEGER,
-            existing      REAL,
-            delta         REAL,
-            heritage      TEXT,
-            design_plan   INTEGER,
-            calculated_at TEXT,
+            {cols},
             PRIMARY KEY (bfs, parcel)
         );
         CREATE TABLE IF NOT EXISTS runs (
@@ -115,9 +117,25 @@ def schema(con):
             assessed INTEGER, candidates INTEGER, no_az INTEGER,
             seconds REAL, finished_at TEXT
         );
+        -- ÖREB answers, cached so the shortlist check costs one call per parcel
+        -- ever rather than one per click. `hard` non-empty means excluded.
+        CREATE TABLE IF NOT EXISTS oereb_cache (
+            egrid      TEXT PRIMARY KEY,
+            hard       TEXT,
+            notable    TEXT,
+            error      TEXT,
+            checked_at TEXT
+        );
         CREATE INDEX IF NOT EXISTS idx_delta ON parcel_results(delta DESC);
         """
     )
+    have = {r[1] for r in con.execute("PRAGMA table_info(parcel_results)")}
+    for name, decl in COLUMNS:
+        if name not in have:
+            # NOT NULL cannot be added to a populated table; the constraint only
+            # matters for rows this version writes, which always supply a value.
+            con.execute(f"ALTER TABLE parcel_results ADD COLUMN {name} {decl.replace(' NOT NULL', '')}")
+    con.commit()
 
 
 def main():
@@ -151,11 +169,20 @@ def main():
             continue
 
         con.execute("DELETE FROM parcel_results WHERE bfs=?", (bfs,))
+        names = [n for n, _ in COLUMNS]
         con.executemany(
-            "INSERT OR REPLACE INTO parcel_results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))",
+            f"INSERT OR REPLACE INTO parcel_results ({','.join(names)}) "
+            f"VALUES ({','.join(':' + n for n in names)})",
             [
-                (bfs, name, r["parcel"], r["egrid"], r["area"], r["buildable"], r["share"],
-                 r["n"], r["existing"], r["delta"], r["heritage"], int(r["design_plan"]))
+                {
+                    "bfs": bfs, "municipality": name, "parcel": r["parcel"],
+                    "egrid": r["egrid"], "address": r["address"], "built": r["built"],
+                    "use_class": r["use"], "zone": r["zone"], "az": r["az"],
+                    "area": r["area"], "buildable": r["buildable"], "zone_share": r["share"],
+                    "buildings": r["n"], "existing": r["existing"], "delta": r["delta"],
+                    "heritage": r["heritage"], "design_plan": int(r["design_plan"]),
+                    "calculated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }
                 for r in res["candidates"]
             ],
         )

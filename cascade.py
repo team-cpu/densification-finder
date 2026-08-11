@@ -35,6 +35,9 @@ def valid(g):
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
 GWR_CSV = os.path.join(DATA, "gwr", "gebaeude_batiment_edificio.csv")
+# Addresses are a separate GWR file keyed by EGID; the building extract has none.
+ENTRANCE_CSV = os.path.join(DATA, "gwr", "eingang_entree_entrata.csv")
+CODES_CSV = os.path.join(DATA, "gwr", "kodes_codes_codici.csv")
 TARGET_CLASSES = {"1110", "1121"}
 
 
@@ -87,7 +90,47 @@ class Engine:
         self.freezes = C.load_planning_freezes()
         self.plans = C.load_design_plans()
         self._zones = self._load_all_zones()
+        self._labels = self._load_labels()
+        self._addresses = self._load_addresses()
         self._gwr = self._load_gwr()
+
+    @staticmethod
+    def _load_labels():
+        """GWR ships its own code table; the alternative is hardcoding German
+        strings that only the federal office is entitled to change."""
+        out = {}
+        if not os.path.exists(CODES_CSV):
+            return out
+        with open(CODES_CSV, newline="", encoding="utf-8", errors="replace") as fh:
+            for row in csv.DictReader(fh, delimiter="\t"):
+                out[(row.get("CMERKM"), row.get("CECODID"))] = (row.get("CODTXTLD") or "").strip()
+        return out
+
+    @staticmethod
+    def _load_addresses():
+        """EGID -> street address. A building can carry several entrances; the
+        official one (DOFFADR=1) wins, and anything else is only a fallback so a
+        parcel still gets an address rather than a blank."""
+        official, fallback = {}, {}
+        if not os.path.exists(ENTRANCE_CSV):
+            return official
+        with open(ENTRANCE_CSV, newline="", encoding="utf-8", errors="replace") as fh:
+            for row in csv.DictReader(fh, delimiter="\t"):
+                egid = (row.get("EGID") or "").strip()
+                street = (row.get("STRNAME") or "").strip()
+                if not egid or not street:
+                    continue
+                nr = (row.get("DEINR") or "").strip()
+                plz = (row.get("DPLZ4") or "").strip()
+                town = (row.get("DPLZNAME") or "").strip()
+                text = " ".join(x for x in (street, nr) if x)
+                if plz or town:
+                    text += ", " + " ".join(x for x in (plz, town) if x)
+                target = official if (row.get("DOFFADR") or "").strip() == "1" else fallback
+                target.setdefault(egid, text)
+        for egid, text in fallback.items():
+            official.setdefault(egid, text)
+        return official
 
     def _load_all_zones(self):
         """Zone polygons keyed by municipality, so a run touches only its own."""
@@ -118,12 +161,42 @@ class Engine:
                 by_bfs.setdefault(int(bfs), []).append(
                     {
                         "egrid": (row.get("EGRID") or "").strip(),
+                        "egid": (row.get("EGID") or "").strip(),
                         "existing": float(a) * int(f),
+                        "footprint": float(a),
+                        "klass": (row.get("GKLAS") or "").strip(),
                         "period": (row.get("GBAUP") or "").strip(),
                         "year": (row.get("GBAUJ") or "").strip(),
                     }
                 )
         return by_bfs
+
+    def _describe(self, r):
+        """The human-facing columns, derived from the buildings on one parcel.
+
+        Age reports the OLDEST building, because that is the one a replacement
+        new-build is arguing against; reporting the newest would make a parcel
+        with one recent annexe look untouchable. Falls back to the GWR period
+        label when no exact year is recorded, which is most of this stock.
+        """
+        years = sorted(int(y) for y in r["years"] if y.strip().isdigit())
+        if years:
+            built = str(years[0])
+        else:
+            periods = sorted(p for p in r["periods"] if p)
+            built = self._labels.get(("GBAUP", periods[0]), periods[0]) if periods else ""
+            built = built.replace("Periode ", "")
+
+        # Use: the class of the largest building on the parcel.
+        biggest = max(r["buildings"], key=lambda b: b["footprint"], default=None)
+        use = self._labels.get(("GKLAS", biggest["klass"]), "") if biggest else ""
+
+        address = ""
+        for b in sorted(r["buildings"], key=lambda b: -b["footprint"]):
+            address = self._addresses.get(b["egid"], "")
+            if address:
+                break
+        return address, built, use
 
     def run(self, bfs):
         parcels = load_parcels(bfs)
@@ -137,12 +210,15 @@ class Engine:
             if not p:
                 continue
             r = per_parcel.setdefault(
-                p["nummer"], {"parcel": p, "existing": 0.0, "n": 0, "periods": [], "years": []}
+                p["nummer"],
+                {"parcel": p, "existing": 0.0, "n": 0, "periods": [], "years": [],
+                 "buildings": []},
             )
             r["existing"] += b["existing"]
             r["n"] += 1
             r["periods"].append(b["period"])
             r["years"].append(b["year"])
+            r["buildings"].append(b)
 
         no_az = 0
         candidates = []
@@ -151,6 +227,7 @@ class Engine:
             area = r["parcel"]["area"] or g.area
 
             allowance = buildable = 0.0
+            dominant = None  # (intersected area, zone) — for the reported zone/AZ
             if zone_index is not None:
                 for i in zone_index.query(g):
                     z = zones[i]
@@ -158,6 +235,8 @@ class Engine:
                     if inter > 1.0:
                         allowance += inter * z["az"]
                         buildable += inter
+                        if dominant is None or inter > dominant[0]:
+                            dominant = (inter, z)
             if buildable <= 1.0:
                 no_az += 1
                 continue
@@ -180,10 +259,20 @@ class Engine:
             if delta < self.min_delta or not (self.min_area <= area <= self.max_area):
                 continue
 
+            address, built, use = self._describe(r)
             candidates.append(
                 {
                     "parcel": num,
                     "egrid": r["parcel"]["egrid"],
+                    "address": address,
+                    "built": built,
+                    "use": use,
+                    # The zone covering most of the parcel, and the AZ actually
+                    # applied — area-weighted, so a parcel straddling two zones
+                    # reports the figure the potential was computed from rather
+                    # than one of the two headline values.
+                    "zone": dominant[1]["name"] if dominant else "",
+                    "az": round(allowance / buildable, 3) if buildable else 0.0,
                     "area": area,
                     "buildable": buildable,
                     "share": buildable / area if area else 0.0,
