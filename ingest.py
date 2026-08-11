@@ -138,7 +138,7 @@ def schema(con):
     con.commit()
 
 
-def recompute(progress=None):
+def recompute(progress=None, built_after=None):
     """Re-run the cascade over every municipality and rewrite the results.
 
     Callable from the interface, so its Run button can do what the brief asks
@@ -146,6 +146,12 @@ def recompute(progress=None):
     the WFS: that is ~10 s per municipality against 0.1 s to recompute one, and
     the cadastre does not change between two clicks. Deleting `data/parcels_*.xml`
     forces a fresh download on the next run.
+
+    `built_after` is the year-built cutoff the brief lists among the filter
+    inputs. It has to arrive here rather than being a display filter: the age
+    rule runs inside the cascade (a parcel whose buildings are all certainly
+    newer never becomes a row), so changing it means recomputing, and the stored
+    table always reflects the cutoff of the last run.
 
     Measured: 1.7 s to build the engine, 16.6 s for all 163 municipalities.
     """
@@ -155,7 +161,7 @@ def recompute(progress=None):
 
     import cascade
 
-    engine = cascade.Engine()
+    engine = cascade.Engine(built_after=built_after)
     names = [n for n, _ in COLUMNS]
     for i, (bfs, name, _) in enumerate(targets, 1):
         if not os.path.exists(os.path.join(DATA, f"parcels_{bfs}.xml")):

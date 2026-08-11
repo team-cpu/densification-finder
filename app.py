@@ -18,6 +18,7 @@ import concurrent.futures
 import os
 import re
 import sqlite3
+from datetime import date
 
 import pandas as pd
 import streamlit as st
@@ -107,7 +108,17 @@ municipalities = sorted(parcels["municipality"].dropna().unique())
 chosen = c3.multiselect("Gemeinde (leer = alle)", municipalities)
 top_n = c4.number_input("Anzahl Resultate", 5, 200, 20, 5)
 
-c5, c6 = st.columns(2)
+c5, c6, c7 = st.columns([2, 2, 1])
+# The brief lists the year-built cutoff among the filter inputs. Unlike the
+# others it is a pipeline parameter, not a display filter: the age rule runs
+# inside the cascade, so a change takes effect on the next "Neu berechnen".
+min_age = c7.number_input(
+    "Mindestalter (Jahre)", 0, 100, 15, 1,
+    help="Parzellen, deren Gebäude alle sicher jünger sind, werden aussortiert. "
+         "Ohne exaktes Baujahr entscheidet die GWR-Bauperiode — eine Periode, "
+         "die die Grenze überspannt, bleibt Kandidat. Wirkt beim nächsten "
+         "«Neu berechnen», nicht auf die bereits angezeigte Liste.",
+)
 hide_inventory = c5.checkbox(
     "Inventarisierte Gebäude ausblenden", value=False,
     help="Bauinventar und Kurzinventar verbieten einen Ersatzneubau nicht, "
@@ -170,7 +181,10 @@ if run:
     import ingest
 
     bar = st.progress(0.0, "Kaskade")
-    ingest.recompute(progress=lambda f, t: bar.progress(f * 0.2, "Kaskade — " + t))
+    ingest.recompute(
+        progress=lambda f, t: bar.progress(f * 0.2, "Kaskade — " + t),
+        built_after=date.today().year - int(min_age),
+    )
 
     # The shortlist the ÖREB step should pay for only exists once the table has
     # been rewritten, so the filters are applied a second time here rather than
