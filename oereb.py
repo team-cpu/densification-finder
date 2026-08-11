@@ -1,9 +1,17 @@
 """
 ÖREB extract for shortlisted parcels.
 
-The cantonal cadastre answers per parcel and carries 25 themes, six of which
-decide whether a parcel can be developed at all. None of them is heritage —
-that lives in the registers handled by `constraints.py`.
+The cantonal cadastre answers per parcel. Hard heritage protection IS in there —
+"Kantonales Denkmalschutzobjekt", "Gebäude mit Substanzschutz" and "Gebäude mit
+Volumenschutz" all arrive as legend texts inside the Nutzungsplanung theme, not
+as themes of their own, which is why scanning theme titles misses them (an
+earlier version of this file claimed heritage was absent for exactly that
+reason; verified wrong on live extracts, 5 of 5 protected parcels visible).
+
+What ÖREB does NOT carry is the advisory inventories — Bauinventar and
+Kurzinventar returned nothing on any tested parcel. Those exist only in the
+registers `constraints.py` loads, so the local layers stay necessary; this step
+is the safety net behind them, per the brief's step 5, not their replacement.
 
 Endpoint shape was not obvious and is worth recording: the format goes in the
 path, the identifier is a query parameter, and the trailing slash matters.
@@ -20,9 +28,13 @@ import urllib.request
 
 BASE = "https://api.geo.ag.ch/v2/oereb"
 
-# Restrictions that end the conversation: no permit will be issued.
+# Restrictions that end the conversation: no permit will be issued, or the
+# building may not be demolished. The heritage patterns mirror C.HARD in
+# constraints.py — normally the local layers exclude these parcels long before
+# the shortlist, so a match here means the registers and the cadastre disagree
+# and the safe reading is the restrictive one.
 HARD_CODES = {"ch.Planungszonen"}
-HARD_TEXT = ("planungszone",)
+HARD_TEXT = ("planungszone", "denkmalschutz", "substanzschutz", "volumenschutz")
 
 # Constraints worth surfacing but not excluding on — they shape a project
 # rather than forbidding it. Matched on the legend text because Aargau delivers
