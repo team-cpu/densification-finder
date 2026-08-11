@@ -28,7 +28,7 @@ from shapely.ops import unary_union
 
 BFS = int(sys.argv[1]) if len(sys.argv) > 1 else 4012
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.path.join(HERE, "data")
+DATA = __import__("paths").DATA
 
 PARCELS_XML = os.path.join(DATA, f"parcels_{BFS}.xml")
 ZONES_GPKG = glob.glob(os.path.join(DATA, "are_bzbauzone_*.gpkg"))[0]

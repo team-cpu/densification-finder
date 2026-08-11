@@ -28,7 +28,7 @@ BFS = int(sys.argv[1]) if len(sys.argv) > 1 else 4012
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("DENSIFICATION_DATA", "")
 
-PARCELS_XML = os.path.join(HERE, "data", f"parcels_{BFS}.xml")
+PARCELS_XML = os.path.join(__import__("paths").DATA, f"parcels_{BFS}.xml")
 ZONES_GPKG = glob.glob(os.path.join(DATA, "bz", "*", "*.gpkg"))
 GWR_CSV = os.path.join(DATA, "gwr_ag", "gebaeude_batiment_edificio.csv")
 

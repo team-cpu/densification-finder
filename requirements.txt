@@ -1,0 +1,7 @@
+# Pinned to what this was built and verified against. shapely 2.1 is where
+# STRtree.query returns indices rather than geometries — the loop in cascade.py
+# depends on that. pandas 3 is where the str dtype turns None into NaN, which
+# app.py works around explicitly.
+shapely==2.1.2
+pandas==3.0.5
+streamlit==1.61.1

@@ -33,8 +33,10 @@ def gpkg_geom(blob):
 def valid(g):
     return g if g.is_valid else g.buffer(0)
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.path.join(HERE, "data")
+import paths
+
+HERE = paths.HERE
+DATA = paths.DATA
 GWR_CSV = os.path.join(DATA, "gwr", "gebaeude_batiment_edificio.csv")
 # Addresses are a separate GWR file keyed by EGID; the building extract has none.
 ENTRANCE_CSV = os.path.join(DATA, "gwr", "eingang_entree_entrata.csv")

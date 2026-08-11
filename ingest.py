@@ -26,9 +26,11 @@ import time
 import urllib.parse
 import urllib.request
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.path.join(HERE, "data")
-DB = os.path.join(HERE, "results.sqlite")
+import paths
+
+HERE = paths.HERE
+DATA = paths.DATA
+DB = paths.DB
 
 WFS = "https://geodienste.ch/db/av_0/deu"
 

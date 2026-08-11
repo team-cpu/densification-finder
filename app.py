@@ -15,6 +15,7 @@ and a filter change stays instant.
     .venv/bin/streamlit run app.py
 """
 import concurrent.futures
+import hmac
 import json
 import os
 import re
@@ -26,8 +27,10 @@ import streamlit as st
 
 import oereb as O
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DB = os.path.join(HERE, "results.sqlite")
+import paths
+
+HERE = paths.HERE
+DB = paths.DB
 
 # Rule of thumb, and labelled as one in the table header. 90 m² per dwelling is
 # the figure the brief gives; it is not a planning standard.
@@ -62,6 +65,34 @@ def agis_link(east, north):
     return AGIS_MAP.format(e=f"{east:.2f}", n=f"{north:.2f}")
 
 st.set_page_config(page_title="Verdichtungspotenzial Aargau", layout="wide")
+
+
+def gate():
+    """A shared password, active only when APP_PASSWORD is set.
+
+    A Railway URL is public and guessable, and this list is the output of
+    Philipp's own research — which parcels to approach before anyone else does.
+    Leaving that open would give it away. Unset locally, so development is
+    unaffected; set in the deployed environment.
+
+    Deliberately not a login: the brief describes a single-user internal tool,
+    and accounts would be more machinery than it is worth.
+    """
+    secret = os.environ.get("APP_PASSWORD")
+    if not secret or st.session_state.get("_ok"):
+        return
+    st.title("Verdichtungspotenzial — Kanton Aargau")
+    entered = st.text_input("Passwort", type="password")
+    if entered:
+        # Constant-time so a wrong guess cannot be narrowed down by timing.
+        if hmac.compare_digest(entered, secret):
+            st.session_state["_ok"] = True
+            st.rerun()
+        st.error("Falsches Passwort.")
+    st.stop()
+
+
+gate()
 
 
 @st.cache_data(ttl=60)
@@ -110,6 +141,7 @@ def check_oereb(egrids, progress=None):
     con.close()
 
 
+paths.ensure_db()   # first deploy: seed an empty volume from the committed copy
 parcels, runs = load()
 
 st.title("Verdichtungspotenzial — Kanton Aargau")
