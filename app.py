@@ -15,6 +15,7 @@ and a filter change stays instant.
     .venv/bin/streamlit run app.py
 """
 import concurrent.futures
+import json
 import os
 import re
 import sqlite3
@@ -181,10 +182,10 @@ run_col, note_col = st.columns([1, 4])
 run = run_col.button(
     "▶ Neu berechnen",
     type="primary",
-    help="Rechnet die Filterkaskade für alle 163 Gemeinden neu und fragt "
-         "anschliessend den ÖREB-Kataster für die Shortlist ab. Rund zwei "
-         "Minuten. Die Parzellengeometrien werden dabei nicht neu vom WFS "
-         "geladen — dafür data/parcels_*.xml löschen.",
+    help=f"Rechnet die Filterkaskade für alle {len(runs)} Gemeinden neu und fragt "
+         f"anschliessend den ÖREB-Kataster für die Shortlist ab. Rund zwei "
+         f"Minuten. Die Parzellengeometrien werden dabei nicht neu vom WFS "
+         f"geladen — dafür data/parcels_*.xml löschen.",
 )
 if pending.empty:
     note_col.success(f"Shortlist vollständig ÖREB-geprüft ({len(shortlist)} Parzellen).")
@@ -242,13 +243,34 @@ excluded = shortlist[shortlist["_hard"] != ""]
 final = shortlist[shortlist["_hard"] == ""].head(int(top_n))
 
 # ── coverage, stated rather than implied ────────────────────────────────────
+MUNICIPALITIES_AG = 196
+
 assessed = int(runs["assessed"].sum())
 no_az = int(runs["no_az"].sum())
+missing = MUNICIPALITIES_AG - len(runs)
+
+# Why a parcel could not be assessed, aggregated across the canton. The lump
+# figure alone cannot distinguish "no building zone here" from "zoned, but the
+# published figure does not convert into floor area" — and §3.5 step 1 asks for
+# the distinction rather than a silent skip.
+reasons = {}
+for blob in runs.get("reasons", pd.Series(dtype=str)).dropna():
+    try:
+        for k, v in json.loads(blob).items():
+            reasons[k] = reasons.get(k, 0) + int(v)
+    except (ValueError, TypeError):
+        continue
+reason_text = (
+    " Davon " + ", ".join(f"{v:,} wegen {k}" for k, v in sorted(reasons.items())) + "."
+    if reasons else ""
+)
+
 st.caption(
-    f"{len(runs)} von 196 Gemeinden ausgewertet · {assessed:,} Parzellen beurteilt · "
-    f"{no_az:,} nicht beurteilbar (keine Bauzone mit Ausnützungsziffer). "
-    "33 Gemeinden publizieren gar keine AZ und fehlen deshalb vollständig. "
-    f"{len(df):,} Treffer nach Filter → Shortlist {len(shortlist)} → "
+    f"{len(runs)} von {MUNICIPALITIES_AG} Gemeinden ausgewertet · {assessed:,} Parzellen "
+    f"beurteilt · {no_az:,} nicht beurteilbar (keine Bauzone mit verwertbarer "
+    f"Nutzungsziffer).{reason_text} "
+    f"{missing} Gemeinden publizieren gar keine Nutzungsziffer und fehlen deshalb "
+    f"vollständig. {len(df):,} Treffer nach Filter → Shortlist {len(shortlist)} → "
     f"{len(excluded)} durch ÖREB ausgeschlossen."
 )
 
@@ -269,6 +291,10 @@ def status(r):
         r["heritage"] or "",
         "Gestaltungsplan — AZ evtl. überlagert" if r["design_plan"] else "",
         r["_notable"] or "",
+        # Naming the metric only when it is not the canton's usual one:
+        # labelling an Überbauungsziffer "AZ" would be a real error for an
+        # architect reading the list, but repeating "AZ" on every row is noise.
+        METRIC_LABELS.get(r["metric"], "") if r["metric"] not in ("", "AZ") else "",
         f"nur {r['zone_share'] * 100:.0f}% in der Bauzone" if r["zone_share"] < 0.95 else "",
         f"{r['buildings']} Gebäude" if r["buildings"] > 1 else "",
         "" if r["_checked"] else "ÖREB offen",
@@ -279,6 +305,14 @@ def status(r):
 # GWR's own wording is exact but repetitive — ten rows of "Gebäude mit einer
 # Wohnung" cost more width than they carry meaning.
 USE_SHORT = {"1110": "1 Whg.", "1121": "2 Whg.", "1122": "3+ Whg."}
+
+# Shown in Status when a zone is governed by something other than Aargau's usual
+# Ausnützungsziffer, so the "Ziffer" column is never read as the wrong metric.
+METRIC_LABELS = {
+    "UEZ": "Überbauungsziffer (Ziffer × Geschosse)",
+    "BMZ": "Baumassenziffer",
+    "GFZ": "Geschossflächenziffer",
+}
 
 
 def short_year(text):
@@ -317,7 +351,7 @@ view = pd.DataFrame(
         "Baujahr": final["built"].map(short_year),
         "Nutzung": final["use_class"].map(short_use),
         "Zone": final["zone"].fillna("—").replace("", "—"),
-        "AZ": final["az"],
+        "Ziffer": final["az"],
         "Potenzial m² (Schätzung)": final["delta"].round(0),
         f"≈ Whg. (à {SQM_PER_UNIT} m²)": (final["delta"] / SQM_PER_UNIT).round(1),
         # Two links, because they answer different questions. AGIS is where

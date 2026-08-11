@@ -18,6 +18,7 @@ Resumable: a municipality already present in the database is skipped unless
     .venv/bin/python ingest.py --force
 """
 import glob
+import json
 import os
 import sqlite3
 import sys
@@ -46,11 +47,19 @@ def municipality_names():
     return {int(k): v for k, v in names.items()}
 
 
-def municipalities_with_az():
-    db = sqlite3.connect(glob.glob(os.path.join(DATA, "are_bzbauzone_*.gpkg"))[0])
+def municipalities_with_az(canton="AG"):
+    """Municipalities publishing any utilization figure at all — not only an
+    Ausnützungsziffer. A commune zoned entirely by Überbauungsziffer used to
+    drop out here, before anything could report why."""
+    import metrics as M
+
+    cfg = M.CANTONS[canton]
+    db = sqlite3.connect(glob.glob(os.path.join(DATA, cfg.dataset))[0])
     t = [r[0] for r in db.execute("SELECT table_name FROM gpkg_contents")][0]
+    any_metric = " OR ".join(f"COALESCE({M.METRICS[k].column},0)>0" for k in cfg.metrics)
     rows = db.execute(
-        f'SELECT GDENR, COUNT(*) FROM "{t}" WHERE AZmax>0 GROUP BY GDENR ORDER BY GDENR'
+        f'SELECT {cfg.bfs_column}, COUNT(*) FROM "{t}" WHERE {any_metric} '
+        f'GROUP BY {cfg.bfs_column} ORDER BY {cfg.bfs_column}'
     )
     names = municipality_names()
     return [(int(r[0]), names.get(int(r[0]), f"BFS {r[0]}"), r[1]) for r in rows]
@@ -97,7 +106,8 @@ def fetch_parcels(bfs, retries=3):
 COLUMNS = [
     ("bfs", "INTEGER NOT NULL"), ("municipality", "TEXT"), ("parcel", "TEXT NOT NULL"),
     ("egrid", "TEXT"), ("address", "TEXT"), ("built", "TEXT"), ("use_class", "TEXT"),
-    ("zone", "TEXT"), ("az", "REAL"), ("e", "REAL"), ("n", "REAL"),
+    ("zone", "TEXT"), ("az", "REAL"), ("metric", "TEXT"),
+    ("unconvertible", "REAL"), ("e", "REAL"), ("n", "REAL"),
     ("area", "REAL"), ("buildable", "REAL"),
     ("zone_share", "REAL"), ("buildings", "INTEGER"), ("existing", "REAL"),
     ("delta", "REAL"), ("heritage", "TEXT"), ("design_plan", "INTEGER"),
@@ -113,10 +123,15 @@ def schema(con):
             {cols},
             PRIMARY KEY (bfs, parcel)
         );
+        -- `reasons` is a JSON object mapping each reason to a parcel count.
+        -- §3.5 step 1 asks for "not assessable" to be marked rather than
+        -- skipped silently, and a lump count cannot say whether a commune is
+        -- missing because it publishes no figure or because the figure it does
+        -- publish cannot be converted into floor area.
         CREATE TABLE IF NOT EXISTS runs (
             bfs INTEGER PRIMARY KEY, municipality TEXT, parcels INTEGER,
             assessed INTEGER, candidates INTEGER, no_az INTEGER,
-            seconds REAL, finished_at TEXT
+            seconds REAL, finished_at TEXT, reasons TEXT
         );
         -- ÖREB answers, cached so the shortlist check costs one call per parcel
         -- ever rather than one per click. `hard` non-empty means excluded.
@@ -130,6 +145,8 @@ def schema(con):
         CREATE INDEX IF NOT EXISTS idx_delta ON parcel_results(delta DESC);
         """
     )
+    if "reasons" not in {r[1] for r in con.execute("PRAGMA table_info(runs)")}:
+        con.execute("ALTER TABLE runs ADD COLUMN reasons TEXT")
     have = {r[1] for r in con.execute("PRAGMA table_info(parcel_results)")}
     for name, decl in COLUMNS:
         if name not in have:
@@ -178,9 +195,9 @@ def recompute(progress=None, built_after=None):
             [_row(bfs, name, r) for r in res["candidates"]],
         )
         con.execute(
-            "INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,datetime('now'))",
+            "INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,datetime('now'),?)",
             (bfs, name, res["parcels"], res["assessed"], len(res["candidates"]),
-             res["no_az"], 0),
+             res["no_az"], 0, json.dumps(res["unassessable"], ensure_ascii=False)),
         )
         if progress:
             progress(i / len(targets), f"{name} ({i}/{len(targets)})")
@@ -194,7 +211,8 @@ def _row(bfs, name, r):
     return {
         "bfs": bfs, "municipality": name, "parcel": r["parcel"], "egrid": r["egrid"],
         "address": r["address"], "built": r["built"], "use_class": r["use"],
-        "zone": r["zone"], "az": r["az"], "e": r["east"], "n": r["north"],
+        "zone": r["zone"], "az": r["az"], "metric": r["metric"],
+        "unconvertible": r["unconvertible"], "e": r["east"], "n": r["north"],
         "area": r["area"], "buildable": r["buildable"],
         "zone_share": r["share"], "buildings": r["n"], "existing": r["existing"],
         "delta": r["delta"], "heritage": r["heritage"],
@@ -244,9 +262,10 @@ def main():
             ],
         )
         con.execute(
-            "INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,datetime('now'))",
+            "INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,datetime('now'),?)",
             (bfs, name, res["parcels"], res["assessed"], len(res["candidates"]),
-             res["no_az"], round(time.time() - t0, 1)),
+             res["no_az"], round(time.time() - t0, 1),
+             json.dumps(res["unassessable"], ensure_ascii=False)),
         )
         con.commit()
         print(

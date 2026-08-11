@@ -20,6 +20,7 @@ from shapely.geometry import Polygon
 from shapely.strtree import STRtree
 
 import constraints as C
+import metrics as M
 from shapely import from_wkb
 
 
@@ -81,7 +82,8 @@ def load_parcels(bfs):
 
 class Engine:
     def __init__(self, built_after=None, min_delta=130.0, min_area=300.0,
-                 max_area=5000.0, exclude_inventory=False):
+                 max_area=5000.0, exclude_inventory=False, canton="AG"):
+        self.canton = canton
         self.built_after = built_after or (date.today().year - 15)
         self.min_delta, self.min_area, self.max_area = min_delta, min_area, max_area
         self.exclude_inventory = exclude_inventory
@@ -133,16 +135,26 @@ class Engine:
         return official
 
     def _load_all_zones(self):
-        """Zone polygons keyed by municipality, so a run touches only its own."""
-        db = sqlite3.connect(glob.glob(os.path.join(DATA, "are_bzbauzone_*.gpkg"))[0])
+        """Zone polygons keyed by municipality, so a run touches only its own.
+
+        Every zone publishing ANY utilization figure is loaded, not only those
+        with an Ausnützungsziffer. `metrics.read_zone` decides which figure a
+        zone is read by; whether that figure can become floor area is decided
+        later, per parcel, so a zone we cannot convert is reported rather than
+        filtered out here and silently lost.
+        """
+        canton = M.CANTONS[self.canton]
+        db = sqlite3.connect(glob.glob(os.path.join(DATA, canton.dataset))[0])
         t = [r[0] for r in db.execute("SELECT table_name FROM gpkg_contents")][0]
+        cols = M.columns_for(canton)
         by_bfs = {}
-        for shape, az, name, gde in db.execute(
-            f'SELECT SHAPE, AZmax, GDEBez, GDENR FROM "{t}" WHERE AZmax>0'
-        ):
-            by_bfs.setdefault(int(gde), []).append(
-                {"geom": valid(gpkg_geom(shape)), "az": round(float(az), 2), "name": name}
-            )
+        for row in db.execute(f'SELECT SHAPE, {",".join(cols)} FROM "{t}"'):
+            attrs = dict(zip(cols, row[1:]))
+            zone = M.read_zone(canton, attrs)
+            if zone is None:
+                continue  # no utilization figure at all — not a building zone
+            zone["geom"] = valid(gpkg_geom(row[0]))
+            by_bfs.setdefault(int(attrs[canton.bfs_column]), []).append(zone)
         return by_bfs
 
     def _load_gwr(self):
@@ -221,24 +233,38 @@ class Engine:
             r["buildings"].append(b)
 
         no_az = 0
+        unassessable = {}   # reason -> count, so nothing is dropped silently
         candidates = []
         for num, r in per_parcel.items():
             g = r["parcel"]["geom"]
             area = r["parcel"]["area"] or g.area
 
             allowance = buildable = 0.0
-            dominant = None  # (intersected area, zone) — for the reported zone/AZ
+            unconvertible = 0.0   # zoned, but its figure cannot become floor area
+            reason = ""
+            dominant = None       # (intersected area, zone) — the reported figure
             if zone_index is not None:
                 for i in zone_index.query(g):
                     z = zones[i]
                     inter = g.intersection(z["geom"]).area
-                    if inter > 1.0:
-                        allowance += inter * z["az"]
-                        buildable += inter
-                        if dominant is None or inter > dominant[0]:
-                            dominant = (inter, z)
+                    if inter <= 1.0:
+                        continue
+                    share = M.allowance(inter, z)
+                    if share is None:
+                        # Recorded, not discarded: §3.5 step 1 asks for "not
+                        # assessable" with a reason rather than a silent skip.
+                        unconvertible += inter
+                        reason = reason or M.METRICS[z["metric"]].unconvertible
+                        continue
+                    allowance += share
+                    buildable += inter
+                    if dominant is None or inter > dominant[0]:
+                        dominant = (inter, z)
             if buildable <= 1.0:
                 no_az += 1
+                if reason:
+                    unassessable.setdefault(reason, 0)
+                    unassessable[reason] += 1
                 continue
 
             if all(C.is_recent(p, self.built_after, y)
@@ -280,7 +306,14 @@ class Engine:
                     # reports the figure the potential was computed from rather
                     # than one of the two headline values.
                     "zone": dominant[1]["name"] if dominant else "",
+                    # Area-weighted over every zone the parcel touches, so a
+                    # parcel straddling two zones reports the figure its
+                    # potential was computed from. `metric` names which figure
+                    # that is — labelling an Überbauungsziffer "AZ" would be a
+                    # real error for an architect reading the list.
                     "az": round(allowance / buildable, 3) if buildable else 0.0,
+                    "metric": dominant[1]["metric"] if dominant else "",
+                    "unconvertible": round(unconvertible, 1),
                     "area": area,
                     "buildable": buildable,
                     "share": buildable / area if area else 0.0,
@@ -297,5 +330,6 @@ class Engine:
             "parcels": len(parcels),
             "assessed": len(per_parcel),
             "no_az": no_az,
+            "unassessable": unassessable,
             "candidates": candidates,
         }
