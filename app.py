@@ -158,16 +158,33 @@ municipalities = sorted(parcels["municipality"].dropna().unique())
 chosen = c3.multiselect("Gemeinde (leer = alle)", municipalities)
 top_n = c4.number_input("Anzahl Resultate", 5, 200, 20, 5)
 
+import ingest as _ingest  # cheap: only reads module constants here
+
+#: Whether the cascade can be recomputed in this environment. False on the
+#: deployment, which carries the results but not the ~600 MB of source geodata.
+_full_run = _ingest.geodata_available()
+
 c5, c6, c7 = st.columns([2, 2, 1])
 # The brief lists the year-built cutoff among the filter inputs. Unlike the
-# others it is a pipeline parameter, not a display filter: the age rule runs
-# inside the cascade, so a change takes effect on the next "Neu berechnen".
+# other six it is a pipeline parameter, not a display filter: the age rule runs
+# inside the cascade, where a parcel whose buildings are all certainly newer
+# never becomes a row at all. So it takes effect on the next recompute — and
+# where no recompute is possible it takes effect never, which is why the control
+# is disabled there rather than silently doing nothing.
 min_age = c7.number_input(
     "Mindestalter (Jahre)", 0, 100, 15, 1,
-    help="Parzellen, deren Gebäude alle sicher jünger sind, werden aussortiert. "
-         "Ohne exaktes Baujahr entscheidet die GWR-Bauperiode — eine Periode, "
-         "die die Grenze überspannt, bleibt Kandidat. Wirkt beim nächsten "
-         "«Neu berechnen», nicht auf die bereits angezeigte Liste.",
+    disabled=not _full_run,
+    help=(
+        "Parzellen, deren Gebäude alle sicher jünger sind, werden aussortiert. "
+        "Ohne exaktes Baujahr entscheidet die GWR-Bauperiode — eine Periode, "
+        "die die Grenze überspannt, bleibt Kandidat. Wirkt beim nächsten "
+        "«Neu berechnen», nicht auf die bereits angezeigte Liste."
+        if _full_run else
+        "Hier nicht änderbar: Das Alterskriterium wirkt in der Kaskade, und die "
+        "kann in dieser Umgebung nicht neu gerechnet werden (die Geodaten fehlen). "
+        "Die Liste ist mit 15 Jahren gerechnet; für einen anderen Wert lokal neu "
+        "rechnen und mitdeployen."
+    ),
 )
 hide_inventory = c5.checkbox(
     "Inventarisierte Gebäude ausblenden", value=False,
@@ -211,10 +228,6 @@ known = shortlist["egrid"].isin(cache.index)
 pending = shortlist.loc[~known & shortlist["egrid"].notna() & (shortlist["egrid"] != ""), "egrid"]
 
 run_col, note_col = st.columns([1, 4])
-import ingest as _ingest  # cheap: only the module's constants are touched here
-
-_full_run = _ingest.geodata_available()
-
 run = run_col.button(
     "▶ Neu berechnen" if _full_run else "▶ ÖREB prüfen",
     type="primary",
