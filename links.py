@@ -76,8 +76,17 @@ def google_map_link(east, north):
     return GOOGLE_MAP + query
 
 
-def google_street_view_link(east, north):
+def google_street_view_link(east, north, fallback_east=None, fallback_north=None):
+    """Open Street View at the entrance, or at the parcel as a safe fallback.
+
+    ``sv_e``/``sv_n`` were added after the first production database had
+    already been copied to Railway's persistent volume. Accepting fallback
+    coordinates keeps that older schema readable while newer databases use the
+    more reliable road-facing entrance point.
+    """
     coordinates = lv95_to_wgs84(east, north)
+    if coordinates is None:
+        coordinates = lv95_to_wgs84(fallback_east, fallback_north)
     if coordinates is None:
         return None
     latitude, longitude = coordinates

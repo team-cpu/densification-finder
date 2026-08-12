@@ -34,8 +34,10 @@ leads are limited to harmonised residential, mixed, and centre zones. The GWR
 classification is still a screening signal, not a site inspection.
 
 Each result links directly to AGIS, the ÖREB PDF, Google Maps, and the nearest
-available Street View panorama. Google links use the parcel's representative
-LV95 point transformed to WGS84, so vacant parcels work without an address.
+available Street View panorama. Google Maps uses the parcel's representative
+LV95 point transformed to WGS84. Street View uses the selected building's GWR
+entrance coordinate when available and safely falls back to the parcel point for
+vacant parcels and older databases.
 
 ## Land-price references
 

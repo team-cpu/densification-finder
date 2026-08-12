@@ -21,6 +21,13 @@ class ParcelLinksTest(unittest.TestCase):
         self.assertIsNone(links.agis_link(None, 1_200_000))
         self.assertIsNone(links.google_map_link(float("nan"), 1_200_000))
 
+    def test_street_view_uses_parcel_fallback_for_old_database_rows(self):
+        url = links.google_street_view_link(
+            None, None, 2_648_061.94, 1_250_107.32
+        )
+        self.assertIn("map_action=pano", url)
+        self.assertIn("viewpoint=", url)
+
 
 if __name__ == "__main__":
     unittest.main()

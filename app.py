@@ -485,9 +485,15 @@ view = pd.DataFrame(
         # centre. Google returns a panorama only within roughly 50 m of the
         # requested point, and a representative point sits 23–68 m inside the
         # plot — far enough that the parcel centre reliably returned a black
-        # screen. The entrance faces the road, where the panoramas are.
+        # screen. The entrance faces the road, where the panoramas are. Older
+        # Railway volumes predate the entrance columns, so ``Series.get`` plus
+        # the parcel coordinate fallback keeps them compatible instead of
+        # raising a KeyError during rendering.
         "Street View": final.apply(
-            lambda r: L.google_street_view_link(r["sv_e"], r["sv_n"]), axis=1
+            lambda r: L.google_street_view_link(
+                r.get("sv_e"), r.get("sv_n"), r["e"], r["n"]
+            ),
+            axis=1,
         ),
     }
 )
@@ -569,9 +575,10 @@ st.caption(
     "Eigentumsverhältnisse mit dem eigenen eGovernment-Login nachschlagen. "
     "Der ÖREB-Auszug ist der rechtsverbindliche Katasterauszug des Kantons; "
     "er listet alle Eigentumsbeschränkungen, aber keine Eigentümer. Google "
-    "Maps und Street View öffnen die aus der LV95-Parzellenkoordinate "
-    "umgerechnete Position; Street View springt zum nächstgelegenen verfügbaren "
-    "Panorama. Landpreis und Referenz-Landwert sind grobe Benchmarks, keine "
+    "Maps öffnet die aus der LV95-Parzellenkoordinate umgerechnete Position; "
+    "Street View verwendet wenn vorhanden den GWR-Gebäudeeingang und springt "
+    "zum nächstgelegenen verfügbaren Panorama. Landpreis und Referenz-Landwert "
+    "sind grobe Benchmarks, keine "
     "Bewertung: Der mitgelieferte Rückfallwert von CHF 950/m² ist der von "
     "Wüest Partner publizierte Aargauer Median für voll erschlossenes, "
     "unbebautes EFH-Bauland mit tiefer Ausnützung (Q2 2021). Genauere "
