@@ -22,9 +22,12 @@ ENV DENSIFICATION_DB=/data/results.sqlite \
 
 EXPOSE 8501
 
-# $PORT is injected by Railway. `sh -c` so it is expanded rather than passed
+# Prepare the persistent database before Streamlit can pass Railway's health
+# check. This applies additive schema migrations to volumes created by older
+# releases and performs a requested one-time reseed before serving any session.
+# $PORT is injected by Railway. `sh -c` expands it rather than passing it
 # through literally, which an exec-form CMD would do.
-CMD ["sh", "-c", "streamlit run app.py \
+CMD ["sh", "-c", "python bootstrap.py && exec streamlit run app.py \
      --server.port ${PORT:-8501} \
      --server.address 0.0.0.0 \
      --server.headless true \

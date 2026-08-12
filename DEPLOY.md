@@ -52,6 +52,10 @@ Step 3 is required: `paths.ensure_db()` will not overwrite a populated volume, s
 without it the deployment keeps the old data. Leaving the variable set would
 discard every cached ÖREB answer on each restart.
 
+Before Streamlit starts, `bootstrap.py` seeds the volume when requested and
+applies additive schema migrations. Railway therefore cannot mark a deployment
+healthy while its persistent database still has an older application schema.
+
 ## If you do want recompute on the deployment
 
 Upload `data/` onto the volume and the button does the full pipeline — the code

@@ -13,6 +13,7 @@ Both default to the repository, so nothing changes for local work.
 """
 import os
 import shutil
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -68,11 +69,27 @@ def ensure_db():
     # hand. Set it for one deploy, then unset — leaving it on would discard every
     # ÖREB answer the hosted app has paid for on each restart.
     if os.environ.get("DENSIFICATION_RESEED") == "1":
-        os.makedirs(os.path.dirname(DB) or ".", exist_ok=True)
-        shutil.copy2(SEED_DB, DB)
+        _copy_seed_atomically()
         return True
     if os.path.exists(DB) and os.path.getsize(DB) > 0:
         return False
-    os.makedirs(os.path.dirname(DB) or ".", exist_ok=True)
-    shutil.copy2(SEED_DB, DB)
+    _copy_seed_atomically()
     return True
+
+
+def _copy_seed_atomically():
+    """Replace the live database only after the seed copy is complete."""
+    directory = os.path.dirname(DB) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        prefix=".densification-seed-", suffix=".sqlite", dir=directory
+    )
+    os.close(fd)
+    try:
+        shutil.copy2(SEED_DB, temporary)
+        # Same-directory replacement is atomic: readers see either the old
+        # complete database or the new complete database, never a partial copy.
+        os.replace(temporary, DB)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)

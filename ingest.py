@@ -117,13 +117,47 @@ COLUMNS = [
     ("calculated_at", "TEXT"),
 ]
 
+RUN_COLUMNS = [
+    ("bfs", "INTEGER PRIMARY KEY"), ("municipality", "TEXT"),
+    ("parcels", "INTEGER"), ("assessed", "INTEGER"),
+    ("candidates", "INTEGER"), ("no_az", "INTEGER"),
+    ("seconds", "REAL"), ("finished_at", "TEXT"), ("reasons", "TEXT"),
+]
+
+OEREB_COLUMNS = [
+    ("egrid", "TEXT PRIMARY KEY"), ("hard", "TEXT"), ("notable", "TEXT"),
+    ("error", "TEXT"), ("checked_at", "TEXT"),
+]
+
+
+def _column_definitions(columns):
+    return ",\n            ".join(
+        f"{name:<13} {declaration}" for name, declaration in columns
+    )
+
+
+def _add_missing_columns(con, table, columns):
+    """Widen a table created by an older application release in place."""
+    have = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+    for name, declaration in columns:
+        if name not in have:
+            # SQLite cannot add NOT NULL or PRIMARY KEY constraints to a
+            # populated table. New application columns stay nullable until the
+            # next ingestion fills them.
+            compatible = declaration.replace(" NOT NULL", "").replace(
+                " PRIMARY KEY", ""
+            )
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {compatible}")
+
 
 def schema(con):
-    cols = ",\n            ".join(f"{n:<13} {t}" for n, t in COLUMNS)
+    parcel_cols = _column_definitions(COLUMNS)
+    run_cols = _column_definitions(RUN_COLUMNS)
+    oereb_cols = _column_definitions(OEREB_COLUMNS)
     con.executescript(
         f"""
         CREATE TABLE IF NOT EXISTS parcel_results (
-            {cols},
+            {parcel_cols},
             PRIMARY KEY (bfs, parcel)
         );
         -- `reasons` is a JSON object mapping each reason to a parcel count.
@@ -132,30 +166,23 @@ def schema(con):
         -- missing because it publishes no figure or because the figure it does
         -- publish cannot be converted into floor area.
         CREATE TABLE IF NOT EXISTS runs (
-            bfs INTEGER PRIMARY KEY, municipality TEXT, parcels INTEGER,
-            assessed INTEGER, candidates INTEGER, no_az INTEGER,
-            seconds REAL, finished_at TEXT, reasons TEXT
+            {run_cols}
         );
         -- ÖREB answers, cached so the shortlist check costs one call per parcel
         -- ever rather than one per click. `hard` non-empty means excluded.
         CREATE TABLE IF NOT EXISTS oereb_cache (
-            egrid      TEXT PRIMARY KEY,
-            hard       TEXT,
-            notable    TEXT,
-            error      TEXT,
-            checked_at TEXT
+            {oereb_cols}
         );
-        CREATE INDEX IF NOT EXISTS idx_delta ON parcel_results(delta DESC);
         """
     )
-    if "reasons" not in {r[1] for r in con.execute("PRAGMA table_info(runs)")}:
-        con.execute("ALTER TABLE runs ADD COLUMN reasons TEXT")
-    have = {r[1] for r in con.execute("PRAGMA table_info(parcel_results)")}
-    for name, decl in COLUMNS:
-        if name not in have:
-            # NOT NULL cannot be added to a populated table; the constraint only
-            # matters for rows this version writes, which always supply a value.
-            con.execute(f"ALTER TABLE parcel_results ADD COLUMN {name} {decl.replace(' NOT NULL', '')}")
+    _add_missing_columns(con, "parcel_results", COLUMNS)
+    _add_missing_columns(con, "runs", RUN_COLUMNS)
+    _add_missing_columns(con, "oereb_cache", OEREB_COLUMNS)
+    # Create indexes after widening so an index introduced alongside a column
+    # never runs before that column exists on a legacy database.
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_delta ON parcel_results(delta DESC)"
+    )
     con.commit()
 
 
@@ -214,7 +241,9 @@ def recompute(progress=None, built_after=None):
             [_row(bfs, name, r) for r in res["candidates"]],
         )
         con.execute(
-            "INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,datetime('now'),?)",
+            "INSERT OR REPLACE INTO runs "
+            "(bfs, municipality, parcels, assessed, candidates, no_az, seconds, "
+            "finished_at, reasons) VALUES (?,?,?,?,?,?,?,datetime('now'),?)",
             (bfs, name, res["parcels"], res["assessed"], len(res["candidates"]),
              res["no_az"], 0, json.dumps(res["unassessable"], ensure_ascii=False)),
         )
@@ -282,7 +311,9 @@ def main():
             ],
         )
         con.execute(
-            "INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,datetime('now'),?)",
+            "INSERT OR REPLACE INTO runs "
+            "(bfs, municipality, parcels, assessed, candidates, no_az, seconds, "
+            "finished_at, reasons) VALUES (?,?,?,?,?,?,?,datetime('now'),?)",
             (bfs, name, res["parcels"], res["assessed"], len(res["candidates"]),
              res["no_az"], round(time.time() - t0, 1),
              json.dumps(res["unassessable"], ensure_ascii=False)),

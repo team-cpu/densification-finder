@@ -29,6 +29,7 @@ import land_prices as LP
 import links as L
 import oereb as O
 
+import ingest as _ingest
 import paths
 
 HERE = paths.HERE
@@ -121,7 +122,9 @@ def check_oereb(egrids, progress=None):
             except Exception as exc:
                 hard, notable, err = [], [], str(exc)
             con.execute(
-                "INSERT OR REPLACE INTO oereb_cache VALUES (?,?,?,?,datetime('now'))",
+                "INSERT OR REPLACE INTO oereb_cache "
+                "(egrid, hard, notable, error, checked_at) "
+                "VALUES (?,?,?,?,datetime('now'))",
                 (egrid, "; ".join(hard), "; ".join(notable), err or ""),
             )
             con.commit()
@@ -131,7 +134,13 @@ def check_oereb(egrids, progress=None):
     con.close()
 
 
-paths.ensure_db()   # first deploy: seed an empty volume from the committed copy
+# A Railway volume survives image deployments. Seed it when empty, then widen
+# its schema before any DataFrame reads it. Without the second step, adding a
+# result column in a new release leaves a populated volume on the old schema and
+# the UI crashes with a KeyError when it renders that column.
+paths.ensure_db()
+with sqlite3.connect(DB) as con:
+    _ingest.schema(con)
 parcels, runs = load()
 land_price_references = load_land_prices()
 
@@ -156,8 +165,6 @@ parcel_type = c4.selectbox(
     ),
 )
 top_n = c5.number_input("Anzahl Resultate", 5, 200, 20, 5)
-
-import ingest as _ingest  # cheap: only reads module constants here
 
 #: Whether the cascade can be recomputed in this environment. False on the
 #: deployment, which carries the results but not the ~600 MB of source geodata.
