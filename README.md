@@ -41,8 +41,11 @@ vacant parcels and older databases.
 
 ## Land-price references
 
-The result table shows a rough reference price per square metre and
-`parcel area × reference price`. References are loaded from `land_prices.csv`;
+The result table shows a rough reference price per square metre,
+`parcel area × reference price`, and that reference land value divided by the
+additional floor-area potential. The last figure is a screening ratio: lower is
+more favourable, but it is not a project return. References are loaded from
+`land_prices.csv`;
 set `DENSIFICATION_LAND_PRICES` to use another file. Rows may target a BFS
 municipality, municipality name, a shell-style `zone_pattern`, or a combination.
 The most specific matching row wins.
@@ -50,9 +53,10 @@ The most specific matching row wins.
 The committed file contains only a transparent canton-wide fallback: CHF 950/m²,
 the Wüest Partner median published by moneyland.ch for fully serviced vacant
 single-family residential land with low utilization in Aargau in Q2 2021. It is
-not presented as a current municipality valuation. Licensed Wüest Partner data
-or an official cantonal municipality extract can be added as rows without a
-code change. These figures are screening references only; they omit the existing
+not presented as a current municipality valuation. The UI shows the reference
+level explicitly as `Kanton AG`; it does not invent municipality multipliers.
+Licensed Wüest Partner data can be added as rows without a code change. These
+figures are screening references only; they omit the existing
 building, demolition, construction, financing, tax, and site-specific costs.
 
 Recomputing from source needs `data/`, which is gitignored at ~600 MB:

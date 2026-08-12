@@ -31,6 +31,7 @@ import oereb as O
 
 import ingest as _ingest
 import paths
+from ranking import rank_candidates
 
 HERE = paths.HERE
 DB = paths.DB
@@ -42,6 +43,13 @@ SQM_PER_UNIT = 90
 # The brief's two-step approach: rank broadly, then pay for ÖREB only on the
 # head of the list.
 SHORTLIST = 50
+
+# The committed result database was generated with these cascade boundaries.
+# Controls outside them would look interactive while returning exactly the same
+# rows, because parcels beyond the boundaries were never stored.
+MIN_STORED_DELTA = 130
+MIN_STORED_AREA = 300
+MAX_STORED_AREA = 5000
 
 # The per-parcel link. Not a map: the binding cadastre extract, which lists every
 # public-law restriction on the parcel and is the natural next step once a
@@ -152,8 +160,28 @@ if parcels is None or parcels.empty:
 
 # ── controls ────────────────────────────────────────────────────────────────
 c1, c2, c3, c4, c5 = st.columns(5)
-min_delta = c1.number_input("Mindestpotenzial (m² GF)", 0, 5000, 130, 10)
-area = c2.slider("Parzellenfläche (m²)", 0, 5000, (300, 5000), 50)
+min_delta = c1.number_input(
+    "Mindestpotenzial (m² GF)",
+    MIN_STORED_DELTA,
+    5000,
+    MIN_STORED_DELTA,
+    10,
+    help=(
+        f"Die Ergebnisdatenbank enthält nur Parzellen ab {MIN_STORED_DELTA} m² "
+        "Potenzial. Für eine tiefere Grenze muss die Kaskade neu gerechnet werden."
+    ),
+)
+area = c2.slider(
+    "Parzellenfläche (m²)",
+    MIN_STORED_AREA,
+    MAX_STORED_AREA,
+    (MIN_STORED_AREA, MAX_STORED_AREA),
+    50,
+    help=(
+        f"Die Ergebnisdatenbank enthält nur Parzellen zwischen {MIN_STORED_AREA} "
+        f"und {MAX_STORED_AREA} m²."
+    ),
+)
 municipalities = sorted(parcels["municipality"].dropna().unique())
 chosen = c3.multiselect("Gemeinde (leer = alle)", municipalities)
 parcel_type = c4.selectbox(
@@ -164,7 +192,17 @@ parcel_type = c4.selectbox(
         "Nutzungsklasse mit dieser Parzelle verknüpft."
     ),
 )
-top_n = c5.number_input("Anzahl Resultate", 5, 200, 20, 5)
+top_n = c5.number_input(
+    "Anzahl Resultate",
+    5,
+    SHORTLIST,
+    20,
+    5,
+    help=(
+        f"Maximal {SHORTLIST}: Nur diese Shortlist wird gegen den ÖREB-Kataster "
+        "geprüft."
+    ),
+)
 
 #: Whether the cascade can be recomputed in this environment. False on the
 #: deployment, which carries the results but not the ~600 MB of source geodata.
@@ -222,20 +260,7 @@ def select(src):
         out = out[out["heritage"].fillna("") == ""]
     if hide_design_plan:
         out = out[out["design_plan"] == 0]
-    # Built parcels rank by delta/existing: a 400 m² gain on a small old house
-    # is a better lead than the same gain on a large one. That ratio has no
-    # meaning on vacant land, where existing=0, so vacant-only results rank by
-    # absolute developable floor area. In a mixed list, occupied leads retain
-    # their established order and vacant leads form a second, delta-ranked set.
-    ratio = out["delta"] / out["existing"].clip(lower=1)
-    if parcel_type == "Unbebaut":
-        return out.assign(ratio=ratio).sort_values("delta", ascending=False)
-    if parcel_type == "Alle":
-        return out.assign(
-            ratio=ratio,
-            _kind_order=(out["buildings"] == 0).astype(int),
-        ).sort_values(["_kind_order", "ratio", "delta"], ascending=[True, False, False])
-    return out.assign(ratio=ratio).sort_values("ratio", ascending=False)
+    return rank_candidates(out, parcel_type)
 
 
 df = select(parcels)
@@ -455,7 +480,10 @@ final["_land_price"] = final["_land_price_ref"].map(
     lambda ref: ref.price_chf_m2 if ref else None
 )
 final["_land_price_scope"] = final["_land_price_ref"].map(
-    lambda ref: ref.display if ref else "—"
+    lambda ref: ref.scope if ref else "—"
+)
+final["_land_price_as_of"] = final["_land_price_ref"].map(
+    lambda ref: ref.as_of if ref else "—"
 )
 final["_land_price_source"] = final["_land_price_ref"].map(
     lambda ref: ref.source_url or None if ref else None
@@ -475,7 +503,11 @@ view = pd.DataFrame(
         f"≈ Whg. (à {SQM_PER_UNIT} m²)": (final["delta"] / SQM_PER_UNIT).round(1),
         "Landpreis Ref. CHF/m²": final["_land_price"],
         "≈ Ref.-Landwert CHF": (final["_land_price"] * final["area"]).round(-3),
-        "Preisstand": final["_land_price_scope"],
+        "≈ Landwert / Potenzial-GF": (
+            final["_land_price"] * final["area"] / final["delta"]
+        ).round(0),
+        "Preisebene": final["_land_price_scope"],
+        "Preisstand": final["_land_price_as_of"],
         "Preisquelle": final["_land_price_source"],
         "Status": final.apply(status, axis=1),
         # The links answer different questions. AGIS is where ownership gets
@@ -537,6 +569,15 @@ st.dataframe(
             format="CHF %.0f",
             help="Parzellenfläche × Landpreisreferenz; ohne Gebäude-, Abbruch- oder Nebenkosten.",
         ),
+        "≈ Landwert / Potenzial-GF": st.column_config.NumberColumn(
+            format="CHF %.0f/m²",
+            help=(
+                "Referenz-Landwert ÷ zusätzliches Geschossflächenpotenzial. "
+                "Ein tieferer Wert ist als grober Screening-Indikator günstiger; "
+                "er ist keine Projekt-Rendite und enthält bei bebauten Parzellen "
+                "nicht den Wert des bestehenden Gebäudes."
+            ),
+        ),
         # The address is the row's identity, so it gets the width it needs.
         # Gemeinde stays a column of its own despite looking redundant with it:
         # the postal town differs from the political municipality on 28% of
@@ -584,10 +625,12 @@ st.caption(
     "er listet alle Eigentumsbeschränkungen, aber keine Eigentümer. Google "
     "Maps öffnet die aus der LV95-Parzellenkoordinate umgerechnete Position; "
     "Street View verwendet wenn vorhanden den GWR-Gebäudeeingang und springt "
-    "zum nächstgelegenen verfügbaren Panorama. Landpreis und Referenz-Landwert "
-    "sind grobe Benchmarks, keine "
+    "zum nächstgelegenen verfügbaren Panorama. Landpreis, Referenz-Landwert "
+    "und Landwert pro Potenzial-GF sind grobe Benchmarks, keine "
     "Bewertung: Der mitgelieferte Rückfallwert von CHF 950/m² ist der von "
     "Wüest Partner publizierte Aargauer Median für voll erschlossenes, "
-    "unbebautes EFH-Bauland mit tiefer Ausnützung (Q2 2021). Genauere "
-    "Gemeinde-/Zonenwerte können in land_prices.csv ergänzt werden."
+    "unbebautes EFH-Bauland mit tiefer Ausnützung (Q2 2021). "
+    "Derzeit ist deshalb für alle Gemeinden nur die Preisebene «Kanton AG» "
+    "verfügbar. Belastbare Gemeinde-/Zonenwerte von Wüest Partner sind "
+    "lizenzpflichtig und können in land_prices.csv ergänzt werden."
 )
