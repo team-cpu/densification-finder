@@ -18,13 +18,15 @@ import concurrent.futures
 import hmac
 import json
 import os
-import re
 import sqlite3
 from datetime import date
 
 import pandas as pd
 import streamlit as st
 
+import detail
+import economics as EC
+import formatting as F
 import land_prices as LP
 import links as L
 import oereb as O
@@ -37,19 +39,37 @@ HERE = paths.HERE
 DB = paths.DB
 
 # Rule of thumb, and labelled as one in the table header. 90 m² per dwelling is
-# the figure the brief gives; it is not a planning standard.
-SQM_PER_UNIT = 90
+# the figure the brief gives; it is not a planning standard. Defined once, in
+# `economics`, because the detail view lets it be overridden and both have to
+# start from the same number.
+SQM_PER_UNIT = EC.SQM_PER_UNIT
 
 # The brief's two-step approach: rank broadly, then pay for ÖREB only on the
 # head of the list.
 SHORTLIST = 50
 
-# The committed result database was generated with these cascade boundaries.
-# Controls outside them would look interactive while returning exactly the same
-# rows, because parcels beyond the boundaries were never stored.
+# The committed result database was generated with this cascade boundary. A
+# control outside it would look interactive while returning exactly the same
+# rows, because parcels below it were never stored.
 MIN_STORED_DELTA = 130
-MIN_STORED_AREA = 300
-MAX_STORED_AREA = 5000
+
+# Parcel area used to be a second such boundary — stored 300–5,000 m², offered
+# 300–5,000 m² — so the slider ran into a wall rather than into the end of the
+# data, and the largest lead in the canton sat behind it. The cascade now keeps
+# every area, and this control genuinely filters.
+#
+# The steps are uneven on purpose: 95% of candidates are smaller than 3,400 m²,
+# so a linear slider spends nearly all its travel on the remaining 5% and cannot
+# be set precisely where the parcels actually are.
+AREA_STEPS = (
+    0, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000,
+    5000, 7500, 10000, 15000, 25000, 50000, 100000, float("inf"),
+)
+NO_LIMIT = AREA_STEPS[-1]
+
+#: Lower end unchanged, so the familiar list is still what opens; the upper end
+#: is open, which is the whole point of the change.
+AREA_DEFAULT = (300, NO_LIMIT)
 
 # The per-parcel link. Not a map: the binding cadastre extract, which lists every
 # public-law restriction on the parcel and is the natural next step once a
@@ -116,6 +136,35 @@ def read_oereb_cache():
         )
 
 
+def _column(cache, name):
+    blank = pd.Series("", index=cache.index)
+    return cache.get(name, blank).fillna("")
+
+
+def with_extract(cache):
+    """EGRIDs whose cached answer is a complete extract.
+
+    Presence in the cache is not the same question. A row written before the
+    legal basis was stored carries the restrictions but none of the documents,
+    and a row written after a failed request carries only the error — one
+    transient 502 would otherwise leave a parcel permanently unchecked while the
+    interface called the shortlist complete. Both get asked again on the next
+    run, which costs one request each.
+    """
+    if cache.empty:
+        return cache.index[:0]
+    return cache.index[_column(cache, "details") != ""]
+
+
+def failed_egrids(cache):
+    """EGRIDs whose last request failed. Reported rather than retried on every
+    rerun: the cadastre answered once with an error, and hammering it from a
+    page refresh would not change that."""
+    if cache.empty:
+        return cache.index[:0]
+    return cache.index[(_column(cache, "error") != "") & (_column(cache, "details") == "")]
+
+
 def check_oereb(egrids, progress=None):
     """One call per parcel, eight at a time. Results are written as they arrive,
     so an interrupted run keeps what it already paid for."""
@@ -126,14 +175,17 @@ def check_oereb(egrids, progress=None):
         for fut in concurrent.futures.as_completed(futures):
             egrid = futures[fut]
             try:
-                hard, notable, err = fut.result()
+                hard, notable, err, extract = fut.result()
             except Exception as exc:
-                hard, notable, err = [], [], str(exc)
+                hard, notable, err, extract = [], [], str(exc), None
             con.execute(
                 "INSERT OR REPLACE INTO oereb_cache "
-                "(egrid, hard, notable, error, checked_at) "
-                "VALUES (?,?,?,?,datetime('now'))",
-                (egrid, "; ".join(hard), "; ".join(notable), err or ""),
+                "(egrid, hard, notable, error, checked_at, details) "
+                "VALUES (?,?,?,?,datetime('now'),?)",
+                (
+                    egrid, "; ".join(hard), "; ".join(notable), err or "",
+                    json.dumps(extract, ensure_ascii=False) if extract else "",
+                ),
             )
             con.commit()
             done += 1
@@ -152,11 +204,29 @@ with sqlite3.connect(DB) as con:
 parcels, runs = load()
 land_price_references = load_land_prices()
 
-st.title("Verdichtungspotenzial — Kanton Aargau")
+
+def price_of(row):
+    """The land-price reference for one parcel. A function because the table and
+    the detail view have to resolve it the same way; two lookups could disagree
+    about which row of `land_prices.csv` is the most specific match."""
+    return LP.resolve(
+        land_price_references, row["bfs"], row["municipality"], row["zone"]
+    )
+
 
 if parcels is None or parcels.empty:
+    st.title("Verdichtungspotenzial — Kanton Aargau")
     st.warning("No results yet. Run `ingest.py` first.")
     st.stop()
+
+# Step 2 of the brief is a conditional view, not a second page: one session-state
+# key decides whether this script draws the list or one parcel. Nothing about the
+# app's structure changes, and the back link is the key going away again.
+if detail.selected():
+    detail.page(parcels, read_oereb_cache(), price_of)
+    st.stop()
+
+st.title("Verdichtungspotenzial — Kanton Aargau")
 
 # ── controls ────────────────────────────────────────────────────────────────
 c1, c2, c3, c4, c5 = st.columns(5)
@@ -171,15 +241,16 @@ min_delta = c1.number_input(
         "Potenzial. Für eine tiefere Grenze muss die Kaskade neu gerechnet werden."
     ),
 )
-area = c2.slider(
+area = c2.select_slider(
     "Parzellenfläche (m²)",
-    MIN_STORED_AREA,
-    MAX_STORED_AREA,
-    (MIN_STORED_AREA, MAX_STORED_AREA),
-    50,
+    options=AREA_STEPS,
+    value=AREA_DEFAULT,
+    format_func=lambda v: "ohne Limite" if v == NO_LIMIT else f"{v:,.0f}",
     help=(
-        f"Die Ergebnisdatenbank enthält nur Parzellen zwischen {MIN_STORED_AREA} "
-        f"und {MAX_STORED_AREA} m²."
+        "Deckt die ganze Ergebnisdatenbank ab: Die Kaskade speichert jede "
+        f"Parzellenfläche (grösste gespeicherte: {parcels['area'].max():,.0f} m²). "
+        "«Ohne Limite» lässt das obere Ende offen — die frühere feste Obergrenze "
+        "von 5,000 m² hat die grössten Grundstücke gar nicht erst gezeigt."
     ),
 )
 municipalities = sorted(parcels["municipality"].dropna().unique())
@@ -268,7 +339,7 @@ shortlist = df.head(SHORTLIST)
 
 # ── cascade step 5: ÖREB, shortlist only ────────────────────────────────────
 cache = read_oereb_cache()
-known = shortlist["egrid"].isin(cache.index)
+known = shortlist["egrid"].isin(with_extract(cache))
 pending = shortlist.loc[~known & shortlist["egrid"].notna() & (shortlist["egrid"] != ""), "egrid"]
 
 run_col, note_col = st.columns([1, 4])
@@ -289,12 +360,15 @@ run = run_col.button(
         "lokal und wird mitdeployt."
     ),
 )
+retry = int(shortlist["egrid"].isin(failed_egrids(cache)).sum())
 if pending.empty:
     note_col.success(f"Shortlist vollständig ÖREB-geprüft ({len(shortlist)} Parzellen).")
 else:
     note_col.info(
         f"{len(shortlist) - len(pending)} von {len(shortlist)} der Shortlist geprüft. "
-        "Ungeprüfte Parzellen werden angezeigt, aber noch nicht ausgeschlossen."
+        + (f"{retry} Abfrage(n) sind fehlgeschlagen und werden beim nächsten Lauf "
+           "erneut versucht. " if retry else "")
+        + "Ungeprüfte Parzellen werden angezeigt, aber noch nicht ausgeschlossen."
     )
 
 if run:
@@ -326,7 +400,7 @@ if run:
     fresh, _ = load()
     fresh_short = select(fresh).head(SHORTLIST)
     todo = fresh_short.loc[
-        ~fresh_short["egrid"].isin(read_oereb_cache().index)
+        ~fresh_short["egrid"].isin(with_extract(read_oereb_cache()))
         & fresh_short["egrid"].notna()
         & (fresh_short["egrid"] != ""),
         "egrid",
@@ -420,7 +494,7 @@ def status(r):
         # Naming the metric only when it is not the canton's usual one:
         # labelling an Überbauungsziffer "AZ" would be a real error for an
         # architect reading the list, but repeating "AZ" on every row is noise.
-        METRIC_LABELS.get(r["metric"], "") if r["metric"] not in ("", "AZ") else "",
+        F.METRIC_LABELS.get(r["metric"], "") if r["metric"] not in ("", "AZ") else "",
         f"nur {r['zone_share'] * 100:.0f}% in der Bauzone" if r["zone_share"] < 0.95 else "",
         f"{r['buildings']} Gebäude" if r["buildings"] > 1 else "",
         "" if r["_checked"] else "ÖREB offen",
@@ -428,54 +502,12 @@ def status(r):
     return " · ".join(x for x in bits if x) or "frei"
 
 
-# GWR's own wording is exact but repetitive — ten rows of "Gebäude mit einer
-# Wohnung" cost more width than they carry meaning.
-USE_SHORT = {"1110": "1 Whg.", "1121": "2 Whg.", "1122": "3+ Whg."}
-
-# Shown in Status when a zone is governed by something other than Aargau's usual
-# Ausnützungsziffer, so the "Ziffer" column is never read as the wrong metric.
-METRIC_LABELS = {
-    "UEZ": "Überbauungsziffer (Ziffer × Geschosse)",
-    "BMZ": "Baumassenziffer",
-    "GFZ": "Geschossflächenziffer",
-}
-
-
-def short_year(text):
-    """"von 1946 bis 1960" is seventeen characters to say what "1946–60" says in
-    seven, and the column is competing for width with the address."""
-    t = (text or "").strip()
-    m = re.match(r"von (\d{4}) bis (\d{2})(\d{2})$", t)
-    if m:
-        return f"{m.group(1)}–{m.group(3)}"
-    m = re.match(r"nach (\d{4})$", t)
-    if m:
-        return f"ab {m.group(1)}"
-    return t or "—"
-
-
-def short_use(text):
-    t = (text or "").strip()
-    if "einer Wohnung" in t:
-        return USE_SHORT["1110"]
-    if "zwei" in t and "Wohnung" in t:
-        return USE_SHORT["1121"]
-    if "drei oder mehr" in t:
-        return USE_SHORT["1122"]
-    return t or "—"
-
-
 # Column order follows the brief: who and where, then how old and what, then
 # what the zone allows, then the answer. The diagnostics that explain how the
 # answer was reached sit after it — putting them first pushed the potential, the
 # unit estimate and the link off the right edge, which is the whole payload.
 final = final.copy()
-final["_land_price_ref"] = final.apply(
-    lambda r: LP.resolve(
-        land_price_references, r["bfs"], r["municipality"], r["zone"]
-    ),
-    axis=1,
-)
+final["_land_price_ref"] = final.apply(price_of, axis=1)
 final["_land_price"] = final["_land_price_ref"].map(
     lambda ref: ref.price_chf_m2 if ref else None
 )
@@ -495,10 +527,15 @@ view = pd.DataFrame(
         "Gemeinde": final["municipality"],
         "Parzelle": final["parcel"],
         "Typ": final["buildings"].map(lambda n: "unbebaut" if n == 0 else "bebaut"),
-        "Baujahr": final["built"].map(short_year),
-        "Nutzung": final["use_class"].map(short_use),
+        "Baujahr": final["built"].map(F.short_year),
+        "Nutzung": final["use_class"].map(F.short_use),
         "Zone": final["zone"].fillna("—").replace("", "—"),
         "Ziffer": final["az"],
+        # Shown since the area filter stopped being a fixed 300–5,000 m² window:
+        # it is now the dimension the user moves, and a row that arrives from the
+        # open upper end has to say how large it actually is. It also completes
+        # the formula on screen — Fläche × Ziffer − Bestand ≈ Potenzial.
+        "Fläche m²": final["area"].round(0),
         "Potenzial m² (Schätzung)": final["delta"].round(0),
         f"≈ Whg. (à {SQM_PER_UNIT} m²)": (final["delta"] / SQM_PER_UNIT).round(1),
         "Landpreis Ref. CHF/m²": final["_land_price"],
@@ -537,8 +574,15 @@ view = pd.DataFrame(
     }
 )
 
-st.dataframe(
+# Selecting a row is how a parcel opens. Streamlit cannot put a callback inside
+# a dataframe cell, so the "Analysieren" control the brief describes is the
+# selection column the table grows here — one click, in the row itself, next to
+# the links it sits with in the brief.
+event = st.dataframe(
     view,
+    key="hotlist",
+    on_select="rerun",
+    selection_mode="single-row",
     width="stretch",
     # Tall enough that the full list is one glance rather than a scroll; the
     # brief asks for a top 20 and 20 rows is the default.
@@ -555,6 +599,11 @@ st.dataframe(
         ),
         "Preisquelle": st.column_config.LinkColumn(
             "Preisquelle", display_text="Quelle", width="small"
+        ),
+        "Fläche m²": st.column_config.NumberColumn(
+            format="%.0f",
+            width="small",
+            help="Parzellenfläche laut Kataster — die Grösse, die der Regler links begrenzt.",
         ),
         "Potenzial m² (Schätzung)": st.column_config.NumberColumn(format="%.0f"),
         "Landpreis Ref. CHF/m²": st.column_config.NumberColumn(
@@ -598,6 +647,18 @@ st.dataframe(
         ),
     },
 )
+
+st.caption(
+    "Zeile anwählen öffnet die Einzelanalyse: Grunddaten, Potenzial und "
+    "Residualwertrechnung mit eigenen Annahmen, als PDF exportierbar."
+)
+
+# `final` is what `view` was built from, in the same order, so the position the
+# table reports is the row the user pointed at.
+chosen_rows = list(event.selection["rows"]) if event and event.selection else []
+if chosen_rows:
+    detail.open_parcel(detail.parcel_id(final.iloc[chosen_rows[0]]))
+    st.rerun()
 
 if not excluded.empty:
     with st.expander(f"{len(excluded)} Parzellen durch ÖREB ausgeschlossen"):

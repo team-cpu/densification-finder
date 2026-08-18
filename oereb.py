@@ -51,6 +51,23 @@ NOTABLE_TEXT = (
 )
 
 
+#: The theme the zoning plan and everything overlaid on it arrives under. Aargau
+#: delivers base zones, design plans and heritage tiers all inside it, so this is
+#: the theme to read for "what does the plan say here", not a filter to narrow.
+ZONING_THEME = "ch.Nutzungsplanung"
+
+
+def text(value, default=""):
+    """The extract is multilingual: every human-readable field is a list of
+    {Language, Text}. German is what the cantonal service returns and what the
+    interface shows, so the first entry is taken rather than searched for."""
+    if isinstance(value, list):
+        return value[0].get("Text", default) if value else default
+    if isinstance(value, dict):
+        return text(value.get("Text"), default)
+    return value if isinstance(value, str) else default
+
+
 def fetch(egrid, timeout=60):
     url = f"{BASE}/extract/json/?EGRID={egrid}"
     with urllib.request.urlopen(url, timeout=timeout) as r:
@@ -63,31 +80,128 @@ def restrictions(doc):
     out, seen = [], set()
     for x in e.get("RealEstate", {}).get("RestrictionOnLandownership", []) or []:
         code = (x.get("Theme") or {}).get("Code", "")
-        info = x.get("Information") or x.get("LegendText") or []
-        text = info[0].get("Text", "") if isinstance(info, list) and info else ""
+        legend = text(x.get("Information") or x.get("LegendText"))
         share = x.get("AreaShare")
-        key = (code, text)
+        key = (code, legend)
         if key in seen:
             continue
         seen.add(key)
-        out.append((code, text, share))
+        out.append((code, legend, share))
     return out
 
 
 
+def details(doc):
+    """Everything in the extract that describes the parcel rather than
+    restricting it: the official zone split, the documents that govern it, and
+    who is responsible.
+
+    This is the half of the answer the tool used to throw away. The same request
+    that decides whether a parcel is excluded also carries the parcel's building
+    regulation — the municipality's BNO, the zoning plan, the cantonal Baugesetz
+    — each with a link to the document itself. Fetching it again from anywhere
+    else would be a second source that can disagree with this one.
+
+    Deliberately keyed on `Type.Code`, which is how the printed extract splits
+    its two lists: `LegalProvision` becomes *Rechtsvorschriften* (the plans and
+    the BNO), `Law` becomes *Gesetzliche Grundlagen* (federal and cantonal law).
+    """
+    e = doc.get("GetExtractByIdResponse", {}).get("extract", doc.get("extract", doc))
+    estate = e.get("RealEstate", {}) or {}
+
+    zones, documents, seen_docs = [], {"provisions": [], "laws": []}, {}
+    offices = []
+    for x in estate.get("RestrictionOnLandownership", []) or []:
+        legend = text(x.get("LegendText") or x.get("Information"))
+        if (x.get("Theme") or {}).get("Code") == ZONING_THEME and legend:
+            zones.append({
+                "text": legend,
+                "area": x.get("AreaShare"),
+                "percent": x.get("PartInPercent"),
+            })
+        if x.get("ResponsibleOffice"):
+            offices.append({
+                "name": text(x["ResponsibleOffice"].get("Name")),
+                "url": text(x["ResponsibleOffice"].get("OfficeAtWeb")),
+            })
+        for p in x.get("LegalProvisions") or []:
+            kind = (p.get("Type") or {}).get("Code")
+            bucket = {"LegalProvision": "provisions", "Law": "laws"}.get(kind)
+            if not bucket:
+                continue
+            title = text(p.get("Title"))
+            number = text(p.get("OfficialNumber"))
+            url = text(p.get("TextAtWeb"))
+            if not title:
+                continue
+            # One document, several files: a plan arrives with its annexes as
+            # separate entries under the same title, which is why the printed
+            # extract shows the title once with the links stacked beneath it.
+            # Keying on the URL instead would list "Bauzonen- und Kulturlandplan"
+            # twice and look like two different plans.
+            key = (bucket, title, number)
+            entry = seen_docs.get(key)
+            if entry is None:
+                entry = {
+                    "title": title,
+                    "abbr": text(p.get("Abbreviation")),
+                    "number": number,
+                    "urls": [],
+                    # The extract's own ordering of the legal bases — federal
+                    # before cantonal, and by subject. Reproducing it keeps the
+                    # document recognisable next to the official one.
+                    "index": p.get("Index") or 0,
+                }
+                seen_docs[key] = entry
+                documents[bucket].append(entry)
+            if url and url not in entry["urls"]:
+                entry["urls"].append(url)
+
+    documents["laws"].sort(key=lambda d: (d["index"], d["title"]))
+
+    # Several offices answer for one parcel — the municipality for its zoning,
+    # the canton for a road building line. Taking whichever came first put
+    # "Abteilung Verkehr" on a parcel whose zoning question belongs to the
+    # commune, so the commune wins when it is among them.
+    municipality = estate.get("MunicipalityName", "")
+    office = next((o for o in offices if o["name"] == municipality), None)
+    if office is None:
+        office = offices[0] if offices else {}
+    return {
+        "municipality": estate.get("MunicipalityName", ""),
+        "bfs": estate.get("MunicipalityCode"),
+        "parcel": estate.get("Number", ""),
+        # The land registry's own area for this parcel. Worth carrying because
+        # the tool computes its own from the cadastral geometry, and two numbers
+        # that should agree are only useful if they are both visible.
+        "land_registry_area": estate.get("LandRegistryArea"),
+        "zones": zones,
+        "provisions": documents["provisions"],
+        "laws": documents["laws"],
+        "office": office,
+        "created": e.get("CreationDate", ""),
+    }
+
+
 def assess(egrid):
-    """Fetch and classify in one call. Returns (hard, notable, error)."""
+    """Fetch and classify in one call.
+
+    Returns (hard, notable, error, details) — one request, both answers, because
+    the extract is the expensive part and it carries the parcel's legal basis
+    alongside the restrictions that might exclude it.
+    """
     try:
-        items = restrictions(fetch(egrid))
+        doc = fetch(egrid)
+        items = restrictions(doc)
     except Exception as exc:  # network, 404 on an unknown EGRID, malformed body
-        return [], [], str(exc)
+        return [], [], str(exc), None
 
     hard, notable = [], []
-    for code, text, share in items:
-        low = text.lower()
-        label = f"{text} ({share} m²)" if share else text
+    for code, legend, share in items:
+        low = legend.lower()
+        label = f"{legend} ({share} m²)" if share else legend
         if code in HARD_CODES or any(h in low for h in HARD_TEXT):
             hard.append(label)
         elif any(n in low for n in NOTABLE_TEXT):
             notable.append(label)
-    return hard, notable, None
+    return hard, notable, None, details(doc)

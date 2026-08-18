@@ -127,6 +127,12 @@ RUN_COLUMNS = [
 OEREB_COLUMNS = [
     ("egrid", "TEXT PRIMARY KEY"), ("hard", "TEXT"), ("notable", "TEXT"),
     ("error", "TEXT"), ("checked_at", "TEXT"),
+    # The rest of the extract, as JSON: the official zone split, the plans and
+    # the BNO that govern this parcel, the cantonal legal bases, and the
+    # responsible office. One blob rather than five tables — nothing queries
+    # inside it, the detail view reads the whole thing for one parcel at a time,
+    # and the shape is the cadastre's to change, not ours.
+    ("details", "TEXT"),
 ]
 
 

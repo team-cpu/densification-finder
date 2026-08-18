@@ -144,7 +144,7 @@ def main():
     for r in shortlist:
         if not r["egrid"]:
             continue
-        hard, notable, err = O.assess(r["egrid"])
+        hard, notable, err, _ = O.assess(r["egrid"])
         if err:
             r["oereb"] = "lookup failed"
             continue

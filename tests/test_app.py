@@ -4,6 +4,8 @@ import sqlite3
 import tempfile
 import unittest
 
+import pandas as pd
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 import paths
@@ -19,6 +21,9 @@ class AppRegressionTest(unittest.TestCase):
 
         self.original_database = paths.DB
         paths.DB = self.database
+        # `load()` is cached with no arguments, so pointing `paths.DB` elsewhere
+        # does not change its key.
+        st.cache_data.clear()
 
     def tearDown(self):
         paths.DB = self.original_database
@@ -30,8 +35,10 @@ class AppRegressionTest(unittest.TestCase):
         ).run()
         self.assertFalse(app.exception)
         self.assertEqual(app.number_input[0].min, 130)
-        self.assertEqual(app.slider[0].min, 300)
         self.assertEqual(app.number_input[1].max, 50)
+        area = app.select_slider[0]
+        self.assertEqual(area.value, (300, float("inf")))
+        self.assertEqual(area.options[-1], "ohne Limite")
 
         app.selectbox[0].select("Alle").run()
         self.assertFalse(app.exception)
@@ -48,6 +55,66 @@ class AppRegressionTest(unittest.TestCase):
         app.number_input[1].set_value(50).run()
         self.assertFalse(app.exception)
         self.assertEqual(len(app.dataframe[0].value), 50)
+
+    def test_area_filter_reaches_past_the_old_fixed_window(self):
+        """Both ends of the area control used to be walls rather than the end of
+        the data: the cascade stored 300–5,000 m² and the slider offered exactly
+        that, so parcels outside it could not be reached at any setting. This is
+        the regression that the widening exists to prevent."""
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=30
+        ).run()
+        app.selectbox[0].select("Alle").run()
+
+        app.select_slider[0].set_value((5000, float("inf"))).run()
+        self.assertFalse(app.exception)
+        large = app.dataframe[0].value
+        self.assertTrue(len(large) > 0)
+        self.assertTrue((large["Fläche m²"] > 5000).all())
+
+        app.select_slider[0].set_value((0, 300)).run()
+        self.assertFalse(app.exception)
+        small = app.dataframe[0].value
+        self.assertTrue(len(small) > 0)
+        self.assertTrue((small["Fläche m²"] <= 300).all())
+
+    def test_open_upper_end_surfaces_the_largest_lead(self):
+        """The parcel with the most potential in the canton — Rheinfelden 574,
+        199,442 m² of Wohnzone B — was invisible under the 5,000 m² cap."""
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=30
+        ).run()
+        app.selectbox[0].select("Unbebaut").run()
+        self.assertFalse(app.exception)
+        top = app.dataframe[0].value.iloc[0]
+        self.assertEqual(top["Gemeinde"], "Rheinfelden")
+        self.assertEqual(top["Parzelle"], "574")
+        self.assertGreater(top["Potenzial m² (Schätzung)"], 100_000)
+
+
+    def test_a_failed_cadastre_call_is_retried_rather_than_cached_forever(self):
+        """A transient 502 used to count as an answer: the parcel stayed
+        unchecked and the interface still called the shortlist complete."""
+        import app
+
+        cache = pd.DataFrame(
+            {"details": ["", "{}"], "error": ["HTTP Error 502: Bad Gateway", ""]},
+            index=pd.Index(["CH_FAILED", "CH_OK"], name="egrid"),
+        )
+        self.assertEqual(list(app.with_extract(cache)), ["CH_OK"])
+        self.assertEqual(list(app.failed_egrids(cache)), ["CH_FAILED"])
+
+    def test_a_legacy_row_without_the_extract_is_asked_again(self):
+        """Rows written before the legal basis was stored carry restrictions but
+        no documents, and must not count as complete."""
+        import app
+
+        cache = pd.DataFrame(
+            {"details": [None], "error": [None]},
+            index=pd.Index(["CH_OLD"], name="egrid"),
+        )
+        self.assertEqual(list(app.with_extract(cache)), [])
+        self.assertEqual(list(app.failed_egrids(cache)), [])
 
 
 if __name__ == "__main__":

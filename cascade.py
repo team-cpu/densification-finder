@@ -97,8 +97,16 @@ def load_parcels(bfs):
 
 
 class Engine:
-    def __init__(self, built_after=None, min_delta=130.0, min_area=300.0,
-                 max_area=5000.0, exclude_inventory=False, canton="AG"):
+    # §3.5 step 4 asks for a parcel-area range that is configurable, and the
+    # interface is where it gets configured — so the stored table must not be
+    # narrower than what the control offers. It was: the engine only ever kept
+    # 300–5,000 m², which made the slider stop at a wall rather than at the end
+    # of the data, and hid the single largest lead in the canton (Rheinfelden
+    # 574, ~108,000 m² of potential on a 199,442 m² Wohnzone B parcel). Storing
+    # every area costs 1,937 extra rows out of 36,274 — 5.6% — and the filtering
+    # now happens where the user can see and undo it.
+    def __init__(self, built_after=None, min_delta=130.0, min_area=0.0,
+                 max_area=float("inf"), exclude_inventory=False, canton="AG"):
         self.canton = canton
         self.built_after = built_after or (date.today().year - 15)
         self.min_delta, self.min_area, self.max_area = min_delta, min_area, max_area
