@@ -21,11 +21,21 @@ step stays manual by design.
 .venv/bin/streamlit run app.py
 ```
 
-`results.sqlite` is committed — 34,337 candidates across 165 municipalities
-(20,351 built and 13,986 vacant) — so a fresh clone opens a working list without
+`results.sqlite` is committed — 36,274 candidates across 165 municipalities
+(20,659 built and 15,615 vacant) — so a fresh clone opens a working list without
 downloading anything. **Neu berechnen** re-runs the cascade over the stored
 parcel geometry and then queries the ÖREB cadastre for the shortlist: about two
 minutes.
+
+The **Parzellenfläche** control covers every stored area, from 109 m² to
+412,503 m², and its upper end is open — *ohne Limite* rather than a number. It
+used to be a fixed 300–5,000 m² slider over a database that stored exactly
+300–5,000 m², so both ends were walls rather than the end of the data, and the
+largest lead in the canton — Rheinfelden 574, 199,442 m² of Wohnzone B with
+~108,000 m² of unused potential — could not be reached at any setting. The steps
+are uneven because 95% of candidates are smaller than 3,400 m²; a linear slider
+spends nearly all of its travel on the remaining 5%. Storing every area costs
+5.6% more rows.
 
 The **Grundstückstyp** filter defaults to the original built-parcel list.
 **Unbebaut** means that the parcel EGRID has no standing GWR building of any
@@ -73,9 +83,72 @@ Recomputing from source needs `data/`, which is gitignored at ~600 MB:
 Only the parcels are fetched automatically; the rest are manual downloads.
 Python 3.11 with shapely, pandas and streamlit — no PostGIS.
 
+## Single-parcel analysis
+
+Selecting a row in the hotlist opens that parcel on its own — the same script,
+one session-state key, no second page. It carries three blocks:
+
+* **A · Grunddaten** — everything the pipeline already computed for this parcel,
+  read-only and refetched from nothing: address, zone and utilization figure,
+  area, year built, estimated existing floor area, heritage registers, ÖREB
+  status, land-price reference, and the four links.
+* **B · Potenzial** — the calculated floor-area potential, pre-filled and
+  overridable, with the assumed unit size next to it and the resulting number of
+  dwellings recalculated as either changes.
+* **C · Residualwertrechnung** — sale price, construction cost, ancillary
+  percentage, demolition, financing and the profit/risk margin as inputs, and
+  every intermediate step of
+
+      Landwert = Verkaufserlös − Baukosten − Baunebenkosten − Abbruch
+                 − Finanzierung − Gewinn/Risiko
+
+  on screen rather than only the total. Recalculated on every keystroke; there
+  is no recalculate button.
+
+**Every default is a published benchmark carrying its source, and is marked
+*mit Philipp zu bestätigen* until he names the figure he actually prices with.**
+Sale price is a canton-wide median of the existing stock, not a new-build price
+at this location; construction cost is a per-m² benchmark for condominium
+new-build. Both are screening values. An overridden value says so in the export,
+so a number in the document can always be traced to whose assumption it was.
+
+Revenue and construction cost are both reckoned per m² of saleable area — the
+basis the construction benchmark is published on. Mixing the two bases would
+overstate the land value by the difference between them.
+
+* **D · Rechtsgrundlagen** — the regulations that actually govern the parcel,
+  taken from the ÖREB extract the tool already fetches for the shortlist:
+  *Rechtsvorschriften* (the zoning plan, the Erschliessungsplan, and the
+  municipality's **Bau- und Nutzungsordnung**) and *Gesetzliche Grundlagen*
+  (RPG, BauG, BauV …), each linking to the document itself on `oereblex.ag.ch`
+  or `gesetzessammlungen.ag.ch`. Block A gains the extract's own
+  *Legende beteiligter Objekte* — every plan object touching the parcel with its
+  area and share — and the land registry's area next to the one this tool
+  computes from the geometry, with the difference stated when there is one.
+
+  This needs no name matching: the cadastre names the documents for *this*
+  EGRID, and the BNO's official number is the municipality's BFS number. One
+  request answers both "is this parcel excluded" and "which rules apply".
+
+**Als PDF exportieren** writes all four blocks and the whole calculation path
+to a data sheet — one page, two once several assumptions carry an overridden
+value and its source.
+
+Edits live in the session and are gone on reload; persisting them across days
+needs a table, which the brief keeps as a separate task. They are split by whose
+they are: the **economic assumptions** in block C are the user's and hold for
+every parcel in the session — a developer's construction cost does not change
+because they clicked a different row — while **potential and demolition** belong
+to the parcel and stay with it. Keeping the first group per parcel would mean
+retyping seven numbers on every lead.
+
 ## Layout
 
     app.py          the interface: filters, Run button, ranked table
+    detail.py       the single-parcel analysis view — blocks A, B, C
+    economics.py    residual land value, its benchmarks and their sources
+    report.py       the parcel data sheet as a PDF
+    formatting.py   register vocabulary shared by the list and the data sheet
     ingest.py       canton-wide pass; writes results.sqlite
     cascade.py      the filter cascade as a reusable engine
     metrics.py      utilization metrics per canton — the AZ/ÜZ/BMZ seam
@@ -121,6 +194,15 @@ Each of these cost a wrong answer first.
   is admitted. This avoids calling workshops, barns, and incompletely measured
   buildings empty.
 
+## Regulation changes as a feed
+
+`NEWSFEED.md` records what is actually available if the tool is to show building
+regulation changes next to a parcel: the Amtsblatt has the right content but
+forbids automated access, while `oereblex.ag.ch` answers "which BNO governs this
+municipality, in force since when, PDF here" for the whole canton in one request.
+Findings, measured volumes, the one join that does not hold, and a staged
+proposal are in that file. Nothing is wired into the app yet.
+
 ## Deviations from the brief
 
 * **SQLite, not Supabase/PostGIS.** Geometry is only needed while resolving the
@@ -130,3 +212,11 @@ Each of these cost a wrong answer first.
   data, one less conversion step.
 * **Advisory inventories are flagged, not excluded** — confirmed with Philipp.
   Hard protection is excluded outright.
+* **A failed cadastre call is retried, not remembered as an answer.** One
+  transient 502 used to be cached forever: the parcel stayed unchecked while the
+  interface called the shortlist complete. A cached row now counts as complete
+  only if it carries the extract itself.
+* **The "Analyze" control is the row selection, not a link in the row.**
+  Streamlit cannot run a callback from a cell, so a link column could not open
+  the detail view. Selecting the row does it in one click, in the row, which is
+  where the brief puts it.
