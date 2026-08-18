@@ -19,6 +19,7 @@ open. They are deliberately not persisted — the brief calls that a separate
 task, and a half-built table of saved analyses is worse than none.
 """
 import json
+from html import escape
 
 import pandas as pd
 import streamlit as st
@@ -245,7 +246,7 @@ STORE = "parcel_assumptions"   # {parcel: {name: value}}
 OWN_STORE = "own_assumptions"  # {name: value}, for the whole session
 
 OWN = ("unit", "sale", "share", "build", "ancillary", "demolition", "financing",
-       "profit")
+       "reserve")
 
 
 def _shared(name):
@@ -283,6 +284,75 @@ def forget(pid):
         del st.session_state[key]
 
 
+CALC_CSS = """
+<style>
+  table.calc { border-collapse:collapse; width:auto; min-width:min(680px,100%);
+      margin:.4rem 0 1rem; }
+  table.calc th, table.calc td { text-align:left; padding:.42rem .9rem .42rem 0;
+      border-bottom:1px solid rgba(128,128,128,.28); font-weight:400; }
+  table.calc thead th { font-weight:600; font-size:.86em; letter-spacing:.02em;
+      text-transform:uppercase; opacity:.65; }
+  table.calc td.calc__amount { text-align:right; padding-right:0;
+      font-variant-numeric:tabular-nums; white-space:nowrap; }
+  table.calc td.calc__formula { opacity:.75; }
+  table.calc tr.calc__result th, table.calc tr.calc__result td { font-weight:700;
+      border-top:2px solid currentColor; border-bottom:none; }
+
+  /* The hover box. Its own element rather than a `title` attribute: the native
+     tooltip waits about a second, strips the line breaks that make the formula
+     readable, and cannot be styled to look like the code it is showing. */
+  span.calc__name { position:relative; border-bottom:1px dotted rgba(128,128,128,.75);
+      cursor:help; outline-offset:3px; }
+  span.calc__tip { position:absolute; left:0; top:calc(100% + .45rem); z-index:9999;
+      display:none; white-space:pre; padding:.6rem .75rem; border-radius:4px;
+      font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+      font-size:12.5px; line-height:1.5; letter-spacing:0; font-weight:400;
+      background:#101014; color:#e9e6df; border:1px solid rgba(255,255,255,.18);
+      box-shadow:0 8px 24px rgba(0,0,0,.45); }
+  span.calc__name:hover span.calc__tip,
+  span.calc__name:focus span.calc__tip,
+  span.calc__name:focus-within span.calc__tip { display:block; }
+  span.calc__tip b { color:#ff8a7a; font-weight:600; }
+</style>
+"""
+
+
+def _tooltip(step):
+    """What the hover box says: the expression as it is written in the code, the
+    same expression with the numbers filled in, and the result. Read off the rule
+    that computed the number, never typed out a second time — the point Philipp
+    asked for is that changing the formula changes this text with it."""
+    amount = (f"{E.chf(step.value)} m²" if step.unit == "m²"
+              else f"CHF {E.chf(step.value)}")
+    return (
+        f"<b>{escape(step.label.lstrip('−= ').strip())}</b>\n"
+        f"  = {escape(step.expr)}\n"
+        f"  = {escape(step.formula)}\n"
+        f"  = {escape(amount)}"
+    )
+
+
+def _calculation_table(steps):
+    """An HTML table rather than markdown, because a markdown cell cannot carry
+    a hover box and the formula has to sit on the name it explains."""
+    rows = []
+    for step in steps:
+        amount = (f"{E.chf(step.value)} m²" if step.unit == "m²"
+                  else f"CHF {E.chf(step.value)}")
+        rows.append(
+            f'<tr class="{"calc__result" if step.kind == "result" else ""}">'
+            f'<th scope="row"><span class="calc__name" tabindex="0">'
+            f'{escape(step.label)}'
+            f'<span class="calc__tip">{_tooltip(step)}</span></span></th>'
+            f'<td class="calc__formula">{escape(step.formula)}</td>'
+            f'<td class="calc__amount">{escape(amount)}</td></tr>'
+        )
+    body = "".join(rows)
+    return (CALC_CSS + '<table class="calc"><thead><tr><th>Schritt</th><th>Rechnung</th>'
+            '<th class="calc__amount">Betrag</th></tr></thead><tbody>'
+            + body + "</tbody></table>")
+
+
 def _number(container, label, pid, name, default, *, step, minimum=0.0,
             maximum=None, fmt="%.0f", help=None):
     value = container.number_input(
@@ -298,10 +368,33 @@ def _number(container, label, pid, name, default, *, step, minimum=0.0,
     return _remember(pid, name, value)
 
 
-def _benchmark_help(key, extra=""):
+#: Which symbol in the formulas each control sets. The help text is then built
+#: from the formulas themselves — nothing to keep in sync by hand.
+SYMBOL = {
+    "gf": "potenzial_gf",
+    "share": "verkaufsflaechenanteil",
+    "sale": "verkaufspreis",
+    "build": "baukosten_pro_m2",
+    "ancillary": "baunebenkosten_prozent",
+    "demolition": "abbruchkosten_pro_m2",
+    "financing": "finanzierung_prozent",
+    "reserve": "reserve_prozent",
+}
+
+
+def _in_formula(name):
+    symbol = SYMBOL.get(name)
+    if not symbol:
+        return ""
+    steps = E.used_in(symbol)
+    where = ", ".join(steps) if steps else "keiner Formel"
+    return f" · In den Formeln {{{symbol}}} — wirkt auf {where}."
+
+
+def _benchmark_help(key, extra="", name=""):
     mark = E.BENCHMARKS[key]
     text = f"Vorgabewert {E.chf(mark.value)} {mark.unit}. {mark.provenance}"
-    return f"{text} {extra}".strip()
+    return f"{text} {extra}".strip() + _in_formula(name)
 
 
 def _assumption_notes(used):
@@ -389,33 +482,35 @@ def page(parcels, cache, price_of):
     st.subheader("C · Residualwertrechnung")
     st.caption(
         "Landwert = Verkaufserlös der neuen Flächen − Baukosten − Baunebenkosten "
-        "− Abbruch − Finanzierung − Gewinn/Risiko. Die Vorgabewerte sind "
-        "publizierte Richtwerte mit Quelle, keine Bewertung dieser Parzelle — "
-        "die Zahlen unten sind zum Überschreiben da."
+        "− Abbruch − Finanzierung − Reserve. Der Verkaufspreis rechnet auf 80% "
+        "der Geschossfläche, die Baukosten auf 100%. Mit der Maus über einen "
+        "Schritt fahren zeigt die Formel dahinter."
     )
     c1, c2, c3, c4 = st.columns(4)
     sale_price = _number(
         c1, "Verkaufspreis (CHF/m²)", pid, "sale",
         E.BENCHMARKS["sale_price_chf_m2"].value, step=100.0,
-        help=_benchmark_help("sale_price_chf_m2"),
+        help=_benchmark_help("sale_price_chf_m2", name="sale"),
     )
     sale_share = _number(
         c2, "Verkaufsflächenanteil (%)", pid, "share",
         E.BENCHMARKS["sale_area_pct"].value, step=1.0, minimum=10.0, maximum=100.0,
         help=_benchmark_help(
             "sale_area_pct",
-            "Erlös und Baukosten werden beide auf diese Fläche gerechnet.",
+            "Wirkt nur auf den Erlös; die Baukosten rechnen auf der ganzen "
+            "Geschossfläche.",
+            name="share",
         ),
     )
     construction = _number(
         c3, "Baukosten (CHF/m²)", pid, "build",
         E.BENCHMARKS["construction_chf_m2"].value, step=50.0,
-        help=_benchmark_help("construction_chf_m2"),
+        help=_benchmark_help("construction_chf_m2", name="build"),
     )
     ancillary = _number(
         c4, "Baunebenkosten (%)", pid, "ancillary",
         E.BENCHMARKS["ancillary_pct"].value, step=1.0, maximum=100.0,
-        help=_benchmark_help("ancillary_pct"),
+        help=_benchmark_help("ancillary_pct", name="ancillary"),
     )
 
     d1, d2, d3, d4 = st.columns(4)
@@ -434,17 +529,17 @@ def page(parcels, cache, price_of):
     demolition = _number(
         d2, "Abbruchkosten (CHF/m²)", pid, "demolition",
         E.BENCHMARKS["demolition_chf_m2"].value, step=10.0,
-        help=_benchmark_help("demolition_chf_m2"),
+        help=_benchmark_help("demolition_chf_m2", name="demolition"),
     )
     financing = _number(
         d3, "Finanzierung (%)", pid, "financing",
         E.BENCHMARKS["financing_pct"].value, step=0.5, maximum=100.0, fmt="%.1f",
-        help=_benchmark_help("financing_pct"),
+        help=_benchmark_help("financing_pct", name="financing"),
     )
-    profit = _number(
-        d4, "Gewinn / Risiko (%)", pid, "profit",
-        E.BENCHMARKS["profit_pct"].value, step=1.0, maximum=100.0,
-        help=_benchmark_help("profit_pct"),
+    reserve = _number(
+        d4, "Reserve / Unvorhergesehenes (%)", pid, "reserve",
+        E.BENCHMARKS["reserve_pct"].value, step=1.0, maximum=100.0,
+        help=_benchmark_help("reserve_pct", name="reserve"),
     )
 
     steps = E.residual(
@@ -456,20 +551,17 @@ def page(parcels, cache, price_of):
         existing_gf=float(row["existing"]),
         demolition_chf_m2=demolition,
         financing_pct=financing,
-        profit_pct=profit,
+        reserve_pct=reserve,
         demolish=bool(demolish),
     )
     land = E.land_value(steps)
     per_m2 = E.per_square_metre(steps, float(row["area"]))
 
     # Every line, not just the total: the people this is for adjust assumptions,
-    # and an assumption cannot be adjusted if only the result is visible.
-    path = "\n".join(
-        f"| {'**' + s.label + '**' if s.kind == 'result' else s.label} | {s.formula} | "
-        f"{(E.chf(s.value) + ' m²') if s.unit == 'm²' else 'CHF ' + E.chf(s.value)} |"
-        for s in steps
-    )
-    st.markdown(f"| Schritt | Rechnung | Betrag |\n|---|---|---:|\n{path}")
+    # and an assumption cannot be adjusted if only the result is visible. Hovering
+    # a step name shows the expression behind it, symbols and all — read off the
+    # rule that computed the number, so the two cannot drift apart.
+    st.markdown(_calculation_table(steps), unsafe_allow_html=True)
 
     r1, r2, r3 = st.columns(3)
     r1.metric("Residualer Landwert", f"CHF {E.chf(land)}")
@@ -503,7 +595,7 @@ def page(parcels, cache, price_of):
         ("ancillary_pct", ancillary, "Baunebenkosten %"),
         ("demolition_chf_m2", demolition, "Abbruchkosten CHF/m²"),
         ("financing_pct", financing, "Finanzierung %"),
-        ("profit_pct", profit, "Gewinn / Risiko %"),
+        ("reserve_pct", reserve, "Reserve / Unvorhergesehenes %"),
     ]
     notes = _assumption_notes(used)
     with st.expander("Annahmen und Quellen"):

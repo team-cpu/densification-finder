@@ -118,10 +118,16 @@ def _calculation(steps, width):
             if step.unit == "m²"
             else f"CHF {E.chf(step.value)}"
         )
+        # The substituted numbers, and under them the expression they came from.
+        # On paper the hover box is not available, so the reasoning has to be
+        # printed rather than merely reachable.
+        formula = _rich(step.formula)
+        if getattr(step, "expr", ""):
+            formula += f'<br/><font size="7" color="#7a756a">{escape(step.expr)}</font>'
         body.append(
             [
                 Paragraph(_rich(step.label), STYLES["cell"]),
-                Paragraph(_rich(step.formula), STYLES["cell"]),
+                Paragraph(formula, STYLES["cell"]),
                 Paragraph(value, STYLES["cellright"]),
             ]
         )

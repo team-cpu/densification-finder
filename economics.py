@@ -22,6 +22,7 @@ The result is the residual value of the ADDITIONAL floor area only. It is not a
 valuation of the parcel: the existing building keeps a value of its own, which
 this deliberately does not estimate.
 """
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -88,9 +89,14 @@ BENCHMARKS = {
         15.0, "% der Baukosten", "Vorgabe aus dem Auftrag (Standardwert 15%)",
         confirmed=True,
     ),
-    "profit_pct": Benchmark(
-        15.0, "% des Verkaufserlöses", "Vorgabe aus dem Auftrag (Standardwert 15%)",
+    "reserve_pct": Benchmark(
+        15.0,
+        "% der Kosten",
+        "Philipp, 18.08.2026: 10–15% auf die Kostenschätzung für Unvorhergesehenes "
+        "— langer Winter, Auseinandersetzungen mit Nachbarn und Ähnliches",
         confirmed=True,
+        note="im Auftrag als «Gewinnmarge» bezeichnet und dort auf den Erlös bezogen; "
+             "gerechnet wird auf die Kosten, wie besprochen",
     ),
     "financing_pct": Benchmark(
         3.0,
@@ -102,9 +108,10 @@ BENCHMARKS = {
     "sale_area_pct": Benchmark(
         80.0,
         "% der Geschossfläche",
-        "Erfahrungswert Wohnbau: Haupt-/Wohnfläche liegt bei rund 70–80% der "
-        "Geschossfläche",
-        note="Das Potenzial ist anrechenbare Geschossfläche, nicht Wohnfläche",
+        "Philipp, 18.08.2026: Verkaufspreis auf 80% der Geschossfläche, "
+        "Baukosten auf 100%",
+        confirmed=True,
+        note="wirkt deshalb nur auf den Erlös, nicht auf die Baukosten",
     ),
 }
 
@@ -112,16 +119,81 @@ BENCHMARKS = {
 SQM_PER_UNIT = 90
 
 
+
+#: The calculation, written once.
+#:
+#: Each rule carries the expression that produces its number — and that same
+#: expression string is what gets evaluated. The formula shown on hover is
+#: therefore not a description of the arithmetic maintained beside it; it is the
+#: arithmetic. Change a rule and the tooltip changes with it, because there is
+#: nothing else to change.
+#:
+#: `effect` says how the row enters the total: "+" earns, "−" costs, "" is an
+#: intermediate quantity that later rows refer to, "=" is the result.
+@dataclass(frozen=True)
+class Rule:
+    key: str
+    label: str
+    expr: str
+    unit: str = "CHF"
+    effect: str = "−"
+
+
+PATH = (
+    Rule("verkaufsflaeche", "Verkaufsfläche",
+         "potenzial_gf * verkaufsflaechenanteil / 100", "m²", ""),
+    Rule("verkaufserloes", "Verkaufserlös",
+         "verkaufsflaeche * verkaufspreis", "CHF", "+"),
+    # On the full floor area, not the saleable share: the construction cost is
+    # incurred for everything that gets built, while only part of it is sold.
+    Rule("baukosten", "Baukosten (BKP 2)",
+         "potenzial_gf * baukosten_pro_m2", "CHF", "−"),
+    Rule("baunebenkosten", "Baunebenkosten",
+         "baukosten * baunebenkosten_prozent / 100", "CHF", "−"),
+    Rule("abbruchkosten", "Abbruchkosten",
+         "bestand_gf * abbruchkosten_pro_m2 * abbruch", "CHF", "−"),
+    Rule("finanzierung", "Finanzierungskosten",
+         "(baukosten + baunebenkosten + abbruchkosten) * finanzierung_prozent / 100",
+         "CHF", "−"),
+    # Not a developer's margin: a contingency on the cost estimate, for the long
+    # winter and the neighbour who objects.
+    Rule("reserve", "Reserve / Unvorhergesehenes",
+         "(baukosten + baunebenkosten + abbruchkosten + finanzierung)"
+         " * reserve_prozent / 100", "CHF", "−"),
+    Rule("landwert", "Residualer Landwert",
+         "verkaufserloes - baukosten - baunebenkosten - abbruchkosten"
+         " - finanzierung - reserve", "CHF", "="),
+)
+
+#: What each input is called inside the formulas, so the control can say which
+#: symbol it feeds rather than leaving the reader to guess.
+INPUTS = {
+    "potenzial_gf": "Potenzial (m² GF)",
+    "verkaufsflaechenanteil": "Verkaufsflächenanteil (%)",
+    "verkaufspreis": "Verkaufspreis (CHF/m²)",
+    "baukosten_pro_m2": "Baukosten (CHF/m²)",
+    "baunebenkosten_prozent": "Baunebenkosten (%)",
+    "bestand_gf": "bestehende Geschossfläche (m²)",
+    "abbruchkosten_pro_m2": "Abbruchkosten (CHF/m²)",
+    "abbruch": "Abbruch ja/nein (1/0)",
+    "finanzierung_prozent": "Finanzierung (%)",
+    "reserve_prozent": "Reserve (%)",
+}
+
+_NAME = re.compile(r"[a-z_][a-z0-9_]*")
+
+
 @dataclass(frozen=True)
 class Step:
     """One line of the calculation path, as shown on screen and in the PDF."""
 
     label: str
-    formula: str
+    formula: str      # the expression with the numbers filled in
     value: float
     unit: str = "CHF"
-    #: "area" | "revenue" | "cost" | "result" — drives sign and emphasis only.
     kind: str = "cost"
+    #: The expression as written in `PATH`, symbols and all.
+    expr: str = ""
 
 
 def chf(value: Optional[float]) -> str:
@@ -142,6 +214,48 @@ def units(potential_gf: float, sqm_per_unit: float = SQM_PER_UNIT) -> Optional[f
     return potential_gf / sqm_per_unit
 
 
+def used_in(symbol: str) -> list[str]:
+    """Which steps an input actually feeds. Read off the expressions, so a
+    control can say where its number goes without anyone maintaining a list."""
+    return [rule.label for rule in PATH if symbol in _NAME.findall(rule.expr)]
+
+
+def substitute(expr: str, values: dict) -> str:
+    """The same expression with every symbol replaced by what it stood for."""
+    def swap(match):
+        name = match.group(0)
+        if name not in values:
+            return name
+        return chf(values[name]) if abs(values[name]) >= 1000 else f"{values[name]:g}"
+    return _NAME.sub(swap, expr)
+
+
+def evaluate(inputs: dict) -> list[Step]:
+    """Run `PATH` over the given inputs.
+
+    The expressions are evaluated rather than reimplemented, which is the whole
+    point: there is one statement of each formula, and both the number and the
+    text that explains it come out of it. `eval` sees no builtins and only the
+    values computed so far, so a rule can reach a previous rule and nothing else.
+    """
+    values = dict(inputs)
+    steps = []
+    for rule in PATH:
+        value = eval(rule.expr, {"__builtins__": {}}, values)  # noqa: S307 — our own literals
+        values[rule.key] = value
+        kind = {"+": "revenue", "=": "result", "": "area"}.get(rule.effect, "cost")
+        steps.append(Step(
+            label=("− " if rule.effect == "−" else "= " if rule.effect == "=" else "")
+                  + rule.label,
+            formula=substitute(rule.expr, values),
+            value=-value if rule.effect == "−" else value,
+            unit=rule.unit,
+            kind=kind,
+            expr=rule.expr,
+        ))
+    return steps
+
+
 def residual(
     potential_gf: float,
     sale_area_pct: float,
@@ -151,81 +265,31 @@ def residual(
     existing_gf: float,
     demolition_chf_m2: float,
     financing_pct: float,
-    profit_pct: float,
+    reserve_pct: float,
     demolish: bool = True,
 ) -> list[Step]:
-    """The full path from floor-area potential to residual land value.
+    """The path from floor-area potential to residual land value.
 
-    Returns every intermediate step rather than the final number alone: the
-    people this is for adjust assumptions, and an assumption cannot be adjusted
-    if only the total is visible.
+    Kept as a named signature over `evaluate` so the interface has one obvious
+    call, and the formulas stay in `PATH` where the tooltip reads them.
 
-    Revenue and construction cost are both reckoned per m² of saleable area,
-    which is how the published benchmark for construction is expressed — a cost
-    per m² of main usable area already carries the circulation it needs. Mixing
-    the bases (revenue on saleable area, cost on gross floor area) would quietly
-    overstate the land value by the difference between them.
+    Two things were settled by Philipp on 18.08.2026 and are visible in `PATH`:
+    the sale price is reckoned on 80% of the floor area while the construction
+    cost is reckoned on all of it, and the 15% is a contingency on the cost
+    estimate rather than a margin on revenue.
     """
-    sale_area = potential_gf * sale_area_pct / 100.0
-    revenue = sale_area * sale_price_chf_m2
-    construction = sale_area * construction_chf_m2
-    ancillary = construction * ancillary_pct / 100.0
-    demolition = existing_gf * demolition_chf_m2 if demolish else 0.0
-    financing = (construction + ancillary + demolition) * financing_pct / 100.0
-    profit = revenue * profit_pct / 100.0
-    land = revenue - construction - ancillary - demolition - financing - profit
-
-    steps = [
-        Step(
-            "Verkaufsfläche",
-            f"{chf(potential_gf)} m² GF × {sale_area_pct:.0f}%",
-            sale_area,
-            "m²",
-            "area",
-        ),
-        Step(
-            "Verkaufserlös",
-            f"{chf(sale_area)} m² × CHF {chf(sale_price_chf_m2)}/m²",
-            revenue,
-            kind="revenue",
-        ),
-        Step(
-            "− Baukosten (BKP 2)",
-            f"{chf(sale_area)} m² × CHF {chf(construction_chf_m2)}/m²",
-            -construction,
-        ),
-        Step(
-            "− Baunebenkosten",
-            f"{ancillary_pct:.0f}% der Baukosten",
-            -ancillary,
-        ),
-        Step(
-            "− Abbruchkosten",
-            (
-                f"{chf(existing_gf)} m² Bestand × CHF {chf(demolition_chf_m2)}/m²"
-                if demolish and existing_gf
-                else "kein Abbruch gerechnet"
-            ),
-            -demolition,
-        ),
-        Step(
-            "− Finanzierungskosten",
-            f"{financing_pct:.1f}% auf Bau-, Nebenkosten und Abbruch",
-            -financing,
-        ),
-        Step(
-            "− Gewinn / Risiko",
-            f"{profit_pct:.0f}% des Verkaufserlöses",
-            -profit,
-        ),
-        Step(
-            "= Residualer Landwert",
-            "Erlös abzüglich aller Kosten",
-            land,
-            kind="result",
-        ),
-    ]
-    return steps
+    return evaluate({
+        "potenzial_gf": potential_gf,
+        "verkaufsflaechenanteil": sale_area_pct,
+        "verkaufspreis": sale_price_chf_m2,
+        "baukosten_pro_m2": construction_chf_m2,
+        "baunebenkosten_prozent": ancillary_pct,
+        "bestand_gf": existing_gf,
+        "abbruchkosten_pro_m2": demolition_chf_m2,
+        "abbruch": 1 if demolish else 0,
+        "finanzierung_prozent": financing_pct,
+        "reserve_prozent": reserve_pct,
+    })
 
 
 def land_value(steps: list[Step]) -> float:
@@ -239,4 +303,3 @@ def per_square_metre(steps: list[Step], parcel_area: float) -> Optional[float]:
     if not parcel_area:
         return None
     return land_value(steps) / parcel_area
-

@@ -52,11 +52,25 @@ class DetailViewTest(unittest.TestCase):
         labels = {n.label for n in app.number_input}
         self.assertIn("Potenzial (m² GF)", labels)
         self.assertIn("Verkaufspreis (CHF/m²)", labels)
-        self.assertIn("Gewinn / Risiko (%)", labels)
+        self.assertIn("Reserve / Unvorhergesehenes (%)", labels)
 
         # Block B is pre-filled from the pipeline, not typed in again.
         potential = next(n for n in app.number_input if n.label == "Potenzial (m² GF)")
         self.assertAlmostEqual(potential.value, self.delta, places=6)
+
+    def test_each_step_carries_the_formula_that_produced_it(self):
+        """Philipp asked for the reasoning to be visible on hover, and for the
+        tooltip not to be a second copy that can go stale. It is rendered from
+        the rule that computed the number."""
+        app = self.open_detail()
+        body = " ".join(m.value for m in app.markdown)
+        self.assertIn("verkaufsflaeche * verkaufspreis", body)
+        self.assertIn("potenzial_gf * baukosten_pro_m2", body)
+        self.assertIn('class="calc__name"', body)
+        # The help on the input says where its number goes, read off the formulas.
+        price = next(n for n in app.number_input if n.label == "Verkaufspreis (CHF/m²)")
+        self.assertIn("{verkaufspreis}", price.help)
+        self.assertIn("Verkaufserlös", price.help)
 
     def test_the_list_is_not_drawn_while_a_parcel_is_open(self):
         """A conditional view, not a second page — and not both at once."""
@@ -320,7 +334,7 @@ class DataSheetTest(unittest.TestCase):
             steps=E.residual(
                 potential_gf=100.0, sale_area_pct=80.0, sale_price_chf_m2=8000.0,
                 construction_chf_m2=3000.0, ancillary_pct=15.0, existing_gf=0.0,
-                demolition_chf_m2=150.0, financing_pct=3.0, profit_pct=15.0,
+                demolition_chf_m2=150.0, financing_pct=3.0, reserve_pct=15.0,
             ),
             notes=[],
         )
@@ -339,7 +353,7 @@ class DataSheetTest(unittest.TestCase):
         steps = E.residual(
             potential_gf=1000.0, sale_area_pct=80.0, sale_price_chf_m2=8000.0,
             construction_chf_m2=3000.0, ancillary_pct=15.0, existing_gf=200.0,
-            demolition_chf_m2=150.0, financing_pct=3.0, profit_pct=15.0,
+            demolition_chf_m2=150.0, financing_pct=3.0, reserve_pct=15.0,
         )
         pdf = report.build(
             title="Musterstrasse 1, 5000 Aarau",

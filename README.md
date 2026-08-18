@@ -96,14 +96,24 @@ one session-state key, no second page. It carries three blocks:
   overridable, with the assumed unit size next to it and the resulting number of
   dwellings recalculated as either changes.
 * **C · Residualwertrechnung** — sale price, construction cost, ancillary
-  percentage, demolition, financing and the profit/risk margin as inputs, and
-  every intermediate step of
+  percentage, demolition, financing and the contingency as inputs, and every
+  intermediate step of
 
       Landwert = Verkaufserlös − Baukosten − Baunebenkosten − Abbruch
-                 − Finanzierung − Gewinn/Risiko
+                 − Finanzierung − Reserve
 
   on screen rather than only the total. Recalculated on every keystroke; there
-  is no recalculate button.
+  is no recalculate button. Hovering a step name shows the expression behind it.
+
+  The calculation lives in `economics.PATH` as a list of rules, each carrying
+  the expression that produces its number — **and that same expression is what
+  gets evaluated**. The formula on hover, the help on each input ("wirkt auf
+  Verkaufserlös"), and the line in the PDF are all read off it, so none of them
+  can drift from the arithmetic. Philipp settled two of the rules on 2026-08-18:
+  the sale price is reckoned on 80% of the floor area while the construction
+  cost is reckoned on all of it, and the 15% is a contingency on the cost
+  estimate — the long winter, the neighbour who objects — not a margin on
+  revenue.
 
 **Every default is a published benchmark carrying its source, and is marked
 *mit Philipp zu bestätigen* until he names the figure he actually prices with.**
