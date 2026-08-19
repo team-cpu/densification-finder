@@ -86,19 +86,50 @@ class DetailViewTest(unittest.TestCase):
         )
         self.assertLess(result, first_input)
 
-    def test_the_caveat_travels_with_the_number(self):
+    def test_the_caveat_sits_directly_under_the_calculation(self):
         """It used to sit under the export button, three screens below the
-        figure it qualifies."""
+        figure it qualifies. Directly under means directly under — nothing
+        between the table and the sentence that says what the number is not."""
         app = self.open_detail()
         captions = [c.value for c in app.caption]
         self.assertIn(detail.PINNED_CAVEAT, captions)
         self.assertIn(detail.DISCLAIMER, captions)
-        # …and ahead of the export button, not after it.
-        order = [(e.type, getattr(e, "label", "")) for e in app.main]
-        self.assertLess(
-            max(i for i, (kind, _) in enumerate(order) if kind == "caption"),
-            order.index(("download_button", "Als PDF exportieren")),
-        )
+
+        body = [getattr(e, "value", None) for e in app.main]
+        table = next(i for i, v in enumerate(body)
+                     if isinstance(v, str) and 'class="calc"' in v)
+        self.assertEqual(body[table + 1], detail.DISCLAIMER)
+
+    def test_a_negative_result_does_not_grow_the_pinned_strip(self):
+        """The warning used to be its own block inside the strip, which added
+        72px to a bar pinned over the page — 30% of a 700px window, in the one
+        case where the inputs underneath most need the room. It is the same
+        single caption line now, whatever the sign."""
+        app = self.open_detail()
+        self.assertEqual(len(app.warning), 0)
+        self.assertIn(detail.PINNED_CAVEAT, [c.value for c in app.caption])
+
+        cost = next(n for n in app.number_input
+                    if n.label == "Baukosten (CHF/m²)")
+        cost.set_value(99999.0).run()
+        self.assertFalse(app.exception)
+        land = next(m for m in app.metric if m.label == "Residualer Landwert")
+        self.assertIn("-", land.value)
+        # The strip gained no block: same one line, different words.
+        self.assertEqual(len(app.warning), 0)
+        captions = [c.value for c in app.caption]
+        self.assertIn(detail.NEGATIVE_CAVEAT, captions)
+        self.assertNotIn(detail.PINNED_CAVEAT, captions)
+
+    def test_the_export_is_at_the_top(self):
+        """Philipp asked for it in the top right corner. It is built at the end
+        of the run — the column it lands in is claimed at the start."""
+        app = self.open_detail()
+        kinds = [e.type for e in app.main]
+        export = next(i for i, e in enumerate(app.main)
+                      if e.type == "download_button")
+        first_input = min(i for i, k in enumerate(kinds) if k == "number_input")
+        self.assertLess(export, first_input)
 
     def test_the_calculation_is_not_confined_to_a_column(self):
         """Option C. The split is for the two things read against each other —

@@ -167,7 +167,8 @@ number.
   EGRID, and the BNO's official number is the municipality's BFS number. One
   request answers both "is this parcel excluded" and "which rules apply".
 
-**Als PDF exportieren** writes all four blocks and the whole calculation path
+**Als PDF exportieren**, top right beside the back link, writes all four
+blocks and the whole calculation path
 to a data sheet — one page, two once several assumptions carry an overridden
 value and its source.
 

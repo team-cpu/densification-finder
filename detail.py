@@ -495,6 +495,16 @@ PINNED_CAVEAT = (
     "das bestehende Gebäude."
 )
 
+#: The same line when the number comes out negative. One line either way, so
+#: the pinned strip keeps its height: a warning box here added 72px to a bar
+#: that sits over the page, and it did it in exactly the case where the inputs
+#: underneath most need the room — 30% of a 700px window went to the strip.
+NEGATIVE_CAVEAT = (
+    ":red[**Negativer Residualwert** — das zusätzliche Potenzial trägt die "
+    "Erstellungskosten nicht.] Bewertet ist nur dieses Potenzial, nicht die "
+    "Parzelle und nicht das bestehende Gebäude."
+)
+
 DISCLAIMER = (
     "Der Residualwert bewertet nur das zusätzliche Potenzial, nicht die "
     "Parzelle: der Wert des bestehenden Gebäudes ist darin nicht enthalten. "
@@ -523,7 +533,11 @@ def page(parcels, cache, price_of):
     pid = selected()
     row = find(parcels, pid)
 
-    top = st.columns([1, 4])
+    # Back on the left, export on the right — the two things done to the page
+    # as a whole, at the top where document actions are looked for. The export
+    # column is written at the end of this function, once there is a document
+    # to hand over; a column keeps its place on the page whenever it is filled.
+    top = st.columns([2, 5, 2], vertical_alignment="center")
     if top[0].button("← Zurück zur Liste", width="stretch"):
         close()
         st.rerun()
@@ -735,12 +749,7 @@ def page(parcels, cache, price_of):
                     "Screening-Vergleich, keine Bewertung."
                 ),
             )
-        if land < 0:
-            st.warning(
-                "Negativer Residualwert: Mit diesen Annahmen trägt das zusätzliche "
-                "Potenzial die Erstellungskosten nicht."
-            )
-        st.caption(PINNED_CAVEAT)
+        st.caption(NEGATIVE_CAVEAT if land < 0 else PINNED_CAVEAT)
 
     # ── Block D ─────────────────────────────────────────────────────────────
     # The regulations themselves, straight out of the same extract. Before this,
@@ -815,11 +824,12 @@ def page(parcels, cache, price_of):
         steps=steps,
         notes=["Annahmen und Quellen:"] + notes,
     )
-    st.download_button(
+    top[2].download_button(
         "Als PDF exportieren",
         data=document,
         file_name=f"parzelle-{row['municipality']}-{row['parcel']}.pdf".replace(" ", "-"),
         mime="application/pdf",
         type="primary",
+        width="stretch",
         help="Alle drei Blöcke samt vollständigem Rechenweg und Quellen.",
     )
