@@ -58,17 +58,26 @@ BENCHMARKS = {
     ),
     "construction_chf_m2": Benchmark(
         2600,
-        # Reckoned on the whole floor area, so the label has to say so: the
-        # benchmark is quoted per m² HNF, which is the narrower measure. Left
-        # on the published figure rather than adjusted upward by a factor
-        # nobody has confirmed — it is one of the numbers still marked for
-        # Philipp, and this is the note he needs to see when he names his own.
+        # Reckoned on the whole floor area, so the label has to say so — and
+        # the direction of that matters. HNF is a part of the Geschossfläche
+        # (SIA 416), roughly four fifths of it in housing, so a rate published
+        # per m² HNF applied to every m² of GF makes the construction cost
+        # about a quarter too big, and the land value that much too small. The
+        # tool errs toward not chasing a parcel, which is the safer way for a
+        # screening figure to be wrong, but it is an accident rather than a
+        # chosen margin.
+        #
+        # Left on the published number anyway: dividing it by an HNF/GF ratio
+        # nobody here has confirmed would swap a sourced figure for a derived
+        # one, which is the thing this file refuses to do (see Abbruchkosten).
+        # It carries the confirmation mark; Philipp's own rate settles it.
         "CHF/m² Geschossfläche",
         "AKTIVA AG Neubau-Benchmarks nach Schätzerhandbuch / Wüest Partner: "
         "Eigentum CHF 2'600/m² HNF, Renditeobjekt CHF 2'050/m² HNF (BKP 2)",
         url="https://aktiva.swiss/immobilien-benchmarks/",
         note="ohne Einstellhalle, dort rund CHF 40'000 pro Platz; Quelle je m² HNF, "
-             "hier auf die ganze Geschossfläche gerechnet",
+             "hier auf die ganze Geschossfläche gerechnet — das rechnet die "
+             "Baukosten eher zu hoch und den Landwert entsprechend zu tief",
     ),
     "demolition_chf_m2": Benchmark(
         150,
@@ -89,7 +98,11 @@ BENCHMARKS = {
         "Abgeleitet aus CHF 18'000–28'000 für ein 120-m²-Einfamilienhaus "
         "(ofri.ch, Stand 30.08.2023) = CHF 150–233/m²; hier das untere Ende",
         url="https://www.ofri.ch/kosten/hausabbruch",
-        note="Schadstoffanalyse bei Bauten vor 1990 kommt dazu und ist hier nicht gerechnet",
+        note="gerechnet auf die Geschossfläche des Bestands, nicht auf die "
+             "Grundfläche: Abbruch skaliert mit dem Volumen, ein dreigeschossiges "
+             "Haus kostet rund das Dreifache eines eingeschossigen gleicher "
+             "Grundfläche. Schadstoffanalyse bei Bauten vor 1990 kommt dazu und "
+             "ist hier nicht gerechnet",
     ),
     "ancillary_pct": Benchmark(
         15.0, "% der Baukosten", "Vorgabe aus dem Auftrag (Standardwert 15%)",

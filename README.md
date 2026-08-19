@@ -146,9 +146,12 @@ point of the sale-area share: the sale price sees 80% of the floor area, the
 construction cost all of it, because everything built has to be paid for while
 only the saleable part is sold. Putting both on the reduced area understates the
 construction cost and overstates the land value. The one seam left is that the
-construction benchmark is published per m² HNF and is applied here per m² GF —
-noted on the input, and one of the figures still waiting on Philipp's own
-number.
+construction benchmark is published per m² HNF and is applied here per m² GF.
+HNF is a part of the Geschossfläche, roughly four fifths of it in housing, so
+that reckons the construction cost about a quarter too high and the land value
+that much too low — the tool errs toward *not* chasing a parcel. It is an
+accident of the unit rather than a chosen margin, it is noted on the input, and
+Philipp's own rate settles it.
 
 * **D · Rechtsgrundlagen** — folded away by default, like *Annahmen und
   Quellen*: it is a reference to open once a candidate is worth reading up on,
