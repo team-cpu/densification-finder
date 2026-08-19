@@ -308,10 +308,14 @@ def forget(pid):
 #: is None unless someone has pinned a theme in config.
 #:
 #: So the strip is frosted glass instead. `backdrop-filter` blurs whatever is
-#: actually behind it, and the tint is a neutral grey that darkens a white page
-#: and lightens a dark one by the same amount. The text on top stays Streamlit's
-#: own themed text, so it is legible against its own background whichever theme
-#: is running. Nothing to keep in sync, because nothing is being guessed.
+#: actually behind it, and `brightness` lifts it: over a white page it clips at
+#: white, over a dark one it raises the surface a little — both read as
+#: something sitting above the page, from one unconditional rule. The neutral
+#: tint is only 6%, enough to hold an edge; at the 17% it started on, a white
+#: page carried a visibly grey box (#e5e5e6 against #ffffff — measured, and
+#: Philipp saw it). The text on top stays Streamlit's own themed text, so it is
+#: legible against its own background whichever theme is running. Nothing to
+#: keep in sync, because nothing is being guessed.
 PAGE_CSS = """
 <style>
   /* The wrapper, not the block. Streamlit puts every block inside a layout
@@ -329,9 +333,9 @@ PAGE_CSS = """
   }
   .st-key-pinned_result { padding:.6rem 1rem .1rem; margin-bottom:.4rem;
       border-radius:8px; border:1px solid rgba(128,128,128,.38);
-      background:rgba(127,127,127,.17);
-      -webkit-backdrop-filter:blur(30px) saturate(1.7);
-      backdrop-filter:blur(30px) saturate(1.7);
+      background:rgba(127,127,127,.06);
+      -webkit-backdrop-filter:blur(30px) saturate(1.7) brightness(1.08);
+      backdrop-filter:blur(30px) saturate(1.7) brightness(1.08);
       box-shadow:0 6px 20px rgba(0,0,0,.10); }
   .st-key-pinned_result [data-testid="stMetricValue"] { font-size:1.55rem; }
 
