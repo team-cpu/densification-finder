@@ -297,11 +297,21 @@ def forget(pid):
 #: overridden — does not. Without it the two halves of the screen look alike,
 #: and "where can I intervene" has to be answered by clicking.
 #:
-#: The dark variant follows the system preference because that is exactly how
-#: Streamlit itself picks its theme here: there is no theme in
-#: `.streamlit/config.toml`, so the app is on "use system setting". Streamlit
-#: 1.61 exposes no CSS variable for its background, so the two cases are
-#: written out.
+#: NOTHING HERE NAMES A BACKGROUND COLOUR, and that is the whole point. The
+#: first version painted the strip white and swapped to #0e1117 under
+#: `prefers-color-scheme: dark`, on the assumption that the OS preference is
+#: what Streamlit renders. It is not: the theme can be switched in Streamlit's
+#: own Appearance menu, and then a light page carried a near-black strip with
+#: the light theme's dark text on it — unreadable, and shipped. There is no
+#: server-side signal to fix it with either: `st.context.theme` reports the OS
+#: preference, exactly like the media query, and `st.get_option("theme.base")`
+#: is None unless someone has pinned a theme in config.
+#:
+#: So the strip is frosted glass instead. `backdrop-filter` blurs whatever is
+#: actually behind it, and the tint is a neutral grey that darkens a white page
+#: and lightens a dark one by the same amount. The text on top stays Streamlit's
+#: own themed text, so it is legible against its own background whichever theme
+#: is running. Nothing to keep in sync, because nothing is being guessed.
 PAGE_CSS = """
 <style>
   /* The wrapper, not the block. Streamlit puts every block inside a layout
@@ -318,14 +328,16 @@ PAGE_CSS = """
         position:static; }
   }
   .st-key-pinned_result { padding:.6rem 1rem .1rem; margin-bottom:.4rem;
-      border-radius:8px; background:#ffffff;
-      border:1px solid rgba(128,128,128,.30);
-      box-shadow:0 6px 20px rgba(0,0,0,.08); }
+      border-radius:8px; border:1px solid rgba(128,128,128,.38);
+      background:rgba(127,127,127,.17);
+      -webkit-backdrop-filter:blur(30px) saturate(1.7);
+      backdrop-filter:blur(30px) saturate(1.7);
+      box-shadow:0 6px 20px rgba(0,0,0,.10); }
   .st-key-pinned_result [data-testid="stMetricValue"] { font-size:1.55rem; }
 
   .st-key-inputs_b, .st-key-inputs_c { padding:.7rem 1rem .1rem;
       margin-bottom:.3rem; border-left:3px solid rgba(255,75,75,.55);
-      border-radius:0 8px 8px 0; background:rgba(130,130,130,.07); }
+      border-radius:0 8px 8px 0; background:rgba(127,127,127,.09); }
 
   /* The data sheet has to stay inside its half. A markdown table sizes itself
      to its content, so from about 1400px down block A ran straight over block
@@ -340,12 +352,6 @@ PAGE_CSS = """
      desktop it would split ordinary words mid-syllable for nothing. */
   @media (max-width: 1000px) {
     .st-key-facts_a td, .st-key-facts_a th { overflow-wrap:anywhere; }
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .st-key-pinned_result { background:#0e1117;
-        box-shadow:0 6px 20px rgba(0,0,0,.55); }
-    .st-key-inputs_b, .st-key-inputs_c { background:rgba(255,255,255,.05); }
   }
 </style>
 """
