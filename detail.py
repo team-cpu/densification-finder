@@ -346,7 +346,13 @@ PAGE_CSS = """
   /* The data sheet has to stay inside its half. A markdown table sizes itself
      to its content, so from about 1400px down block A ran straight over block
      B — an EGRID and a zone name are wide and neither wraps on its own. */
+  /* Streamlit gives every markdown table cell a border on all four sides, and
+     an earlier pass only ever overrode the bottom one — so the data sheet grew
+     column separators and an outer box that the design never had. A data sheet
+     is a list of rows, not a grid. */
   .st-key-facts_a table { width:100%; }
+  .st-key-facts_a table td, .st-key-facts_a table th {
+      border-left:0; border-right:0; }
   .st-key-facts_a td, .st-key-facts_a th { overflow-wrap:break-word; }
   .st-key-facts_a [data-testid="stMarkdownContainer"] { overflow-x:auto; }
 
@@ -369,6 +375,7 @@ CALC_CSS = """
   table.calc { border-collapse:collapse; width:auto; min-width:min(680px,100%);
       margin:0; }
   table.calc th, table.calc td { text-align:left; padding:.42rem .9rem .42rem 0;
+      border-top:0; border-left:0; border-right:0;
       border-bottom:1px solid rgba(128,128,128,.28); font-weight:400; }
   table.calc thead th { font-weight:600; font-size:.86em; letter-spacing:.02em;
       text-transform:uppercase; opacity:.65; }
