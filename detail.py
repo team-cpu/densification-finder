@@ -582,7 +582,10 @@ def page(parcels, cache, price_of):
     # exist before it can be computed, but it belongs above them on the page.
     pinned = st.container(key="pinned_result")
 
-    facts, work = st.columns(2, gap="large")
+    # 32px between the halves, not Streamlit's 64: the gutter was the one
+    # place the page had spare room, and block A is the column that wanted
+    # it. Measured — "medium" is 32px and gives each half 624px at 1440.
+    facts, work = st.columns(2, gap="medium")
 
     # ── Block A ─────────────────────────────────────────────────────────────
     facts.subheader("A · Grunddaten")
