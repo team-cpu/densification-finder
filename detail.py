@@ -331,8 +331,16 @@ PAGE_CSS = """
      to its content, so from about 1400px down block A ran straight over block
      B — an EGRID and a zone name are wide and neither wraps on its own. */
   .st-key-facts_a table { width:100%; }
-  .st-key-facts_a td, .st-key-facts_a th { overflow-wrap:anywhere; }
+  .st-key-facts_a td, .st-key-facts_a th { overflow-wrap:break-word; }
   .st-key-facts_a [data-testid="stMarkdownContainer"] { overflow-x:auto; }
+
+  /* Below about a thousand pixels the halves are too narrow for
+     "Denkmal-/Inventarstatus" to fit on any line, and a word that cannot fit
+     takes the table over the seam with it. Hard breaking only there — on a
+     desktop it would split ordinary words mid-syllable for nothing. */
+  @media (max-width: 1000px) {
+    .st-key-facts_a td, .st-key-facts_a th { overflow-wrap:anywhere; }
+  }
 
   @media (prefers-color-scheme: dark) {
     .st-key-pinned_result { background:#0e1117;
@@ -543,7 +551,7 @@ def page(parcels, cache, price_of):
     # exist before it can be computed, but it belongs above them on the page.
     pinned = st.container(key="pinned_result")
 
-    facts, work = st.columns([2, 3], gap="large")
+    facts, work = st.columns(2, gap="large")
 
     # ── Block A ─────────────────────────────────────────────────────────────
     facts.subheader("A · Grunddaten")
@@ -667,13 +675,6 @@ def page(parcels, cache, price_of):
     land = E.land_value(steps)
     per_m2 = E.per_square_metre(steps, float(row["area"]))
 
-    # Every line, not just the total: the people this is for adjust assumptions,
-    # and an assumption cannot be adjusted if only the result is visible. Hovering
-    # a step name shows the expression behind it, symbols and all — read off the
-    # rule that computed the number, so the two cannot drift apart.
-    work.markdown(_calculation_table(steps), unsafe_allow_html=True)
-    work.caption(DISCLAIMER)
-
     used = [
         ("sale_price_chf_m2", sale_price, "Verkaufspreis CHF/m²"),
         ("construction_chf_m2", construction, "Baukosten CHF/m²"),
@@ -684,12 +685,32 @@ def page(parcels, cache, price_of):
         ("reserve_pct", reserve, "Reserve / Unvorhergesehenes %"),
     ]
     notes = _assumption_notes(used)
+    # Where each figure above came from, kept with the figures rather than with
+    # the calculation — and it closes the right-hand column, which is the shorter
+    # of the two now that the table has left it.
     with work.expander("Annahmen und Quellen"):
         for note in notes:
             st.markdown(f"- {note}")
         if st.button("Annahmen zurücksetzen"):
             forget(pid)
             st.rerun()
+
+    # ── The calculation ─────────────────────────────────────────────────────
+    # Below both columns, on the full width, because it does not fit in half of
+    # one: the longest line of it is about seventy characters of arithmetic, and
+    # in the right-hand column that wrapped the step names and pushed the table
+    # into its own sideways scroll. The split is for the two things read against
+    # each other — the registers and the assumptions; the calculation is read on
+    # its own, and it is the one thing on this page that genuinely wants width.
+    #
+    # It costs nothing to put it here: what the eye follows while a number is
+    # being changed is the total, and the total is pinned at the top. Every line,
+    # not just that total, because an assumption cannot be adjusted if only the
+    # result is visible. Hovering a step name shows the expression behind it,
+    # symbols and all — read off the rule that computed the number, so the two
+    # cannot drift apart.
+    st.markdown(_calculation_table(steps), unsafe_allow_html=True)
+    st.caption(DISCLAIMER)
 
     # ── The pinned result ───────────────────────────────────────────────────
     # Written last, drawn first. The warning belongs here rather than beside the

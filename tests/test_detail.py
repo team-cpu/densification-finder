@@ -100,6 +100,25 @@ class DetailViewTest(unittest.TestCase):
             order.index(("download_button", "Als PDF exportieren")),
         )
 
+    def test_the_calculation_is_not_confined_to_a_column(self):
+        """Option C. The split is for the two things read against each other —
+        the registers and the assumptions. The calculation is read on its own,
+        and it is the one thing on the page that wants width: in half a column
+        its longest line, about seventy characters of arithmetic, wrapped the
+        step names and pushed the table into its own sideways scroll."""
+        app = self.open_detail()
+        boxed = [m.value for column in app.columns for m in column.markdown
+                 if 'class="calc"' in m.value]
+        self.assertEqual(boxed, [], "the calculation is back inside a column")
+        # …and it is still on the page at all.
+        self.assertTrue(any('class="calc"' in m.value for m in app.markdown))
+        # The assumptions list, by contrast, stays inside the column — it
+        # explains the figures above it and closes the shorter side.
+        self.assertIn(
+            "Annahmen und Quellen",
+            [e.label for column in app.columns for e in column.expander],
+        )
+
     def test_each_step_carries_the_formula_that_produced_it(self):
         """Philipp asked for the reasoning to be visible on hover, and for the
         tooltip not to be a second copy that can go stale. It is rendered from
