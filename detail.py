@@ -284,10 +284,72 @@ def forget(pid):
         del st.session_state[key]
 
 
+#: Two things the layout has to say that the words on the page cannot.
+#:
+#: The result is pinned, because the whole interaction on this screen is
+#: changing an assumption and reading the new number: with the total at the
+#: bottom of a long form, every edit costs a scroll down and a scroll back.
+#: `top` clears the 60px Streamlit puts its own toolbar in, which the strip
+#: would otherwise slide underneath.
+#:
+#: And the fields the user may change sit in a tinted panel with an accent
+#: edge, while block A — which comes from the registers and cannot be
+#: overridden — does not. Without it the two halves of the screen look alike,
+#: and "where can I intervene" has to be answered by clicking.
+#:
+#: The dark variant follows the system preference because that is exactly how
+#: Streamlit itself picks its theme here: there is no theme in
+#: `.streamlit/config.toml`, so the app is on "use system setting". Streamlit
+#: 1.61 exposes no CSS variable for its background, so the two cases are
+#: written out.
+PAGE_CSS = """
+<style>
+  /* The wrapper, not the block. Streamlit puts every block inside a layout
+     element of exactly the block's own height, and a sticky box can only
+     travel inside its parent — sticking the block itself buys six pixels and
+     then lets it scroll away. */
+  [data-testid="stLayoutWrapper"]:has(> .st-key-pinned_result) {
+      position:sticky; top:3.75rem; z-index:60; }
+
+  /* Where the columns stack, the three metrics stack with them: pinned, that
+     is most of a phone screen held back from the page. */
+  @media (max-width: 900px) {
+    [data-testid="stLayoutWrapper"]:has(> .st-key-pinned_result) {
+        position:static; }
+  }
+  .st-key-pinned_result { padding:.6rem 1rem .1rem; margin-bottom:.4rem;
+      border-radius:8px; background:#ffffff;
+      border:1px solid rgba(128,128,128,.30);
+      box-shadow:0 6px 20px rgba(0,0,0,.08); }
+  .st-key-pinned_result [data-testid="stMetricValue"] { font-size:1.55rem; }
+
+  .st-key-inputs_b, .st-key-inputs_c { padding:.7rem 1rem .1rem;
+      margin-bottom:.3rem; border-left:3px solid rgba(255,75,75,.55);
+      border-radius:0 8px 8px 0; background:rgba(130,130,130,.07); }
+
+  /* The data sheet has to stay inside its half. A markdown table sizes itself
+     to its content, so from about 1400px down block A ran straight over block
+     B — an EGRID and a zone name are wide and neither wraps on its own. */
+  .st-key-facts_a table { width:100%; }
+  .st-key-facts_a td, .st-key-facts_a th { overflow-wrap:anywhere; }
+  .st-key-facts_a [data-testid="stMarkdownContainer"] { overflow-x:auto; }
+
+  @media (prefers-color-scheme: dark) {
+    .st-key-pinned_result { background:#0e1117;
+        box-shadow:0 6px 20px rgba(0,0,0,.55); }
+    .st-key-inputs_b, .st-key-inputs_c { background:rgba(255,255,255,.05); }
+  }
+</style>
+"""
+
 CALC_CSS = """
 <style>
+  /* Its own scroller: in the right-hand column the three columns of the table
+     no longer always fit, and a page that scrolls sideways is worse than a
+     table that does. */
+  div.calc__scroll { overflow-x:auto; margin:.4rem 0 1rem; }
   table.calc { border-collapse:collapse; width:auto; min-width:min(680px,100%);
-      margin:.4rem 0 1rem; }
+      margin:0; }
   table.calc th, table.calc td { text-align:left; padding:.42rem .9rem .42rem 0;
       border-bottom:1px solid rgba(128,128,128,.28); font-weight:400; }
   table.calc thead th { font-weight:600; font-size:.86em; letter-spacing:.02em;
@@ -348,9 +410,10 @@ def _calculation_table(steps):
             f'<td class="calc__amount">{escape(amount)}</td></tr>'
         )
     body = "".join(rows)
-    return (CALC_CSS + '<table class="calc"><thead><tr><th>Schritt</th><th>Rechnung</th>'
+    return (CALC_CSS + '<div class="calc__scroll"><table class="calc"><thead><tr>'
+            '<th>Schritt</th><th>Rechnung</th>'
             '<th class="calc__amount">Betrag</th></tr></thead><tbody>'
-            + body + "</tbody></table>")
+            + body + "</tbody></table></div>")
 
 
 def _number(container, label, pid, name, default, *, step, minimum=0.0,
@@ -415,11 +478,39 @@ def _assumption_notes(used):
     return notes
 
 
+#: The caveat that has to travel with the number rather than wait at the foot
+#: of the page: read without it, the residual value looks like a valuation of
+#: the parcel, which is the one thing it is not. The short form rides in the
+#: pinned strip; the full one sits directly under the calculation it qualifies.
+PINNED_CAVEAT = (
+    "Bewertet nur das zusätzliche Potenzial — nicht die Parzelle und nicht "
+    "das bestehende Gebäude."
+)
+
+DISCLAIMER = (
+    "Der Residualwert bewertet nur das zusätzliche Potenzial, nicht die "
+    "Parzelle: der Wert des bestehenden Gebäudes ist darin nicht enthalten. "
+    "Erschliessung, Baugrund, Lärmschutz, Auflagen aus einem Gestaltungsplan "
+    "und die tatsächliche anrechenbare Geschossfläche sind hier nicht "
+    "gerechnet. Die eigenen Annahmen aus Block C gelten für alle Parzellen "
+    "dieser Sitzung — einmal eingetragen, nicht pro Parzelle wieder. "
+    "Potenzial und Abbruch gehören zur Parzelle und bleiben dort."
+)
+
+
 def page(parcels, cache, price_of):
     """Render the detail view for the selected parcel.
 
     `price_of` is a callable returning the land-price reference for a row, so
     this module does not need to know how that lookup is configured.
+
+    Two columns, because the two halves of this screen are read against each
+    other: what the registers say about the parcel is fixed and stands on the
+    left, what the user assumes about it is edited on the right, and neither
+    has to be scrolled away to consult the other. The result rides above both
+    in a strip that stays put — the interaction here is changing an assumption
+    and reading the new number, and a total at the foot of a long form makes
+    that cost a scroll down and a scroll back every time.
     """
     pid = selected()
     row = find(parcels, pid)
@@ -436,6 +527,8 @@ def page(parcels, cache, price_of):
         )
         st.stop()
 
+    st.markdown(PAGE_CSS, unsafe_allow_html=True)
+
     address = _text(row.get("address")) or f"Parzelle {row['parcel']}"
     st.title(address)
     st.caption(
@@ -446,101 +539,118 @@ def page(parcels, cache, price_of):
     price_ref = price_of(row)
     extract = extract_of(row, cache)
 
+    # Claimed here and written at the end: the result needs the inputs below to
+    # exist before it can be computed, but it belongs above them on the page.
+    pinned = st.container(key="pinned_result")
+
+    facts, work = st.columns([2, 3], gap="large")
+
     # ── Block A ─────────────────────────────────────────────────────────────
-    st.subheader("A · Grunddaten")
-    st.markdown(_facts(_base_block(row, cache, price_ref, extract)))
-    st.markdown(_links(row))
-    zone_rows = _zone_rows(extract) if extract else []
-    if zone_rows:
-        st.markdown("**Legende beteiligter Objekte** (ÖREB-Auszug)")
-        st.markdown(_facts(zone_rows))
+    facts.subheader("A · Grunddaten")
+    with facts.container(key="facts_a"):
+        st.caption("Aus den Registern übernommen — hier ist nichts veränderbar.")
+        st.markdown(_facts(_base_block(row, cache, price_ref, extract)))
+        st.markdown(_links(row))
+        zone_rows = _zone_rows(extract) if extract else []
+        if zone_rows:
+            st.markdown("**Legende beteiligter Objekte** (ÖREB-Auszug)")
+            st.markdown(_facts(zone_rows))
 
     # ── Block B ─────────────────────────────────────────────────────────────
-    st.subheader("B · Potenzial")
-    b1, b2, b3 = st.columns(3)
-    potential = _number(
-        b1, "Potenzial (m² GF)", pid, "gf", float(row["delta"]), step=10.0,
-        help=(
-            "Vorbelegt mit dem berechneten Wert: Fläche in der Bauzone × Ziffer "
-            "− geschätzte bestehende Geschossfläche. Überschreibbar, sobald eine "
-            "eigene Flächenberechnung vorliegt."
-        ),
-    )
-    unit_size = _number(
-        b2, "Wohnungsgrösse (m²)", pid, "unit", float(E.SQM_PER_UNIT), step=5.0,
-        minimum=10.0,
-        help="Faustregel aus dem Auftrag, keine Planungsgrösse.",
-    )
-    possible = E.units(potential, unit_size)
-    b3.metric(
-        "Mögliche Wohnungen",
-        "—" if possible is None else f"{possible:.1f}",
-        help="Potenzial ÷ Wohnungsgrösse. Rechnerisch, ohne Grundriss.",
-    )
+    work.subheader("B · Potenzial")
+    with work.container(key="inputs_b"):
+        b1, b2, b3 = st.columns(3)
+        potential = _number(
+            b1, "Potenzial (m² GF)", pid, "gf", float(row["delta"]), step=10.0,
+            help=(
+                "Vorbelegt mit dem berechneten Wert: Fläche in der Bauzone × Ziffer "
+                "− geschätzte bestehende Geschossfläche. Überschreibbar, sobald eine "
+                "eigene Flächenberechnung vorliegt."
+            ),
+        )
+        unit_size = _number(
+            b2, "Wohnungsgrösse (m²)", pid, "unit", float(E.SQM_PER_UNIT), step=5.0,
+            minimum=10.0,
+            help="Faustregel aus dem Auftrag, keine Planungsgrösse.",
+        )
+        possible = E.units(potential, unit_size)
+        b3.metric(
+            "Mögliche Wohnungen",
+            "—" if possible is None else f"{possible:.1f}",
+            help="Potenzial ÷ Wohnungsgrösse. Rechnerisch, ohne Grundriss.",
+        )
 
     # ── Block C ─────────────────────────────────────────────────────────────
-    st.subheader("C · Residualwertrechnung")
-    st.caption(
-        "Landwert = Verkaufserlös der neuen Flächen − Baukosten − Baunebenkosten "
-        "− Abbruch − Finanzierung − Reserve. Der Verkaufspreis rechnet auf 80% "
-        "der Geschossfläche, die Baukosten auf 100%. Mit der Maus über einen "
-        "Schritt fahren zeigt die Formel dahinter."
-    )
-    c1, c2, c3, c4 = st.columns(4)
-    sale_price = _number(
-        c1, "Verkaufspreis (CHF/m²)", pid, "sale",
-        E.BENCHMARKS["sale_price_chf_m2"].value, step=100.0,
-        help=_benchmark_help("sale_price_chf_m2", name="sale"),
-    )
-    sale_share = _number(
-        c2, "Verkaufsflächenanteil (%)", pid, "share",
-        E.BENCHMARKS["sale_area_pct"].value, step=1.0, minimum=10.0, maximum=100.0,
-        help=_benchmark_help(
-            "sale_area_pct",
-            "Wirkt nur auf den Erlös; die Baukosten rechnen auf der ganzen "
-            "Geschossfläche.",
-            name="share",
-        ),
-    )
-    construction = _number(
-        c3, "Baukosten (CHF/m²)", pid, "build",
-        E.BENCHMARKS["construction_chf_m2"].value, step=50.0,
-        help=_benchmark_help("construction_chf_m2", name="build"),
-    )
-    ancillary = _number(
-        c4, "Baunebenkosten (%)", pid, "ancillary",
-        E.BENCHMARKS["ancillary_pct"].value, step=1.0, maximum=100.0,
-        help=_benchmark_help("ancillary_pct", name="ancillary"),
-    )
+    work.subheader("C · Residualwertrechnung")
+    # Two controls to a row rather than four: in the narrower half of the split
+    # a four-wide row leaves each field about a stepper wide and wraps every
+    # label onto three lines.
+    with work.container(key="inputs_c"):
+        st.caption(
+            "Landwert = Verkaufserlös der neuen Flächen − Baukosten − Baunebenkosten "
+            "− Abbruch − Finanzierung − Reserve. Der Verkaufspreis rechnet auf 80% "
+            "der Geschossfläche, die Baukosten auf 100%. Mit der Maus über einen "
+            "Schritt fahren zeigt die Formel dahinter."
+        )
+        c1, c2 = st.columns(2)
+        sale_price = _number(
+            c1, "Verkaufspreis (CHF/m²)", pid, "sale",
+            E.BENCHMARKS["sale_price_chf_m2"].value, step=100.0,
+            help=_benchmark_help("sale_price_chf_m2", name="sale"),
+        )
+        sale_share = _number(
+            c2, "Verkaufsflächenanteil (%)", pid, "share",
+            E.BENCHMARKS["sale_area_pct"].value, step=1.0, minimum=10.0, maximum=100.0,
+            help=_benchmark_help(
+                "sale_area_pct",
+                "Wirkt nur auf den Erlös; die Baukosten rechnen auf der ganzen "
+                "Geschossfläche.",
+                name="share",
+            ),
+        )
 
-    d1, d2, d3, d4 = st.columns(4)
-    has_building = bool(row["buildings"]) and row["existing"] > 0
-    demolish = _remember(pid, "demolish", d1.checkbox(
-        "Bestehendes Gebäude abbrechen",
-        value=bool(_recall(pid, "demolish", has_building)),
-        key=_widget_key(pid, "demolish"),
-        disabled=not has_building,
-        help=(
-            "Aus, wenn aufgestockt oder angebaut statt ersetzt wird."
-            if has_building else
-            "Auf dieser Parzelle steht kein Gebäude, das abgebrochen werden müsste."
-        ),
-    ))
-    demolition = _number(
-        d2, "Abbruchkosten (CHF/m²)", pid, "demolition",
-        E.BENCHMARKS["demolition_chf_m2"].value, step=10.0,
-        help=_benchmark_help("demolition_chf_m2", name="demolition"),
-    )
-    financing = _number(
-        d3, "Finanzierung (%)", pid, "financing",
-        E.BENCHMARKS["financing_pct"].value, step=0.5, maximum=100.0, fmt="%.1f",
-        help=_benchmark_help("financing_pct", name="financing"),
-    )
-    reserve = _number(
-        d4, "Reserve / Unvorhergesehenes (%)", pid, "reserve",
-        E.BENCHMARKS["reserve_pct"].value, step=1.0, maximum=100.0,
-        help=_benchmark_help("reserve_pct", name="reserve"),
-    )
+        c3, c4 = st.columns(2)
+        construction = _number(
+            c3, "Baukosten (CHF/m²)", pid, "build",
+            E.BENCHMARKS["construction_chf_m2"].value, step=50.0,
+            help=_benchmark_help("construction_chf_m2", name="build"),
+        )
+        ancillary = _number(
+            c4, "Baunebenkosten (%)", pid, "ancillary",
+            E.BENCHMARKS["ancillary_pct"].value, step=1.0, maximum=100.0,
+            help=_benchmark_help("ancillary_pct", name="ancillary"),
+        )
+
+        d1, d2 = st.columns(2, vertical_alignment="bottom")
+        has_building = bool(row["buildings"]) and row["existing"] > 0
+        demolish = _remember(pid, "demolish", d1.checkbox(
+            "Bestehendes Gebäude abbrechen",
+            value=bool(_recall(pid, "demolish", has_building)),
+            key=_widget_key(pid, "demolish"),
+            disabled=not has_building,
+            help=(
+                "Aus, wenn aufgestockt oder angebaut statt ersetzt wird."
+                if has_building else
+                "Auf dieser Parzelle steht kein Gebäude, das abgebrochen werden müsste."
+            ),
+        ))
+        demolition = _number(
+            d2, "Abbruchkosten (CHF/m²)", pid, "demolition",
+            E.BENCHMARKS["demolition_chf_m2"].value, step=10.0,
+            help=_benchmark_help("demolition_chf_m2", name="demolition"),
+        )
+
+        d3, d4 = st.columns(2)
+        financing = _number(
+            d3, "Finanzierung (%)", pid, "financing",
+            E.BENCHMARKS["financing_pct"].value, step=0.5, maximum=100.0, fmt="%.1f",
+            help=_benchmark_help("financing_pct", name="financing"),
+        )
+        reserve = _number(
+            d4, "Reserve / Unvorhergesehenes (%)", pid, "reserve",
+            E.BENCHMARKS["reserve_pct"].value, step=1.0, maximum=100.0,
+            help=_benchmark_help("reserve_pct", name="reserve"),
+        )
 
     steps = E.residual(
         potential_gf=potential,
@@ -561,32 +671,8 @@ def page(parcels, cache, price_of):
     # and an assumption cannot be adjusted if only the result is visible. Hovering
     # a step name shows the expression behind it, symbols and all — read off the
     # rule that computed the number, so the two cannot drift apart.
-    st.markdown(_calculation_table(steps), unsafe_allow_html=True)
-
-    r1, r2, r3 = st.columns(3)
-    r1.metric("Residualer Landwert", f"CHF {E.chf(land)}")
-    r2.metric(
-        "pro m² Parzelle",
-        "—" if per_m2 is None else f"CHF {E.chf(per_m2)}",
-        help="Direkt vergleichbar mit der Landpreis-Referenz in der Liste.",
-    )
-    if price_ref:
-        r3.metric(
-            f"Referenz {price_ref.scope}",
-            f"CHF {E.chf(price_ref.price_chf_m2)}/m²",
-            delta=None if per_m2 is None
-            else f"{E.chf(per_m2 - price_ref.price_chf_m2)} /m² Differenz",
-            help=(
-                "Die Referenz gilt der ganzen Parzelle inklusive Bestand, der "
-                "Residualwert nur der zusätzlichen Geschossfläche. Ein "
-                "Screening-Vergleich, keine Bewertung."
-            ),
-        )
-    if land < 0:
-        st.warning(
-            "Negativer Residualwert: Mit diesen Annahmen trägt das zusätzliche "
-            "Potenzial die Erstellungskosten nicht."
-        )
+    work.markdown(_calculation_table(steps), unsafe_allow_html=True)
+    work.caption(DISCLAIMER)
 
     used = [
         ("sale_price_chf_m2", sale_price, "Verkaufspreis CHF/m²"),
@@ -598,42 +684,75 @@ def page(parcels, cache, price_of):
         ("reserve_pct", reserve, "Reserve / Unvorhergesehenes %"),
     ]
     notes = _assumption_notes(used)
-    with st.expander("Annahmen und Quellen"):
+    with work.expander("Annahmen und Quellen"):
         for note in notes:
             st.markdown(f"- {note}")
         if st.button("Annahmen zurücksetzen"):
             forget(pid)
             st.rerun()
 
+    # ── The pinned result ───────────────────────────────────────────────────
+    # Written last, drawn first. The warning belongs here rather than beside the
+    # table: it explains the number, and the number is what stays on screen.
+    with pinned:
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Residualer Landwert", f"CHF {E.chf(land)}")
+        r2.metric(
+            "pro m² Parzelle",
+            "—" if per_m2 is None else f"CHF {E.chf(per_m2)}",
+            help="Direkt vergleichbar mit der Landpreis-Referenz in der Liste.",
+        )
+        if price_ref:
+            r3.metric(
+                f"Referenz {price_ref.scope}",
+                f"CHF {E.chf(price_ref.price_chf_m2)}/m²",
+                delta=None if per_m2 is None
+                else f"{E.chf(per_m2 - price_ref.price_chf_m2)} /m² Differenz",
+                help=(
+                    "Die Referenz gilt der ganzen Parzelle inklusive Bestand, der "
+                    "Residualwert nur der zusätzlichen Geschossfläche. Ein "
+                    "Screening-Vergleich, keine Bewertung."
+                ),
+            )
+        if land < 0:
+            st.warning(
+                "Negativer Residualwert: Mit diesen Annahmen trägt das zusätzliche "
+                "Potenzial die Erstellungskosten nicht."
+            )
+        st.caption(PINNED_CAVEAT)
+
     # ── Block D ─────────────────────────────────────────────────────────────
     # The regulations themselves, straight out of the same extract. Before this,
     # the answer to "what may I build here" ended at a number; now the document
     # that sets the number is one click away, and it is the one the cadastre
     # names for this parcel rather than one found by matching municipality names.
-    st.subheader("D · Rechtsgrundlagen")
-    if not extract:
-        st.caption(
-            "Erst nach der ÖREB-Abfrage verfügbar — geprüft wird die Shortlist, "
-            "über «▶ Neu berechnen» in der Liste."
-        )
-    else:
-        left, right = st.columns(2)
-        left.markdown("**Rechtsvorschriften**")
-        for doc in extract.get("provisions") or []:
-            left.markdown(f"- {_document_line(doc)}")
-        if not extract.get("provisions"):
-            left.caption("keine im Auszug")
-        right.markdown("**Gesetzliche Grundlagen**")
-        for doc in extract.get("laws") or []:
-            right.markdown(f"- {_document_line(doc)}")
-        if not extract.get("laws"):
-            right.caption("keine im Auszug")
-        st.caption(
-            "Aus dem ÖREB-Auszug dieser Parzelle"
-            + (f" vom {extract['created'][:10]}" if extract.get("created") else "")
-            + ". Die Bau- und Nutzungsordnung ist die der zuständigen Gemeinde, "
-            "so wie der Kataster sie dieser Parzelle zuordnet."
-        )
+    #
+    # Folded away by default: it is a reference to open when a candidate is
+    # worth the reading, not something to scroll past on every parcel.
+    with st.expander("D · Rechtsgrundlagen", expanded=False):
+        if not extract:
+            st.caption(
+                "Erst nach der ÖREB-Abfrage verfügbar — geprüft wird die Shortlist, "
+                "über «▶ Neu berechnen» in der Liste."
+            )
+        else:
+            left, right = st.columns(2)
+            left.markdown("**Rechtsvorschriften**")
+            for doc in extract.get("provisions") or []:
+                left.markdown(f"- {_document_line(doc)}")
+            if not extract.get("provisions"):
+                left.caption("keine im Auszug")
+            right.markdown("**Gesetzliche Grundlagen**")
+            for doc in extract.get("laws") or []:
+                right.markdown(f"- {_document_line(doc)}")
+            if not extract.get("laws"):
+                right.caption("keine im Auszug")
+            st.caption(
+                "Aus dem ÖREB-Auszug dieser Parzelle"
+                + (f" vom {extract['created'][:10]}" if extract.get("created") else "")
+                + ". Die Bau- und Nutzungsordnung ist die der zuständigen Gemeinde, "
+                "so wie der Kataster sie dieser Parzelle zuordnet."
+            )
 
     # ── Export ──────────────────────────────────────────────────────────────
     blocks = [
@@ -682,13 +801,4 @@ def page(parcels, cache, price_of):
         mime="application/pdf",
         type="primary",
         help="Alle drei Blöcke samt vollständigem Rechenweg und Quellen.",
-    )
-    st.caption(
-        "Der Residualwert bewertet nur das zusätzliche Potenzial, nicht die "
-        "Parzelle: der Wert des bestehenden Gebäudes ist darin nicht enthalten. "
-        "Erschliessung, Baugrund, Lärmschutz, Auflagen aus einem Gestaltungsplan "
-        "und die tatsächliche anrechenbare Geschossfläche sind hier nicht "
-        "gerechnet. Die eigenen Annahmen aus Block C gelten für alle Parzellen "
-        "dieser Sitzung — einmal eingetragen, nicht pro Parzelle wieder. "
-        "Potenzial und Abbruch gehören zur Parzelle und bleiben dort."
     )

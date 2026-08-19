@@ -86,7 +86,16 @@ Python 3.11 with shapely, pandas and streamlit — no PostGIS.
 ## Single-parcel analysis
 
 Selecting a row in the hotlist opens that parcel on its own — the same script,
-one session-state key, no second page. It carries three blocks:
+one session-state key, no second page. It carries four blocks:
+
+The two halves of the screen are read against each other, so they sit side by
+side: the registers on the left, the assumptions on the right, and the result in
+a strip pinned above both that stays put while the inputs below it are edited —
+the interaction here is changing a number and reading the new total, and a total
+at the foot of a long form makes that cost a scroll each way. Fields the user
+may change sit in a tinted panel with an accent edge; block A, which cannot be
+overridden, does not. The columns stack on a narrow screen and the strip lets go
+with them.
 
 * **A · Grunddaten** — everything the pipeline already computed for this parcel,
   read-only and refetched from nothing: address, zone and utilization figure,
@@ -122,11 +131,19 @@ at this location; construction cost is a per-m² benchmark for condominium
 new-build. Both are screening values. An overridden value says so in the export,
 so a number in the document can always be traced to whose assumption it was.
 
-Revenue and construction cost are both reckoned per m² of saleable area — the
-basis the construction benchmark is published on. Mixing the two bases would
-overstate the land value by the difference between them.
+Revenue and construction cost are reckoned on **different** bases, which is the
+point of the sale-area share: the sale price sees 80% of the floor area, the
+construction cost all of it, because everything built has to be paid for while
+only the saleable part is sold. Putting both on the reduced area understates the
+construction cost and overstates the land value. The one seam left is that the
+construction benchmark is published per m² HNF and is applied here per m² GF —
+noted on the input, and one of the figures still waiting on Philipp's own
+number.
 
-* **D · Rechtsgrundlagen** — the regulations that actually govern the parcel,
+* **D · Rechtsgrundlagen** — folded away by default, like *Annahmen und
+  Quellen*: it is a reference to open once a candidate is worth reading up on,
+  not something to scroll past on every parcel. It holds the regulations that
+  actually govern the parcel,
   taken from the ÖREB extract the tool already fetches for the shortlist:
   *Rechtsvorschriften* (the zoning plan, the Erschliessungsplan, and the
   municipality's **Bau- und Nutzungsordnung**) and *Gesetzliche Grundlagen*

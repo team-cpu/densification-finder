@@ -6,7 +6,7 @@ Residual land value for a single parcel — the arithmetic behind Block C.
              − Baunebenkosten
              − Abbruchkosten des bestehenden Gebäudes
              − Finanzierungskosten
-             − Gewinn / Risiko
+             − Reserve / Unvorhergesehenes
 
 Kept out of the interface for two reasons. It has to produce exactly one
 calculation path that both the screen and the exported PDF render, so the
@@ -58,11 +58,17 @@ BENCHMARKS = {
     ),
     "construction_chf_m2": Benchmark(
         2600,
-        "CHF/m² Verkaufsfläche",
+        # Reckoned on the whole floor area, so the label has to say so: the
+        # benchmark is quoted per m² HNF, which is the narrower measure. Left
+        # on the published figure rather than adjusted upward by a factor
+        # nobody has confirmed — it is one of the numbers still marked for
+        # Philipp, and this is the note he needs to see when he names his own.
+        "CHF/m² Geschossfläche",
         "AKTIVA AG Neubau-Benchmarks nach Schätzerhandbuch / Wüest Partner: "
         "Eigentum CHF 2'600/m² HNF, Renditeobjekt CHF 2'050/m² HNF (BKP 2)",
         url="https://aktiva.swiss/immobilien-benchmarks/",
-        note="ohne Einstellhalle, dort rund CHF 40'000 pro Platz",
+        note="ohne Einstellhalle, dort rund CHF 40'000 pro Platz; Quelle je m² HNF, "
+             "hier auf die ganze Geschossfläche gerechnet",
     ),
     "demolition_chf_m2": Benchmark(
         150,

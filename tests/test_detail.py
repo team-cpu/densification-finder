@@ -42,13 +42,14 @@ class DetailViewTest(unittest.TestCase):
         self.assertFalse(app.exception)
         return app
 
-    def test_all_three_blocks_render_for_a_selected_parcel(self):
+    def test_all_four_blocks_render_for_a_selected_parcel(self):
         app = self.open_detail()
         self.assertEqual(
             [s.value for s in app.subheader],
-            ["A · Grunddaten", "B · Potenzial", "C · Residualwertrechnung",
-             "D · Rechtsgrundlagen"],
+            ["A · Grunddaten", "B · Potenzial", "C · Residualwertrechnung"],
         )
+        # D is the fourth block, folded away rather than dropped.
+        self.assertIn("D · Rechtsgrundlagen", [e.label for e in app.expander])
         labels = {n.label for n in app.number_input}
         self.assertIn("Potenzial (m² GF)", labels)
         self.assertIn("Verkaufspreis (CHF/m²)", labels)
@@ -57,6 +58,47 @@ class DetailViewTest(unittest.TestCase):
         # Block B is pre-filled from the pipeline, not typed in again.
         potential = next(n for n in app.number_input if n.label == "Potenzial (m² GF)")
         self.assertAlmostEqual(potential.value, self.delta, places=6)
+
+    def test_the_references_are_folded_away_and_the_sources_stay_folded(self):
+        """Philipp asked for block D to open on demand like «Annahmen und
+        Quellen», so the parcel a user is judging is not pushed off the screen
+        by a list of documents they will read once."""
+        app = self.open_detail()
+        # `expanded` lives on the block proto; the test helper exposes the
+        # label but not the state.
+        folded = {e.label: e.proto.expanded for e in app.expander}
+        self.assertFalse(folded["D · Rechtsgrundlagen"])
+        self.assertFalse(folded["Annahmen und Quellen"])
+
+    def test_the_result_is_written_above_the_form_that_produces_it(self):
+        """The pinned strip only stays on screen if it is drawn before the
+        inputs: `position: sticky` cannot lift an element up the page. The
+        container is claimed early and filled at the end, and this is the check
+        that the claim did not move."""
+        app = self.open_detail()
+        order = [
+            (element.type, getattr(element, "label", ""))
+            for element in app.main
+        ]
+        result = order.index(("metric", "Residualer Landwert"))
+        first_input = min(
+            i for i, (kind, _) in enumerate(order) if kind == "number_input"
+        )
+        self.assertLess(result, first_input)
+
+    def test_the_caveat_travels_with_the_number(self):
+        """It used to sit under the export button, three screens below the
+        figure it qualifies."""
+        app = self.open_detail()
+        captions = [c.value for c in app.caption]
+        self.assertIn(detail.PINNED_CAVEAT, captions)
+        self.assertIn(detail.DISCLAIMER, captions)
+        # …and ahead of the export button, not after it.
+        order = [(e.type, getattr(e, "label", "")) for e in app.main]
+        self.assertLess(
+            max(i for i, (kind, _) in enumerate(order) if kind == "caption"),
+            order.index(("download_button", "Als PDF exportieren")),
+        )
 
     def test_each_step_carries_the_formula_that_produced_it(self):
         """Philipp asked for the reasoning to be visible on hover, and for the
