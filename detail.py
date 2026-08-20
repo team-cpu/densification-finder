@@ -378,6 +378,13 @@ PAGE_CSS = """
      an earlier pass only ever overrode the bottom one — so the data sheet grew
      column separators and an outer box that the design never had. A data sheet
      is a list of rows, not a grid. */
+  /* A markdown table is not a table without a header row, so `_facts` emits an
+     empty one — and Streamlit renders it: 13px of nothing with a rule above and
+     a rule below, which is the doubled line at the top of every data sheet
+     here. None of these tables has a header worth showing; they are label/value
+     lists. Do not delete this without giving `_facts` a real header. */
+  [class*="st-key-facts_"] table thead { display:none; }
+
   [class*="st-key-facts_"] table { width:100%; }
   [class*="st-key-facts_"] table td, [class*="st-key-facts_"] table th {
       border-left:0; border-right:0; }
