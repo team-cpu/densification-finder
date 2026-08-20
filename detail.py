@@ -229,6 +229,30 @@ def _edict_rows(edicts):
     return rows
 
 
+def _regulation_block(own, own_note, news_error):
+    """The one part of block E that belongs on paper.
+
+    Only the parcel's own regulation: the canton-wide change list is news rather
+    than a fact about this parcel, and 227 rows would bury a one-page data sheet.
+    A printed analysis that does not say which edition of the building
+    regulation it assumed cannot be checked a year later, which is why the
+    not-found and could-not-ask cases print a line of their own instead of the
+    block quietly disappearing.
+    """
+    if news_error:
+        return ("Stand der Rechtsvorschrift",
+                [("Nicht abrufbar", f"OEREBlex antwortete nicht: {news_error}")])
+    if not own:
+        return ("Stand der Rechtsvorschrift",
+                [("Rechtsvorschrift", "in OEREBlex keine gültige Vorschrift für "
+                                      "diese Gemeinde verzeichnet")])
+    rows = [(own.label or "Rechtsvorschrift",
+             " ".join(filter(None, [f"in Kraft seit {own.when}", own.document])))]
+    if own_note:
+        rows.append(("Hinweis", own_note))
+    return ("Stand der Rechtsvorschrift", rows)
+
+
 def _links(row):
     parts = [
         f"[AGIS-Karte]({L.agis_link(row['e'], row['n'])})",
@@ -824,6 +848,12 @@ def page(parcels, cache, price_of, news=None):
     # is short enough to take in at a glance.
     st.subheader("E · Neueste Änderungen")
     edicts, news_error = news if news else ([], "")
+    # Looked up once. The panel and the exported sheet print the same sentence,
+    # and two calls could answer differently the day the join changes.
+    own, own_note = (
+        (None, "") if news_error
+        else R.for_municipality(edicts, _text(row["municipality"]), int(row["bfs"]))
+    )
     with st.container(key="facts_e"):
         if news_error:
             # Never a blank panel: an empty change list reads as "nothing has
@@ -834,8 +864,6 @@ def page(parcels, cache, price_of, news=None):
                 "nicht aus dieser Abfrage."
             )
         else:
-            own, note = R.for_municipality(
-                edicts, _text(row["municipality"]), int(row["bfs"]))
             if own:
                 line = f"**{own.label}** in Kraft seit **{own.when}**"
                 if own.document:
@@ -846,8 +874,8 @@ def page(parcels, cache, price_of, news=None):
                     f"{row['municipality']}: in OEREBlex keine gültige "
                     "Rechtsvorschrift verzeichnet."
                 )
-            if note:
-                st.caption(note)
+            if own_note:
+                st.caption(own_note)
             if edicts:
                 st.markdown("**Im Kanton zuletzt in Kraft getreten**")
                 st.markdown(_facts(_edict_rows(edicts[:3])))
@@ -891,6 +919,13 @@ def page(parcels, cache, price_of, news=None):
                 )
                 for doc in entries
             ]))
+    # Only the parcel's own half of block E reaches the paper. The canton-wide
+    # change list is news, not a fact about this parcel, and 227 rows would bury
+    # a one-page data sheet. What belongs here is the date the sheet was
+    # computed under: a printed analysis that does not say which edition of the
+    # building regulation it assumed cannot be checked later.
+    blocks.append(_regulation_block(own, own_note, news_error))
+
     document = report.build(
         title=address,
         subtitle=(

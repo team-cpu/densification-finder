@@ -1,3 +1,5 @@
+import datetime
+import io
 import os
 import shutil
 import sqlite3
@@ -560,3 +562,52 @@ class DataSheetTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RegulationOnPaperTest(unittest.TestCase):
+    """The in-force date has to survive onto the exported sheet, in every state
+    the lookup can be in. A data sheet that does not say which edition of the
+    building regulation it assumed cannot be checked a year later."""
+
+    def edict(self, doc="https://oereblex.ag.ch/api/attachments/99"):
+        return regulations.Edict(
+            municipality="Möhlin", title="Bau- und Nutzungsordnung",
+            abbreviation="BNO", in_force=datetime.date(2023, 12, 13),
+            syst_nr="4254", document=doc)
+
+    def test_the_date_and_the_document_are_on_the_row(self):
+        heading, rows = detail._regulation_block(self.edict(), "", "")
+        self.assertEqual(heading, "Stand der Rechtsvorschrift")
+        self.assertEqual(rows[0][0], "BNO")
+        self.assertIn("in Kraft seit 13.12.2023", rows[0][1])
+        self.assertIn("oereblex.ag.ch/api/attachments/99", rows[0][1])
+
+    def test_a_number_mismatch_is_printed_too(self):
+        _, rows = detail._regulation_block(self.edict(), "4196 vs 4194", "")
+        self.assertEqual(rows[1], ("Hinweis", "4196 vs 4194"))
+
+    def test_the_block_never_silently_disappears(self):
+        """Not found and could-not-ask are different answers, and neither is
+        'the regulation is current'."""
+        _, missing = detail._regulation_block(None, "", "")
+        self.assertIn("keine gültige Vorschrift", missing[0][1])
+        _, broken = detail._regulation_block(None, "", "URLError: no route")
+        self.assertIn("URLError: no route", broken[0][1])
+        self.assertIn("Nicht abrufbar", broken[0][0])
+
+    def test_it_reaches_the_printed_page(self):
+        """Through reportlab, not just into the list handed to it."""
+        pdf = report.build(
+            title="Test", subtitle="Test",
+            blocks=[detail._regulation_block(self.edict(), "", "")],
+            steps=E.residual(
+                potential_gf=100.0, sale_area_pct=80.0, sale_price_chf_m2=8000.0,
+                construction_chf_m2=3000.0, ancillary_pct=15.0, existing_gf=0.0,
+                demolition_chf_m2=150.0, financing_pct=3.0, reserve_pct=15.0,
+            ),
+            notes=[],
+        )
+        from pypdf import PdfReader
+        text = " ".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(pdf)).pages)
+        self.assertIn("Stand der Rechtsvorschrift", text)
+        self.assertIn("13.12.2023", text)

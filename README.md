@@ -194,10 +194,15 @@ Philipp's own rate settles it.
   in consultation appear only in the Amtsblatt, which forbids automated access
   (`NEWSFEED.md`).
 
-**Als PDF exportieren**, top right beside the back link, writes all four
-blocks and the whole calculation path
+**Als PDF exportieren**, top right beside the back link, writes blocks A–D, the
+whole calculation path, and the parcel's own regulation with its in-force date
 to a data sheet — one page, two once several assumptions carry an overridden
-value and its source.
+value and its source. Only that one line of block E goes on the paper: the
+canton-wide change list is news rather than a fact about this parcel, and 227
+rows would bury the sheet. A printed analysis that does not say which edition of
+the building regulation it assumed cannot be checked a year later, which is why
+the not-found and could-not-ask cases print a line of their own rather than the
+block quietly disappearing.
 
 Edits live in the session and are gone on reload; persisting them across days
 needs a table, which the brief keeps as a separate task. They are split by whose
