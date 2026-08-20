@@ -86,7 +86,7 @@ Python 3.11 with shapely, pandas and streamlit — no PostGIS.
 ## Single-parcel analysis
 
 Selecting a row in the hotlist opens that parcel on its own — the same script,
-one session-state key, no second page. It carries four blocks:
+one session-state key, no second page. It carries five blocks:
 
 The two halves of the screen are read against each other, so they sit side by
 side in equal columns: the registers on the left, the assumptions on the right,
@@ -172,6 +172,27 @@ Philipp's own rate settles it.
   This needs no name matching: the cadastre names the documents for *this*
   EGRID, and the BNO's official number is the municipality's BFS number. One
   request answers both "is this parcel excluded" and "which rules apply".
+* **E · Neueste Änderungen** — what block D cannot say: *since when*. The ÖREB
+  extract marks each document `inForce` and carries no date. `oereblex.ag.ch` —
+  the same platform block D's links point into — answers that for the whole
+  canton in one 76 KB request, so the panel opens with this parcel's own
+  regulation and its in-force date, then the three most recent changes anywhere
+  in Aargau, with the remaining ~224 folded away. Fetched once every twelve
+  hours; one to two municipalities put a new BNO in force per month.
+
+  The join is **by municipality name, never by number**. `syst_nr` looks like
+  the BFS number and equals it in 162 of our 163 municipalities — Dintikon is
+  4196 in OEREBlex against BFS 4194 in the building register. Keying on it would
+  have attached a neighbour's building regulation to those parcels. Names match
+  on all 163; the number is a cross-check, and a disagreement is printed rather
+  than resolved silently.
+
+  A failed fetch says so, with the reason. An empty change list would read as
+  "nothing has changed lately", which is the opposite of "the canton did not
+  answer" — and block D is unaffected either way, since it comes from the
+  parcel's own extract. The panel records what is **in force**; revisions still
+  in consultation appear only in the Amtsblatt, which forbids automated access
+  (`NEWSFEED.md`).
 
 **Als PDF exportieren**, top right beside the back link, writes all four
 blocks and the whole calculation path

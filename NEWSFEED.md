@@ -158,9 +158,19 @@ rules, and the parcel should say so. **Today that count is zero** — every curr
 BNO predates the extract — which is the right answer and proves the check rather
 than making it look decorative.
 
-**Stage 3 — a canton-wide "was ist neu" panel.** The same table, sorted by
-`inaction_date`: the 9 municipalities that changed their BNO in 2026 and when.
-That is also the signal for when a full recompute is worth running.
+**Stage 3 — a canton-wide "was ist neu" panel.** ~~The same table, sorted by
+`inaction_date`.~~ **Done 2026-08-20**, and it carried Stage 1 with it: block E
+sits under block D and opens with the parcel's own regulation and its in-force
+date — the thing the ÖREB extract never says — then the three most recent
+changes in the canton, the rest folded. `regulations.py` holds the fetch, the
+parse and the name join; the interface holds none of it. Re-measured against the
+live feed on the day: 227 edicts in force, 192 of them in municipalities this
+tool has parcels for, all 163 matched by name, and Dintikon still 4196 against
+BFS 4194.
+
+Still open from this stage: the panel is per-parcel, so the canton-wide list is
+the same three rows on every parcel. A list view of it — sorted by date, as the
+signal for when a full recompute is worth running — has no home yet.
 
 **Stage 4, only if Philipp wants the early warning** — an Amtsblatt
 Suchabonnement on `Bau- und Nutzungsordnung` and `Raumplanung`, delivered to his

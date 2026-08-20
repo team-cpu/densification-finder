@@ -30,6 +30,7 @@ import formatting as F
 import land_prices as LP
 import links as L
 import oereb as O
+import regulations as REG
 
 import ingest as _ingest
 import paths
@@ -117,6 +118,21 @@ def load():
     parcels = pd.read_sql_query("SELECT * FROM parcel_results", con)
     runs = pd.read_sql_query("SELECT * FROM runs", con)
     return parcels, runs
+
+
+@st.cache_data(ttl=60 * 60 * 12)
+def load_regulation_news():
+    """OEREBlex's edict list for the whole canton, for block E.
+
+    Half a day between fetches is generous: one to two municipalities put a new
+    building regulation in force per month. Cached here rather than in
+    `regulations` so that module stays importable without Streamlit.
+
+    Eight seconds, not the module's default thirty: this runs while a parcel is
+    being opened, so a slow OEREBlex has to become a line of text on the panel
+    quickly rather than hold the whole detail view.
+    """
+    return REG.load(timeout=8)
 
 
 @st.cache_data(ttl=60)
@@ -223,7 +239,7 @@ if parcels is None or parcels.empty:
 # key decides whether this script draws the list or one parcel. Nothing about the
 # app's structure changes, and the back link is the key going away again.
 if detail.selected():
-    detail.page(parcels, read_oereb_cache(), price_of)
+    detail.page(parcels, read_oereb_cache(), price_of, load_regulation_news())
     st.stop()
 
 st.title("Verdichtungspotenzial — Kanton Aargau")

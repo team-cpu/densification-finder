@@ -10,7 +10,63 @@ from streamlit.testing.v1 import AppTest
 import detail
 import economics as E
 import paths
+import regulations
 import report
+
+
+#: A trimmed OEREBlex payload. The tests must not reach the network: a suite
+#: that needs oereblex.ag.ch to be up is a suite that fails for reasons that
+#: have nothing to do with this code, and it took the run from 5s to 44s.
+EDICTS_FIXTURE = [
+    {"name": "Möhlin", "edicts": [
+        {"id": 1, "syst_nr": "4254", "title": "Bau- und Nutzungsordnung",
+         "abbreviation": "BNO", "inaction_date": "2023-12-13",
+         "outaction_date": None, "is_active": True,
+         "main_document": {"document_path": "/api/attachments/1"}},
+        {"id": 2, "syst_nr": "4254", "title": "Bau- und Nutzungsordnung",
+         "abbreviation": "BNO", "inaction_date": "2001-01-01",
+         "outaction_date": "2023-12-12", "is_active": False,
+         "main_document": {"document_path": "/api/attachments/0"}},
+    ]},
+    {"name": "Gipf-Oberfrick", "edicts": [
+        {"id": 3, "syst_nr": "4165", "title": "Bau- und Nutzungsordnung",
+         "abbreviation": "BNO", "inaction_date": "2026-06-03",
+         "outaction_date": None, "is_active": True,
+         "main_document": {"document_path": "/api/attachments/3"}},
+    ]},
+    # OEREBlex numbers this one 4196; the building register says BFS 4194.
+    {"name": "Dintikon", "edicts": [
+        {"id": 4, "syst_nr": "4196", "title": "Bau- und Nutzungsordnung",
+         "abbreviation": "BNO", "inaction_date": "2022-05-18",
+         "outaction_date": None, "is_active": True, "main_document": {}},
+    ]},
+    {"name": "Ohnedatum", "edicts": [
+        {"id": 5, "syst_nr": "4999", "title": "Bau- und Nutzungsordnung",
+         "abbreviation": "BNO", "inaction_date": None,
+         "outaction_date": None, "is_active": True, "main_document": {}},
+    ]},
+]
+
+
+def stub_regulations(case, municipality=None, bfs=None):
+    """Point `regulations.load` at the fixture for the duration of one test.
+
+    `municipality` adds an entry for the parcel under test, so the panel's own
+    first line — "this parcel's regulation, in force since" — is exercised
+    rather than falling through to the not-listed branch. Left out, that branch
+    is what renders, which is also worth being able to reach.
+    """
+    towns = list(EDICTS_FIXTURE)
+    if municipality:
+        towns = towns + [{"name": municipality, "edicts": [
+            {"id": 99, "syst_nr": str(bfs or ""), "title": "Bau- und Nutzungsordnung",
+             "abbreviation": "BNO", "inaction_date": "2024-09-01",
+             "outaction_date": None, "is_active": True,
+             "main_document": {"document_path": "/api/attachments/99"}},
+        ]}]
+    real = regulations.load
+    regulations.load = lambda timeout=30: (regulations.parse(towns), "")
+    case.addCleanup(lambda: setattr(regulations, "load", real))
 
 
 class DetailViewTest(unittest.TestCase):
@@ -25,8 +81,9 @@ class DetailViewTest(unittest.TestCase):
         st.cache_data.clear()
 
         with sqlite3.connect(self.database) as connection:
-            self.bfs, self.parcel, self.delta, self.area = connection.execute(
-                "SELECT bfs, parcel, delta, area FROM parcel_results "
+            (self.bfs, self.parcel, self.delta, self.area,
+             self.municipality) = connection.execute(
+                "SELECT bfs, parcel, delta, area, municipality FROM parcel_results "
                 "ORDER BY delta DESC LIMIT 1"
             ).fetchone()
         self.pid = f"{self.bfs}:{self.parcel}"
@@ -36,6 +93,8 @@ class DetailViewTest(unittest.TestCase):
         self.tempdir.cleanup()
 
     def open_detail(self):
+        stub_regulations(self, getattr(self, "municipality", None),
+                         getattr(self, "bfs", None))
         app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=30)
         app.session_state[detail.SELECTED] = self.pid
         app.run()
@@ -46,7 +105,8 @@ class DetailViewTest(unittest.TestCase):
         app = self.open_detail()
         self.assertEqual(
             [s.value for s in app.subheader],
-            ["A · Grunddaten", "B · Potenzial", "C · Residualwertrechnung"],
+            ["A · Grunddaten", "B · Potenzial", "C · Residualwertrechnung",
+             "E · Neueste Änderungen"],
         )
         # D is the fourth block, folded away rather than dropped.
         self.assertIn("D · Rechtsgrundlagen", [e.label for e in app.expander])
@@ -150,6 +210,39 @@ class DetailViewTest(unittest.TestCase):
             [e.label for column in app.columns for e in column.expander],
         )
 
+    def test_the_change_list_says_when_it_could_not_be_fetched(self):
+        """The dangerous failure mode for this panel is the silent one: an empty
+        change list reads as "nothing has changed lately", which is the opposite
+        of "the canton did not answer". Block D has to be unaffected — it comes
+        out of the parcel's own ÖREB extract, not this request."""
+        real = regulations.load
+        regulations.load = lambda timeout=30: ([], "URLError: [Errno 8] nodename nor servname provided")
+        self.addCleanup(lambda: setattr(regulations, "load", real))
+        st.cache_data.clear()
+
+        app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=30)
+        app.session_state[detail.SELECTED] = self.pid
+        app.run()
+        self.assertFalse(app.exception)
+
+        captions = " ".join(c.value for c in app.caption)
+        self.assertIn("nicht abrufbar", captions)
+        self.assertIn("nodename nor servname", captions)
+        # …and the page is otherwise whole.
+        self.assertIn("E · Neueste Änderungen", [s.value for s in app.subheader])
+        self.assertIn("D · Rechtsgrundlagen", [e.label for e in app.expander])
+        self.assertTrue(any(m.label == "Residualer Landwert" for m in app.metric))
+
+    def test_the_parcel_carries_its_own_regulation_date(self):
+        """What block D cannot say: since when. It is the first line of E, above
+        the canton-wide list, because it is the only line about this parcel."""
+        app = self.open_detail()
+        body = " ".join(m.value for m in app.markdown)
+        self.assertIn("in Kraft seit", body)
+        # three rows on show, the remainder folded away
+        self.assertTrue(any(e.label.startswith("Alle ") and "Änderungen" in e.label
+                            for e in app.expander))
+
     def test_each_step_carries_the_formula_that_produced_it(self):
         """Philipp asked for the reasoning to be visible on hover, and for the
         tooltip not to be a second copy that can go stale. It is rendered from
@@ -242,6 +335,7 @@ class DetailViewTest(unittest.TestCase):
 
     def test_a_selection_that_no_longer_exists_says_so(self):
         """A recompute can drop a parcel out of the table while it is open."""
+        stub_regulations(self)
         app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=30)
         app.session_state[detail.SELECTED] = "9999:12345"
         app.run()
@@ -285,6 +379,8 @@ class DetailEdgeCaseTest(unittest.TestCase):
             con.execute(sql, args)
 
     def open_detail(self):
+        stub_regulations(self, getattr(self, "municipality", None),
+                         getattr(self, "bfs", None))
         app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=30)
         app.session_state[detail.SELECTED] = self.pid
         app.run()

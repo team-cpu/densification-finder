@@ -25,6 +25,7 @@ import pandas as pd
 import streamlit as st
 
 import economics as E
+import regulations as R
 import formatting as F
 import links as L
 import report
@@ -215,6 +216,19 @@ def _base_block(row, cache, price_ref, extract=None):
     return rows
 
 
+def _edict_rows(edicts):
+    """One row per regulation: when it came into force, and which municipality's
+    it is. The date leads because the list is a chronology — what changed most
+    recently is the question the panel exists to answer."""
+    rows = []
+    for e in edicts:
+        what = f"{e.municipality} · {e.label}"
+        if e.document:
+            what += f" — [Dokument]({e.document})"
+        rows.append((e.when, what))
+    return rows
+
+
 def _links(row):
     parts = [
         f"[AGIS-Karte]({L.agis_link(row['e'], row['n'])})",
@@ -340,18 +354,21 @@ PAGE_CSS = """
      an earlier pass only ever overrode the bottom one — so the data sheet grew
      column separators and an outer box that the design never had. A data sheet
      is a list of rows, not a grid. */
-  .st-key-facts_a table { width:100%; }
-  .st-key-facts_a table td, .st-key-facts_a table th {
+  [class*="st-key-facts_"] table { width:100%; }
+  [class*="st-key-facts_"] table td, [class*="st-key-facts_"] table th {
       border-left:0; border-right:0; }
-  .st-key-facts_a td, .st-key-facts_a th { overflow-wrap:break-word; }
-  .st-key-facts_a [data-testid="stMarkdownContainer"] { overflow-x:auto; }
+  [class*="st-key-facts_"] td, [class*="st-key-facts_"] th {
+      overflow-wrap:break-word; }
+  [class*="st-key-facts_"] [data-testid="stMarkdownContainer"] {
+      overflow-x:auto; }
 
   /* Below about a thousand pixels the halves are too narrow for
      "Denkmal-/Inventarstatus" to fit on any line, and a word that cannot fit
      takes the table over the seam with it. Hard breaking only there — on a
      desktop it would split ordinary words mid-syllable for nothing. */
   @media (max-width: 1000px) {
-    .st-key-facts_a td, .st-key-facts_a th { overflow-wrap:anywhere; }
+    [class*="st-key-facts_"] td, [class*="st-key-facts_"] th {
+        overflow-wrap:anywhere; }
   }
 </style>
 """
@@ -522,11 +539,13 @@ DISCLAIMER = (
 )
 
 
-def page(parcels, cache, price_of):
+def page(parcels, cache, price_of, news=None):
     """Render the detail view for the selected parcel.
 
     `price_of` is a callable returning the land-price reference for a row, so
-    this module does not need to know how that lookup is configured.
+    this module does not need to know how that lookup is configured. `news` is
+    the `(edicts, error)` pair from `regulations.load()`, fetched and cached by
+    the caller for the same reason.
 
     Two columns, because the two halves of this screen are read against each
     other: what the registers say about the parcel is fixed and stands on the
@@ -792,6 +811,54 @@ def page(parcels, cache, price_of):
                 + (f" vom {extract['created'][:10]}" if extract.get("created") else "")
                 + ". Die Bau- und Nutzungsordnung ist die der zuständigen Gemeinde, "
                 "so wie der Kataster sie dieser Parzelle zuordnet."
+            )
+
+    # ── Block E ─────────────────────────────────────────────────────────────
+    # What block D cannot say. The ÖREB extract names the documents that govern
+    # this parcel and marks them `inForce`, and stops — it carries no date. That
+    # date is the whole question behind "is this analysis still on the current
+    # rules", and OEREBlex answers it for the canton in one request.
+    #
+    # Three rows visible and the rest folded, rather than folded entirely: a
+    # change list nobody opens is a change list nobody reads, and the top of it
+    # is short enough to take in at a glance.
+    st.subheader("E · Neueste Änderungen")
+    edicts, news_error = news if news else ([], "")
+    with st.container(key="facts_e"):
+        if news_error:
+            # Never a blank panel: an empty change list reads as "nothing has
+            # changed lately", which is the opposite of "we could not ask".
+            st.caption(
+                f"Änderungsliste nicht abrufbar: {news_error}. Block D ist davon "
+                "unberührt — der stammt aus dem ÖREB-Auszug dieser Parzelle, "
+                "nicht aus dieser Abfrage."
+            )
+        else:
+            own, note = R.for_municipality(
+                edicts, _text(row["municipality"]), int(row["bfs"]))
+            if own:
+                line = f"**{own.label}** in Kraft seit **{own.when}**"
+                if own.document:
+                    line += f" — [Dokument]({own.document})"
+                st.markdown(f"{row['municipality']}: {line}")
+            else:
+                st.markdown(
+                    f"{row['municipality']}: in OEREBlex keine gültige "
+                    "Rechtsvorschrift verzeichnet."
+                )
+            if note:
+                st.caption(note)
+            if edicts:
+                st.markdown("**Im Kanton zuletzt in Kraft getreten**")
+                st.markdown(_facts(_edict_rows(edicts[:3])))
+                if len(edicts) > 3:
+                    with st.expander(f"Alle {len(edicts)} Änderungen"):
+                        st.markdown(_facts(_edict_rows(edicts[3:])))
+            st.caption(
+                "Quelle: oereblex.ag.ch — dieselbe Plattform, auf die die "
+                "Dokumente in Block D verlinken. Verzeichnet, was in Kraft ist; "
+                "Revisionen im Mitwirkungsverfahren stehen dort nicht und sind "
+                "nur über das Amtsblatt-Abonnement zu sehen."
             )
 
     # ── Export ──────────────────────────────────────────────────────────────
