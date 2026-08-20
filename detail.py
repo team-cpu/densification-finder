@@ -286,58 +286,48 @@ def forget(pid):
 
 #: Two things the layout has to say that the words on the page cannot.
 #:
-#: The result is pinned, because the whole interaction on this screen is
-#: changing an assumption and reading the new number: with the total at the
-#: bottom of a long form, every edit costs a scroll down and a scroll back.
-#: `top` clears the 60px Streamlit puts its own toolbar in, which the strip
-#: would otherwise slide underneath.
+#: The result sits above the split rather than under the calculation, because
+#: the interaction on this screen is changing an assumption and reading the new
+#: number, and a total at the foot of a long form makes that cost a scroll each
+#: way. It was pinned there for a while. Philipp asked for that in the first
+#: place and then asked for it back out once he had used it — a 140px bar held
+#: over the page is a lot of it. Measured before removing: the bar and every
+#: input together span 781px, so on any window taller than that the number is
+#: still on screen while the fields under it are edited. It only leaves on a
+#: short window, which is the case the pinning was worth least in anyway.
 #:
 #: And the fields the user may change sit in a tinted panel with an accent
 #: edge, while block A — which comes from the registers and cannot be
 #: overridden — does not. Without it the two halves of the screen look alike,
 #: and "where can I intervene" has to be answered by clicking.
 #:
-#: NOTHING HERE NAMES A BACKGROUND COLOUR, and that is the whole point. The
-#: first version painted the strip white and swapped to #0e1117 under
+#: NOTHING HERE NAMES A BACKGROUND COLOUR, and that is the whole point. An
+#: earlier version painted the bar white and swapped to #0e1117 under
 #: `prefers-color-scheme: dark`, on the assumption that the OS preference is
 #: what Streamlit renders. It is not: the theme can be switched in Streamlit's
-#: own Appearance menu, and then a light page carried a near-black strip with
-#: the light theme's dark text on it — unreadable, and shipped. There is no
+#: own Appearance menu, and then a light page carried a near-black bar with the
+#: light theme's dark text on it — unreadable, and shipped. There is no
 #: server-side signal to fix it with either: `st.context.theme` reports the OS
 #: preference, exactly like the media query, and `st.get_option("theme.base")`
 #: is None unless someone has pinned a theme in config.
 #:
-#: So the strip is frosted glass instead. `backdrop-filter` blurs whatever is
-#: actually behind it, and `brightness` lifts it: over a white page it clips at
-#: white, over a dark one it raises the surface a little — both read as
-#: something sitting above the page, from one unconditional rule. The neutral
-#: tint is only 6%, enough to hold an edge; at the 17% it started on, a white
-#: page carried a visibly grey box (#e5e5e6 against #ffffff — measured, and
-#: Philipp saw it). The text on top stays Streamlit's own themed text, so it is
-#: legible against its own background whichever theme is running. Nothing to
-#: keep in sync, because nothing is being guessed.
+#: So the bar derives its surface instead of declaring it. `backdrop-filter`
+#: takes whatever is behind it and `brightness` lifts it: over a white page it
+#: clips at white, over a dark one it raises a little — both read as something
+#: sitting above the page, from one unconditional rule. The neutral tint is only
+#: 6%, enough to hold an edge; at the 17% it started on, a white page carried a
+#: visibly grey box (#e5e5e6 against #ffffff — measured, and Philipp saw it).
+#: The text on top stays Streamlit's own, so it is legible against its own
+#: background whichever theme is running.
 PAGE_CSS = """
 <style>
-  /* The wrapper, not the block. Streamlit puts every block inside a layout
-     element of exactly the block's own height, and a sticky box can only
-     travel inside its parent — sticking the block itself buys six pixels and
-     then lets it scroll away. */
-  [data-testid="stLayoutWrapper"]:has(> .st-key-pinned_result) {
-      position:sticky; top:3.75rem; z-index:60; }
-
-  /* Where the columns stack, the three metrics stack with them: pinned, that
-     is most of a phone screen held back from the page. */
-  @media (max-width: 900px) {
-    [data-testid="stLayoutWrapper"]:has(> .st-key-pinned_result) {
-        position:static; }
-  }
-  .st-key-pinned_result { padding:.6rem 1rem .1rem; margin-bottom:.4rem;
+  .st-key-result_bar { padding:.6rem 1rem .1rem; margin-bottom:.4rem;
       border-radius:8px; border:1px solid rgba(128,128,128,.38);
       background:rgba(127,127,127,.06);
       -webkit-backdrop-filter:blur(30px) saturate(1.7) brightness(1.08);
       backdrop-filter:blur(30px) saturate(1.7) brightness(1.08);
       box-shadow:0 6px 20px rgba(0,0,0,.10); }
-  .st-key-pinned_result [data-testid="stMetricValue"] { font-size:1.55rem; }
+  .st-key-result_bar [data-testid="stMetricValue"] { font-size:1.55rem; }
 
   .st-key-inputs_b, .st-key-inputs_c { padding:.7rem 1rem .1rem;
       margin-bottom:.3rem; border-left:3px solid rgba(255,75,75,.55);
@@ -503,19 +493,18 @@ def _assumption_notes(used):
     return notes
 
 
-#: The caveat that has to travel with the number rather than wait at the foot
+#: The caveat that belongs with the number rather than at the foot
 #: of the page: read without it, the residual value looks like a valuation of
 #: the parcel, which is the one thing it is not. The short form rides in the
-#: pinned strip; the full one sits directly under the calculation it qualifies.
-PINNED_CAVEAT = (
+#: result bar; the full one sits directly under the calculation it qualifies.
+RESULT_CAVEAT = (
     "Bewertet nur das zusätzliche Potenzial — nicht die Parzelle und nicht "
     "das bestehende Gebäude."
 )
 
 #: The same line when the number comes out negative. One line either way, so
-#: the pinned strip keeps its height: a warning box here added 72px to a bar
-#: that sits over the page, and it did it in exactly the case where the inputs
-#: underneath most need the room — 30% of a 700px window went to the strip.
+#: bar keeps its height: a warning box here added 72px to it, and did it in
+#: exactly the case where the inputs underneath most need the room.
 NEGATIVE_CAVEAT = (
     ":red[**Negativer Residualwert** — das zusätzliche Potenzial trägt die "
     "Erstellungskosten nicht.] Bewertet ist nur dieses Potenzial, nicht die "
@@ -580,7 +569,7 @@ def page(parcels, cache, price_of):
 
     # Claimed here and written at the end: the result needs the inputs below to
     # exist before it can be computed, but it belongs above them on the page.
-    pinned = st.container(key="pinned_result")
+    result_bar = st.container(key="result_bar")
 
     # 32px between the halves, not Streamlit's 64: the gutter was the one
     # place the page had spare room, and block A is the column that wanted
@@ -737,19 +726,20 @@ def page(parcels, cache, price_of):
     # each other — the registers and the assumptions; the calculation is read on
     # its own, and it is the one thing on this page that genuinely wants width.
     #
-    # It costs nothing to put it here: what the eye follows while a number is
-    # being changed is the total, and the total is pinned at the top. Every line,
-    # not just that total, because an assumption cannot be adjusted if only the
-    # result is visible. Hovering a step name shows the expression behind it,
-    # symbols and all — read off the rule that computed the number, so the two
-    # cannot drift apart.
+    # It costs little to put it here: what the eye follows while a number is
+    # being changed is the total, and the total is at the top of the page — the
+    # bar and every input together span 781px, so both are on screen at once on
+    # any window taller than that. Every line, not just that total, because an
+    # assumption cannot be adjusted if only the result is visible. Hovering a
+    # step name shows the expression behind it, symbols and all — read off the
+    # rule that computed the number, so the two cannot drift apart.
     st.markdown(_calculation_table(steps), unsafe_allow_html=True)
     st.caption(DISCLAIMER)
 
-    # ── The pinned result ───────────────────────────────────────────────────
+    # ── The result bar ──────────────────────────────────────────────────────
     # Written last, drawn first. The warning belongs here rather than beside the
-    # table: it explains the number, and the number is what stays on screen.
-    with pinned:
+    # table: it explains the number, and this is where the number is read.
+    with result_bar:
         r1, r2, r3 = st.columns(3)
         r1.metric("Residualer Landwert", f"CHF {E.chf(land)}")
         r2.metric(
@@ -769,7 +759,7 @@ def page(parcels, cache, price_of):
                     "Screening-Vergleich, keine Bewertung."
                 ),
             )
-        st.caption(NEGATIVE_CAVEAT if land < 0 else PINNED_CAVEAT)
+        st.caption(NEGATIVE_CAVEAT if land < 0 else RESULT_CAVEAT)
 
     # ── Block D ─────────────────────────────────────────────────────────────
     # The regulations themselves, straight out of the same extract. Before this,

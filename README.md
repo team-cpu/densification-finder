@@ -90,20 +90,23 @@ one session-state key, no second page. It carries four blocks:
 
 The two halves of the screen are read against each other, so they sit side by
 side in equal columns: the registers on the left, the assumptions on the right,
-and the result in a strip pinned above both that stays put while the inputs
-below it are edited — the interaction here is changing a number and reading the
-new total, and a total at the foot of a long form makes that cost a scroll each
-way. Fields the user may change sit in a tinted panel with an accent edge; block
-A, which cannot be overridden, does not. The columns stack on a narrow screen
-and the strip lets go with them.
+and the result in a bar above both — the interaction here is changing a number
+and reading the new total, and a total at the foot of a long form makes that
+cost a scroll each way. The bar was pinned for a while and is not any more:
+Philipp asked for the pinning and then asked for it back out once he had used
+it, and it costs little — the bar and every input together span 781px, so both
+are on screen at once on any window taller than that. Fields the user may change
+sit in a tinted panel with an accent edge; block A, which cannot be overridden,
+does not. The columns stack on a narrow screen.
 
 The calculation is not in the split. It sits below both columns on the full
 width, because it does not fit in half of one: its longest line is about seventy
 characters of arithmetic, which inside the right-hand column wrapped the step
 names and pushed the table into a sideways scroll of its own. Putting it there
-costs nothing, since what the eye follows while a figure is being changed is the
-total, and the total is pinned at the top; the step-by-step is the check you
-read once. Block A is the taller of the two columns by roughly 330px at 1440,
+costs little, since what the eye follows while a figure is being changed is the
+total, and the total is at the top of the page — on screen together with every
+input on any window taller than 781px. The step-by-step is the check you read
+once. Block A is the taller of the two columns by roughly 330px at 1440,
 so the right-hand side ends in whitespace — deliberately, rather than filled
 with something that does not belong there.
 

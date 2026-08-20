@@ -71,10 +71,11 @@ class DetailViewTest(unittest.TestCase):
         self.assertFalse(folded["Annahmen und Quellen"])
 
     def test_the_result_is_written_above_the_form_that_produces_it(self):
-        """The pinned strip only stays on screen if it is drawn before the
-        inputs: `position: sticky` cannot lift an element up the page. The
-        container is claimed early and filled at the end, and this is the check
-        that the claim did not move."""
+        """The bar has to be drawn before the inputs to sit above them: the
+        container is claimed early and filled at the end, once the numbers it
+        shows exist. This is the check that the claim did not move — it is the
+        one thing keeping the total off the foot of the page now that the bar
+        no longer sticks."""
         app = self.open_detail()
         order = [
             (element.type, getattr(element, "label", ""))
@@ -92,7 +93,7 @@ class DetailViewTest(unittest.TestCase):
         between the table and the sentence that says what the number is not."""
         app = self.open_detail()
         captions = [c.value for c in app.caption]
-        self.assertIn(detail.PINNED_CAVEAT, captions)
+        self.assertIn(detail.RESULT_CAVEAT, captions)
         self.assertIn(detail.DISCLAIMER, captions)
 
         body = [getattr(e, "value", None) for e in app.main]
@@ -100,14 +101,13 @@ class DetailViewTest(unittest.TestCase):
                      if isinstance(v, str) and 'class="calc"' in v)
         self.assertEqual(body[table + 1], detail.DISCLAIMER)
 
-    def test_a_negative_result_does_not_grow_the_pinned_strip(self):
-        """The warning used to be its own block inside the strip, which added
-        72px to a bar pinned over the page — 30% of a 700px window, in the one
-        case where the inputs underneath most need the room. It is the same
-        single caption line now, whatever the sign."""
+    def test_a_negative_result_does_not_grow_the_result_bar(self):
+        """The warning used to be its own block inside the bar, which added 72px
+        to it in the one case where the inputs underneath most need the room. It
+        is the same single caption line now, whatever the sign."""
         app = self.open_detail()
         self.assertEqual(len(app.warning), 0)
-        self.assertIn(detail.PINNED_CAVEAT, [c.value for c in app.caption])
+        self.assertIn(detail.RESULT_CAVEAT, [c.value for c in app.caption])
 
         cost = next(n for n in app.number_input
                     if n.label == "Baukosten (CHF/m²)")
@@ -119,7 +119,7 @@ class DetailViewTest(unittest.TestCase):
         self.assertEqual(len(app.warning), 0)
         captions = [c.value for c in app.caption]
         self.assertIn(detail.NEGATIVE_CAVEAT, captions)
-        self.assertNotIn(detail.PINNED_CAVEAT, captions)
+        self.assertNotIn(detail.RESULT_CAVEAT, captions)
 
     def test_the_export_is_at_the_top(self):
         """Philipp asked for it in the top right corner. It is built at the end
