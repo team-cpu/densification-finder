@@ -32,9 +32,9 @@ def on_persistent_disk():
 
     Worth asking because the failure is silent: without a volume the app runs
     correctly and simply forgets every ÖREB answer on each redeploy, which looks
-    like the cadastre being slow rather than like a misconfiguration. The path
-    alone cannot tell — DENSIFICATION_DB points at /data either way — so this
-    reads the mount table.
+    like the cadastre being slow rather than like a misconfiguration. Saved leads
+    and contact progress would disappear as well. The path alone cannot tell —
+    DENSIFICATION_DB points at /data either way — so this reads the mount table.
 
     None when the question does not apply (no /proc, i.e. not on Linux).
     """

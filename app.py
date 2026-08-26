@@ -15,6 +15,7 @@ and a filter change stays instant.
     .venv/bin/streamlit run app.py
 """
 import concurrent.futures
+import hashlib
 import hmac
 import json
 import os
@@ -28,9 +29,11 @@ import detail
 import economics as EC
 import formatting as F
 import land_prices as LP
+import land_cover as LC
 import links as L
 import oereb as O
 import regulations as REG
+import workflow as WF
 
 import ingest as _ingest
 import paths
@@ -219,6 +222,7 @@ with sqlite3.connect(DB) as con:
     _ingest.schema(con)
 parcels, runs = load()
 land_price_references = load_land_prices()
+parcel_workflow = WF.load(DB)
 
 
 def price_of(row):
@@ -228,6 +232,20 @@ def price_of(row):
     return LP.resolve(
         land_price_references, row["bfs"], row["municipality"], row["zone"]
     )
+
+
+def parcel_key(row):
+    """The stable key shared by calculated results and persistent workflow."""
+    return int(row["bfs"]), str(row["parcel"])
+
+
+workflow_by_key = {
+    (int(row.bfs), str(row.parcel)): row
+    for row in parcel_workflow.itertuples(index=False)
+}
+hidden_keys = {
+    key for key, row in workflow_by_key.items() if bool(row.hidden)
+}
 
 
 if parcels is None or parcels.empty:
@@ -295,14 +313,27 @@ top_n = c5.number_input(
 #: deployment, which carries the results but not the ~600 MB of source geodata.
 _full_run = _ingest.geodata_available()
 
-c6, c7, c8 = st.columns([2, 2, 1])
+c6, c7, c8, c9, c10 = st.columns([1, 2, 2, 2, 1])
+ziffer = c6.number_input(
+    "Ziffer",
+    min_value=float(parcels["az"].min()),
+    max_value=float(parcels["az"].max()),
+    value=None,
+    step=0.1,
+    format="%g",
+    placeholder="z. B. 0.8",
+    help=(
+        "Exakter Filter für die flächengewichtete Nutzungsziffer. Leer lassen "
+        "für alle Werte; Dezimalwerte können direkt eingetippt werden."
+    ),
+)
 # The brief lists the year-built cutoff among the filter inputs. Unlike the
 # other six it is a pipeline parameter, not a display filter: the age rule runs
 # inside the cascade, where a parcel whose buildings are all certainly newer
 # never becomes a row at all. So it takes effect on the next recompute — and
 # where no recompute is possible it takes effect never, which is why the control
 # is disabled there rather than silently doing nothing.
-min_age = c8.number_input(
+min_age = c10.number_input(
     "Mindestalter (Jahre)", 0, 100, 15, 1,
     disabled=not _full_run,
     help=(
@@ -317,16 +348,26 @@ min_age = c8.number_input(
         "rechnen und mitdeployen."
     ),
 )
-hide_inventory = c6.checkbox(
+hide_inventory = c7.checkbox(
     "Inventarisierte Gebäude ausblenden", value=False,
     help="Bauinventar und Kurzinventar verbieten einen Ersatzneubau nicht, "
          "erschweren ihn aber. Geschützte Gebäude sind ohnehin ausgeschlossen.",
 )
-hide_design_plan = c7.checkbox(
+hide_design_plan = c8.checkbox(
     "Parzellen mit Gestaltungsplan ausblenden", value=False,
     help="Wo ein rechtsgültiger Gestaltungsplan gilt, kann er eigene "
          "Nutzungsziffern festlegen — die Ausnützungsziffer der Grundzone ist "
          "dort nicht zwingend massgebend.",
+)
+hide_transport = c9.checkbox(
+    "Strassen-/Bahnparzellen ausblenden",
+    value=True,
+    help=(
+        "Blendet Parzellen aus, deren Fläche gemäss amtlicher Vermessung zu "
+        f"mindestens {LC.MIN_TRANSPORT_SHARE:.0%} aus Strasse/Weg, Trottoir, "
+        "Verkehrsinsel oder Bahn besteht. Einfahrten auf normalen Grundstücken "
+        "bleiben dadurch sichtbar. Wirkt nach einer lokalen Neuberechnung."
+    ),
 )
 
 # ── filter and rank (cascade steps 1–4) ─────────────────────────────────────
@@ -334,9 +375,23 @@ def select(src):
     """A function rather than inline code because the Run button has to apply
     exactly these filters a second time, to the freshly recomputed table, before
     it knows which parcels the ÖREB step should pay for."""
-    out = src[
-        (src["delta"] >= min_delta) & (src["area"].between(area[0], area[1]))
+    # User decisions are applied before ranking, so hiding a lead pulls the next
+    # best candidate into the shortlist instead of merely leaving a blank row.
+    visible = src.loc[
+        [
+            (int(bfs), str(parcel)) not in hidden_keys
+            for bfs, parcel in zip(src["bfs"], src["parcel"])
+        ]
     ]
+    out = visible[
+        (visible["delta"] >= min_delta)
+        & (visible["area"].between(area[0], area[1]))
+    ]
+    if ziffer is not None:
+        # Stored figures are rounded to three decimals. A half-unit tolerance
+        # at the fourth decimal keeps an entered 0.8 equal to stored 0.800 while
+        # not turning this exact-value field into an undocumented range filter.
+        out = out[(out["az"] - float(ziffer)).abs() < 0.0005]
     if chosen:
         out = out[out["municipality"].isin(chosen)]
     if parcel_type == "Bebaut":
@@ -347,6 +402,13 @@ def select(src):
         out = out[out["heritage"].fillna("") == ""]
     if hide_design_plan:
         out = out[out["design_plan"] == 0]
+    if hide_transport:
+        # NULL means an older/unclassified result, not a confirmed road. Keep
+        # it visible rather than silently treating missing source data as proof.
+        out = out[
+            out["transport_share"].isna()
+            | (out["transport_share"] < LC.MIN_TRANSPORT_SHARE)
+        ]
     return rank_candidates(out, parcel_type)
 
 
@@ -484,13 +546,182 @@ st.caption(
 # nothing to the person using this, but losing the cadastre answers does.
 if paths.on_persistent_disk() is False:
     st.warning(
-        "Kein persistenter Speicher eingebunden — abgefragte ÖREB-Auszüge gehen "
-        "bei jedem Deployment verloren und müssen neu abgefragt werden. "
+        "Kein persistenter Speicher eingebunden — ÖREB-Auszüge, Merkliste und "
+        "Kontaktstatus gehen bei jedem Deployment verloren. "
         "(Railway: Volume auf /data mounten.)"
     )
 
+
+def workflow_parcels(field):
+    """Join saved/hidden decisions back to the current parcel facts."""
+    if parcel_workflow.empty:
+        return parcels.iloc[0:0].copy()
+    selected_state = parcel_workflow[parcel_workflow[field].fillna(0).astype(bool)]
+    if selected_state.empty:
+        return parcels.iloc[0:0].copy()
+    return selected_state.merge(
+        parcels,
+        on=["bfs", "parcel"],
+        how="inner",
+        validate="one_to_one",
+    )
+
+
+def render_workflow():
+    """Saved leads grouped by municipality, plus a recoverable hidden list."""
+    st.divider()
+    st.subheader("Merkliste & Eigentümerkontakte")
+    st.caption(
+        "Gespeicherte Parzellen sind nach Gemeinde gruppiert. Eigentümer werden "
+        "weiterhin manuell im AGIS nachgeschlagen; hier wird der Kontaktstatus "
+        "pro Parzelle festgehalten."
+    )
+
+    saved_leads = workflow_parcels("saved")
+    if saved_leads.empty:
+        st.info("Noch keine Parzellen gespeichert.")
+    else:
+        status_from_label = {
+            label: status for status, label in WF.CONTACT_STATUS_LABELS.items()
+        }
+        saved_leads = saved_leads.sort_values(
+            ["municipality", "parcel"], kind="stable"
+        )
+        for (bfs, municipality), group in saved_leads.groupby(
+            ["bfs", "municipality"], sort=False
+        ):
+            with st.expander(f"{municipality} · {len(group)} Parzelle(n)"):
+                contact_codes = group["contact_status"].fillna(
+                    WF.DEFAULT_CONTACT_STATUS
+                )
+                crm = pd.DataFrame(
+                    {
+                        "_bfs": group["bfs"].astype(int),
+                        "_parcel": group["parcel"].astype(str),
+                        "Parzelle": group["parcel"].astype(str),
+                        "Adresse": group["address"].fillna("—").replace("", "—"),
+                        "Zone": group["zone"].fillna("—").replace("", "—"),
+                        "Ziffer": group["az"],
+                        "Potenzial m²": group["delta"].round(0),
+                        "Eigentümer / Kontakt": group["owner_name"].fillna(""),
+                        "Kontaktstatus": contact_codes.map(
+                            WF.CONTACT_STATUS_LABELS
+                        ).fillna(
+                            WF.CONTACT_STATUS_LABELS[WF.DEFAULT_CONTACT_STATUS]
+                        ),
+                        "AGIS": group.apply(
+                            lambda row: L.agis_link(row["e"], row["n"]), axis=1
+                        ),
+                        "Von Merkliste entfernen": False,
+                    }
+                )
+                with st.form(f"crm_form_{int(bfs)}"):
+                    edited = st.data_editor(
+                        crm,
+                        key=f"crm_editor_{int(bfs)}",
+                        width="stretch",
+                        hide_index=True,
+                        column_order=(
+                            "Parzelle",
+                            "Adresse",
+                            "Zone",
+                            "Ziffer",
+                            "Potenzial m²",
+                            "Eigentümer / Kontakt",
+                            "Kontaktstatus",
+                            "AGIS",
+                            "Von Merkliste entfernen",
+                        ),
+                        disabled=(
+                            "_bfs",
+                            "_parcel",
+                            "Parzelle",
+                            "Adresse",
+                            "Zone",
+                            "Ziffer",
+                            "Potenzial m²",
+                            "AGIS",
+                        ),
+                        column_config={
+                            "Ziffer": st.column_config.NumberColumn(format="%g"),
+                            "Potenzial m²": st.column_config.NumberColumn(
+                                format="%.0f"
+                            ),
+                            "Kontaktstatus": st.column_config.SelectboxColumn(
+                                options=list(WF.CONTACT_STATUS_LABELS.values()),
+                                required=True,
+                                width="medium",
+                            ),
+                            "Eigentümer / Kontakt": st.column_config.TextColumn(
+                                "Eigentümer / Kontakt",
+                                max_chars=200,
+                                width="medium",
+                                help="Manuell aus dem AGIS-Eigentumsnachweis eintragen.",
+                            ),
+                            "AGIS": st.column_config.LinkColumn(
+                                display_text="Karte", width="small"
+                            ),
+                            "Von Merkliste entfernen": st.column_config.CheckboxColumn(
+                                width="small"
+                            ),
+                        },
+                    )
+                    save_crm = st.form_submit_button("Änderungen speichern")
+
+                if save_crm:
+                    by_status = {status: [] for status in WF.CONTACT_STATUS_LABELS}
+                    by_owner = {}
+                    remove_keys = []
+                    for _, row in edited.iterrows():
+                        key = int(row["_bfs"]), str(row["_parcel"])
+                        status_code = status_from_label[str(row["Kontaktstatus"])]
+                        by_status[status_code].append(key)
+                        owner_name = str(row["Eigentümer / Kontakt"] or "")
+                        by_owner.setdefault(owner_name, []).append(key)
+                        if bool(row["Von Merkliste entfernen"]):
+                            remove_keys.append(key)
+                    for status_code, keys in by_status.items():
+                        WF.set_contact_status(keys, status_code, DB)
+                    for owner_name, keys in by_owner.items():
+                        WF.set_owner_name(keys, owner_name, DB)
+                    WF.set_saved(remove_keys, False, DB)
+                    st.toast("Kontaktstatus und Merkliste gespeichert.")
+                    st.rerun()
+
+    hidden_leads = workflow_parcels("hidden")
+    if not hidden_leads.empty:
+        hidden_options = [
+            parcel_key(row) for _, row in hidden_leads.sort_values(
+                ["municipality", "parcel"], kind="stable"
+            ).iterrows()
+        ]
+        hidden_labels = {
+            parcel_key(row): (
+                f"{row['municipality']} · Parzelle {row['parcel']} · "
+                f"{row['address'] if pd.notna(row['address']) and row['address'] else 'ohne Adresse'}"
+            )
+            for _, row in hidden_leads.iterrows()
+        }
+        with st.expander(f"Ausgeblendete Parzellen · {len(hidden_leads)}"):
+            restore = st.multiselect(
+                "Wieder in der Ergebnisliste anzeigen",
+                hidden_options,
+                format_func=lambda key: hidden_labels[key],
+                key="restore_hidden_selection",
+            )
+            if st.button(
+                "Auswahl wieder anzeigen",
+                key="restore_hidden_button",
+                disabled=not restore,
+            ):
+                WF.set_hidden(restore, False, DB)
+                st.toast(f"{len(restore)} Parzelle(n) wieder eingeblendet.")
+                st.rerun()
+
+
 if final.empty:
     st.info("Keine Parzelle erfüllt diese Kriterien.")
+    render_workflow()
     st.stop()
 
 # ── table ───────────────────────────────────────────────────────────────────
@@ -537,6 +768,21 @@ final["_land_price_source"] = final["_land_price_ref"].map(
     lambda ref: ref.source_url or None if ref else None
 )
 
+
+def saved_label(row):
+    workflow_row = workflow_by_key.get(parcel_key(row))
+    return "Gespeichert" if workflow_row is not None and workflow_row.saved else "—"
+
+
+def contact_label(row):
+    workflow_row = workflow_by_key.get(parcel_key(row))
+    if workflow_row is None or not workflow_row.saved:
+        return "—"
+    return WF.CONTACT_STATUS_LABELS.get(
+        workflow_row.contact_status,
+        WF.CONTACT_STATUS_LABELS[WF.DEFAULT_CONTACT_STATUS],
+    )
+
 view = pd.DataFrame(
     {
         "Adresse": final["address"].fillna("—").replace("", "—"),
@@ -562,6 +808,8 @@ view = pd.DataFrame(
         "Preisebene": final["_land_price_scope"],
         "Preisstand": final["_land_price_as_of"],
         "Preisquelle": final["_land_price_source"],
+        "Merkliste": final.apply(saved_label, axis=1),
+        "Kontaktstatus": final.apply(contact_label, axis=1),
         "Status": final.apply(status, axis=1),
         # The links answer different questions. AGIS is where ownership gets
         # looked up — the manual step the brief deliberately keeps manual —
@@ -590,15 +838,23 @@ view = pd.DataFrame(
     }
 )
 
-# Selecting a row is how a parcel opens. Streamlit cannot put a callback inside
-# a dataframe cell, so the "Analysieren" control the brief describes is the
-# selection column the table grows here — one click, in the row itself, next to
-# the links it sits with in the brief.
+# Multi-row selection supports saving and dismissing several leads at once. An
+# explicit action opens the single-parcel analysis because a row click can no
+# longer mean both "select this batch" and "navigate away immediately".
+#
+# Streamlit stores selected ROW POSITIONS under the widget key. Filtering or
+# hiding rows changes which parcels those positions mean, so the key includes
+# the ordered cadastral IDs. A changed table gets a fresh selection instead of
+# silently applying an old selection to different leads.
+table_identity = "|".join(
+    f"{int(row['bfs'])}:{row['parcel']}" for _, row in final.iterrows()
+)
+hotlist_key = "hotlist_" + hashlib.sha256(table_identity.encode()).hexdigest()[:16]
 event = st.dataframe(
     view,
-    key="hotlist",
+    key=hotlist_key,
     on_select="rerun",
-    selection_mode="single-row",
+    selection_mode="multi-row",
     width="stretch",
     # Tall enough that the full list is one glance rather than a scroll; the
     # brief asks for a top 20 and 20 rows is the default.
@@ -653,6 +909,8 @@ event = st.dataframe(
         "Zone": st.column_config.TextColumn(width="medium"),
         # Truncation here is acceptable: the deciding word comes first.
         "Status": st.column_config.TextColumn(width="medium"),
+        "Merkliste": st.column_config.TextColumn(width="small"),
+        "Kontaktstatus": st.column_config.TextColumn(width="medium"),
         # Header shortened to buy that width back. "≈" plus the tooltip and the
         # caption below carry the assumption the brief asks to be explicit about.
         f"≈ Whg. (à {SQM_PER_UNIT} m²)": st.column_config.NumberColumn(
@@ -664,17 +922,53 @@ event = st.dataframe(
     },
 )
 
-st.caption(
-    "Zeile anwählen öffnet die Einzelanalyse: Grunddaten, Potenzial und "
-    "Residualwertrechnung mit eigenen Annahmen, als PDF exportierbar."
-)
-
 # `final` is what `view` was built from, in the same order, so the position the
 # table reports is the row the user pointed at.
 chosen_rows = list(event.selection["rows"]) if event and event.selection else []
-if chosen_rows:
-    detail.open_parcel(detail.parcel_id(final.iloc[chosen_rows[0]]))
+selected = final.iloc[chosen_rows] if chosen_rows else final.iloc[0:0]
+selected_keys = [parcel_key(row) for _, row in selected.iterrows()]
+
+selection_col, open_col, save_col, dismiss_col = st.columns([2, 1, 1, 1])
+selection_col.caption(
+    f"{len(selected_keys)} Parzelle(n) ausgewählt. Mehrere Zeilen können "
+    "gemeinsam gespeichert oder ausgeblendet werden."
+)
+open_selected = open_col.button(
+    "Einzelanalyse öffnen",
+    disabled=len(selected_keys) != 1,
+    width="stretch",
+)
+save_selected = save_col.button(
+    "In Merkliste speichern",
+    disabled=not selected_keys,
+    type="primary",
+    width="stretch",
+)
+dismiss_selected = dismiss_col.button(
+    "Nicht interessant",
+    disabled=not selected_keys,
+    width="stretch",
+    help="Blendet die ausgewählten Parzellen aus der Ergebnisliste aus.",
+)
+
+if save_selected:
+    WF.set_saved(selected_keys, True, DB)
+    st.toast(f"{len(selected_keys)} Parzelle(n) gespeichert.")
     st.rerun()
+if dismiss_selected:
+    WF.set_hidden(selected_keys, True, DB)
+    st.toast(f"{len(selected_keys)} Parzelle(n) ausgeblendet.")
+    st.rerun()
+if open_selected:
+    detail.open_parcel(detail.parcel_id(selected.iloc[0]))
+    st.rerun()
+
+st.caption(
+    "Eine Zeile auswählen und «Einzelanalyse öffnen» anklicken für Grunddaten, "
+    "Potenzial und Residualwertrechnung mit eigenen Annahmen, als PDF exportierbar."
+)
+
+render_workflow()
 
 if not excluded.empty:
     with st.expander(f"{len(excluded)} Parzellen durch ÖREB ausgeschlossen"):
@@ -695,7 +989,8 @@ st.caption(
     "GWR geschätzt, nicht die anrechenbare Geschossfläche — die Zahl ist eine "
     "Schätzung und eher zu tief als zu hoch. Baujahr ist das des ältesten "
     "Gebäudes auf der Parzelle, AZ der flächengewichtete Wert über alle "
-    "berührten Zonen. Eigentümerdaten werden nicht erhoben. "
+    "berührten Zonen. Eigentümerdaten werden nicht automatisch erhoben; "
+    "Namen können nach dem manuellen Nachschlagen in der Merkliste erfasst werden. "
     "«Karte» öffnet die Parzelle im AGIS-Geoportal — dort lassen sich die "
     "Eigentumsverhältnisse mit dem eigenen eGovernment-Login nachschlagen. "
     "Der ÖREB-Auszug ist der rechtsverbindliche Katasterauszug des Kantons; "

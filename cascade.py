@@ -20,6 +20,7 @@ from shapely.geometry import Polygon
 from shapely.strtree import STRtree
 
 import constraints as C
+import land_cover as LC
 import metrics as M
 from shapely import from_wkb
 
@@ -268,6 +269,12 @@ class Engine:
         parcels = load_parcels(bfs)
         zones = self._zones.get(bfs, [])
         zone_index = STRtree([z["geom"] for z in zones]) if zones else None
+        transport_surfaces = LC.load(bfs)
+        transport_index = (
+            LC.TransportSurfaceIndex(transport_surfaces)
+            if transport_surfaces is not None
+            else None
+        )
         by_egrid = {p["egrid"]: p for p in parcels if p["egrid"]}
 
         per_parcel = {}
@@ -367,6 +374,9 @@ class Engine:
                 continue
 
             address, built, use, entrance = self._describe(r)
+            transport_share = (
+                transport_index.share(g) if transport_index is not None else None
+            )
             # The AGIS map link works by simulated click: info=E,N pops the
             # parcel card at that LV95 coordinate (format from Philipp's own
             # browser, 2026-08-11 — there is no EGRID parameter). The
@@ -403,6 +413,7 @@ class Engine:
                     "area": area,
                     "buildable": buildable,
                     "share": buildable / area if area else 0.0,
+                    "transport_share": transport_share,
                     "n": r["n"],
                     "existing": r["existing"],
                     "delta": delta,

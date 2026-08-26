@@ -9,6 +9,7 @@ import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 import paths
+import workflow
 
 
 class AppRegressionTest(unittest.TestCase):
@@ -39,6 +40,8 @@ class AppRegressionTest(unittest.TestCase):
         area = app.select_slider[0]
         self.assertEqual(area.value, (300, float("inf")))
         self.assertEqual(area.options[-1], "ohne Limite")
+        self.assertEqual(app.number_input[2].label, "Ziffer")
+        self.assertIsNone(app.number_input[2].value)
 
         app.selectbox[0].select("Alle").run()
         self.assertFalse(app.exception)
@@ -51,6 +54,8 @@ class AppRegressionTest(unittest.TestCase):
         self.assertTrue(frame["Preisebene"].eq("Kanton AG").all())
         self.assertTrue(frame["Preisstand"].eq("2021 Q2").all())
         self.assertTrue(frame["≈ Landwert / Potenzial-GF"].notna().all())
+        self.assertIn("Merkliste", frame.columns)
+        self.assertIn("Kontaktstatus", frame.columns)
 
         app.number_input[1].set_value(50).run()
         self.assertFalse(app.exception)
@@ -90,6 +95,92 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(top["Gemeinde"], "Rheinfelden")
         self.assertEqual(top["Parzelle"], "574")
         self.assertGreater(top["Potenzial m² (Schätzung)"], 100_000)
+
+    def test_ziffer_filters_to_the_typed_exact_value(self):
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=30
+        ).run()
+
+        app.number_input[2].set_value(0.8).run()
+
+        self.assertFalse(app.exception)
+        frame = app.dataframe[0].value
+        self.assertGreater(len(frame), 0)
+        self.assertTrue(frame["Ziffer"].round(3).eq(0.8).all())
+
+    def test_confirmed_transport_parcel_is_hidden_by_default_and_recoverable(self):
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=30
+        ).run()
+        first = app.dataframe[0].value.iloc[0]
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "UPDATE parcel_results SET transport_share = 0.95 "
+                "WHERE municipality = ? AND parcel = ?",
+                (first["Gemeinde"], str(first["Parzelle"])),
+            )
+        st.cache_data.clear()
+
+        app.run()
+        visible = app.dataframe[0].value
+        match = (
+            (visible["Gemeinde"] == first["Gemeinde"])
+            & (visible["Parzelle"].astype(str) == str(first["Parzelle"]))
+        )
+        self.assertFalse(match.any())
+
+        transport_filter = next(
+            checkbox
+            for checkbox in app.checkbox
+            if checkbox.label == "Strassen-/Bahnparzellen ausblenden"
+        )
+        transport_filter.uncheck().run()
+        visible = app.dataframe[0].value
+        match = (
+            (visible["Gemeinde"] == first["Gemeinde"])
+            & (visible["Parzelle"].astype(str) == str(first["Parzelle"]))
+        )
+        self.assertTrue(match.any())
+
+    def test_saved_contact_state_is_shown_and_hidden_leads_leave_the_hotlist(self):
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=30
+        ).run()
+        first = app.dataframe[0].value.iloc[0]
+        # The rendered frame has a display index, so resolve the cadastral key
+        # from the same ranked source columns instead of relying on that index.
+        with sqlite3.connect(self.database) as connection:
+            parcel = connection.execute(
+                "SELECT bfs, parcel FROM parcel_results "
+                "WHERE municipality = ? AND parcel = ? LIMIT 1",
+                (first["Gemeinde"], str(first["Parzelle"])),
+            ).fetchone()
+        self.assertIsNotNone(parcel)
+        key = (int(parcel[0]), str(parcel[1]))
+
+        workflow.update(
+            [key], saved=True, contact_status="contacted", db=self.database
+        )
+        app.run()
+        self.assertFalse(app.exception)
+        shown = app.dataframe[0].value
+        match = shown[
+            (shown["Gemeinde"] == first["Gemeinde"])
+            & (shown["Parzelle"].astype(str) == str(first["Parzelle"]))
+        ]
+        self.assertEqual(match.iloc[0]["Merkliste"], "Gespeichert")
+        self.assertEqual(match.iloc[0]["Kontaktstatus"], "Kontaktiert")
+
+        workflow.set_hidden([key], True, self.database)
+        app.run()
+        self.assertFalse(app.exception)
+        visible = app.dataframe[0].value
+        self.assertFalse(
+            (
+                (visible["Gemeinde"] == first["Gemeinde"])
+                & (visible["Parzelle"].astype(str) == str(first["Parzelle"]))
+            ).any()
+        )
 
 
     def test_a_failed_cadastre_call_is_retried_rather_than_cached_forever(self):

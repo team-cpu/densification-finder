@@ -277,7 +277,10 @@ class DetailViewTest(unittest.TestCase):
         # thing: a second one appears as soon as the cadastre has excluded a
         # parcel from the shortlist, which is data, not behaviour.
         self.assertIn("Adresse", app.dataframe[0].value.columns)
-        self.assertEqual(len(app.subheader), 0)
+        self.assertEqual(
+            [heading.value for heading in app.subheader],
+            ["Merkliste & Eigentümerkontakte"],
+        )
 
     def test_editing_an_assumption_recalculates_live(self):
         """No recalculate button: the residual value has to follow the input on

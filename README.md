@@ -11,9 +11,23 @@ The existing floor area is estimated from the federal building register, not the
 *anrechenbare Geschossfläche* a planner would compute. The number is a floor,
 not a promise, and the interface says so.
 
-**No owner data is collected or scraped.** Each row deep-links to the AGIS
-geoportal, where ownership is looked up by hand with an eGovernment login. That
-step stays manual by design.
+**No owner data is automatically collected or scraped.** Each row deep-links
+to the AGIS geoportal, where ownership is looked up by hand with an eGovernment
+login. A manually entered owner/contact name and the parcel's contact status can
+then be stored in the CRM list.
+
+## Lead workflow
+
+The hotlist supports multi-row selection. Selected parcels can be saved in a
+municipality-grouped list or marked **Nicht interessant**, which removes them
+before the next shortlist is ranked. Hidden parcels remain recoverable from the
+workflow panel.
+
+Saved leads carry an optional manually entered owner/contact name and one of
+four statuses: *Noch nicht kontaktiert*, *Kontaktiert*, *Abgelehnt*, or *Termin
+vereinbart*. These decisions live in `parcel_workflow`, separate from calculated
+results, so a cascade recompute cannot erase them. On Railway they share the
+same persistent SQLite volume as the ÖREB cache.
 
 ## Running it
 
@@ -42,6 +56,14 @@ The **Grundstückstyp** filter defaults to the original built-parcel list.
 class. Parcels without an EGRID are never inferred to be vacant, and vacant
 leads are limited to harmonised residential, mixed, and centre zones. The GWR
 classification is still a screening signal, not a site inspection.
+
+**Strassen-/Bahnparzellen ausblenden** is enabled by default. It uses the
+official cadastral `LCSF` land-cover layer and hides a parcel only when at least
+60% of its area is classified as road/path, sidewalk, traffic island, or rail.
+The threshold is deliberately conservative: a normal plot with a driveway is
+not treated as transport land. Rows from an older database remain visible until
+the local cascade has classified them; missing data is never interpreted as a
+clean result.
 
 Each result links directly to AGIS, the ÖREB PDF, Google Maps, and the nearest
 available Street View panorama. Google Maps uses the parcel's representative
@@ -79,8 +101,9 @@ Recomputing from source needs `data/`, which is gitignored at ~600 MB:
 | `ka_denkmalschutzobj_*.gpkg`, `ka_bauinventarobj_*.gpkg`, `dp_kurzinventarobj_*.gpkg` | AGIS — heritage registers |
 | `gwr/*.csv` | `public.madd.bfs.admin.ch/ag.zip` — buildings, addresses, code table |
 | `parcels_*.xml` | fetched per municipality by `ingest.py` from geodienste.ch WFS |
+| `landcover_transport_*.xml` | transport classes from the official geodienste.ch AV `LCSF` WFS |
 
-Only the parcels are fetched automatically; the rest are manual downloads.
+Parcels and transport land cover are fetched automatically; the rest are manual downloads.
 Python 3.11 with shapely, pandas and streamlit — no PostGIS.
 
 ## Single-parcel analysis
@@ -204,17 +227,19 @@ the building regulation it assumed cannot be checked a year later, which is why
 the not-found and could-not-ask cases print a line of their own rather than the
 block quietly disappearing.
 
-Edits live in the session and are gone on reload; persisting them across days
-needs a table, which the brief keeps as a separate task. They are split by whose
-they are: the **economic assumptions** in block C are the user's and hold for
-every parcel in the session — a developer's construction cost does not change
-because they clicked a different row — while **potential and demolition** belong
-to the parcel and stay with it. Keeping the first group per parcel would mean
-retyping seven numbers on every lead.
+Economic edits in the detail calculation live in the session and are gone on
+reload. The lead workflow is different: saved/hidden decisions, manually entered
+owner names, and contact status persist in SQLite. Economic assumptions are split
+by whose they are: the **economic assumptions** in block C are the user's and
+hold for every parcel in the session — a developer's construction cost does not
+change because they clicked a different row — while **potential and demolition**
+belong to the parcel and stay with it for the session. Keeping the first group per
+parcel would mean retyping seven numbers on every lead.
 
 ## Layout
 
     app.py          the interface: filters, Run button, ranked table
+    workflow.py     persistent saved/hidden leads and owner-contact status
     detail.py       the single-parcel analysis view — blocks A, B, C
     economics.py    residual land value, its benchmarks and their sources
     report.py       the parcel data sheet as a PDF

@@ -57,6 +57,12 @@ class SchemaMigrationTest(unittest.TestCase):
                 error TEXT,
                 checked_at TEXT
             );
+            CREATE TABLE parcel_workflow (
+                bfs INTEGER NOT NULL,
+                parcel TEXT NOT NULL,
+                saved INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (bfs, parcel)
+            );
             INSERT INTO parcel_results
                 (bfs, municipality, parcel, e, n, area, buildings, delta)
             VALUES (4001, 'Aarau', '1', 2648000, 1249000, 500, 1, 250);
@@ -75,10 +81,17 @@ class SchemaMigrationTest(unittest.TestCase):
         run_columns = {
             row[1] for row in self.con.execute("PRAGMA table_info(runs)")
         }
+        workflow_columns = {
+            row[1] for row in self.con.execute("PRAGMA table_info(parcel_workflow)")
+        }
         self.assertTrue({name for name, _ in ingest.COLUMNS} <= parcel_columns)
         self.assertIn("sv_e", parcel_columns)
         self.assertIn("sv_n", parcel_columns)
+        self.assertIn("transport_share", parcel_columns)
         self.assertIn("reasons", run_columns)
+        self.assertTrue(
+            {name for name, _ in ingest.WORKFLOW_COLUMNS} <= workflow_columns
+        )
         self.assertEqual(
             self.con.execute(
                 "SELECT municipality, parcel, delta, sv_e, sv_n "
@@ -93,6 +106,11 @@ class SchemaMigrationTest(unittest.TestCase):
 
         count = self.con.execute("SELECT COUNT(*) FROM parcel_results").fetchone()[0]
         self.assertEqual(count, 1)
+        workflow_tables = self.con.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'parcel_workflow'"
+        ).fetchone()[0]
+        self.assertEqual(workflow_tables, 1)
 
 
 class DatabaseBootstrapTest(unittest.TestCase):

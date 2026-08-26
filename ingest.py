@@ -27,6 +27,8 @@ import urllib.parse
 import urllib.request
 
 import paths
+import land_cover as LC
+import workflow as WF
 
 HERE = paths.HERE
 DATA = paths.DATA
@@ -112,7 +114,8 @@ COLUMNS = [
     ("sv_e", "REAL"), ("sv_n", "REAL"),
     ("unconvertible", "REAL"), ("e", "REAL"), ("n", "REAL"),
     ("area", "REAL"), ("buildable", "REAL"),
-    ("zone_share", "REAL"), ("buildings", "INTEGER"), ("existing", "REAL"),
+    ("zone_share", "REAL"), ("transport_share", "REAL"),
+    ("buildings", "INTEGER"), ("existing", "REAL"),
     ("delta", "REAL"), ("heritage", "TEXT"), ("design_plan", "INTEGER"),
     ("calculated_at", "TEXT"),
 ]
@@ -135,6 +138,22 @@ OEREB_COLUMNS = [
     ("details", "TEXT"),
 ]
 
+# Kept outside ``parcel_results`` because that table is replaced whenever a
+# municipality is recomputed.  These are user decisions, not calculated parcel
+# attributes, and must survive a new data import.
+WORKFLOW_COLUMNS = [
+    ("bfs", "INTEGER NOT NULL"),
+    ("parcel", "TEXT NOT NULL"),
+    ("saved", "INTEGER NOT NULL DEFAULT 0"),
+    ("hidden", "INTEGER NOT NULL DEFAULT 0"),
+    ("owner_name", "TEXT NOT NULL DEFAULT ''"),
+    (
+        "contact_status",
+        f"TEXT NOT NULL DEFAULT '{WF.DEFAULT_CONTACT_STATUS}'",
+    ),
+    ("updated_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+]
+
 
 def _column_definitions(columns):
     return ",\n            ".join(
@@ -152,7 +171,7 @@ def _add_missing_columns(con, table, columns):
             # next ingestion fills them.
             compatible = declaration.replace(" NOT NULL", "").replace(
                 " PRIMARY KEY", ""
-            )
+            ).replace(" DEFAULT CURRENT_TIMESTAMP", "")
             con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {compatible}")
 
 
@@ -160,6 +179,8 @@ def schema(con):
     parcel_cols = _column_definitions(COLUMNS)
     run_cols = _column_definitions(RUN_COLUMNS)
     oereb_cols = _column_definitions(OEREB_COLUMNS)
+    workflow_cols = _column_definitions(WORKFLOW_COLUMNS)
+    statuses = ", ".join(f"'{status}'" for status in WF.CONTACT_STATUS_LABELS)
     con.executescript(
         f"""
         CREATE TABLE IF NOT EXISTS parcel_results (
@@ -179,15 +200,32 @@ def schema(con):
         CREATE TABLE IF NOT EXISTS oereb_cache (
             {oereb_cols}
         );
+        -- Saved leads, hidden leads and owner-contact progress. Deliberately no
+        -- foreign key: parcel_results is deleted and reinserted during a
+        -- recompute, while these decisions must remain intact.
+        CREATE TABLE IF NOT EXISTS parcel_workflow (
+            {workflow_cols},
+            CHECK (saved IN (0, 1)),
+            CHECK (hidden IN (0, 1)),
+            CHECK (contact_status IN ({statuses})),
+            PRIMARY KEY (bfs, parcel)
+        );
         """
     )
     _add_missing_columns(con, "parcel_results", COLUMNS)
     _add_missing_columns(con, "runs", RUN_COLUMNS)
     _add_missing_columns(con, "oereb_cache", OEREB_COLUMNS)
+    _add_missing_columns(con, "parcel_workflow", WORKFLOW_COLUMNS)
     # Create indexes after widening so an index introduced alongside a column
     # never runs before that column exists on a legacy database.
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_delta ON parcel_results(delta DESC)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workflow_saved ON parcel_workflow(saved)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workflow_hidden ON parcel_workflow(hidden)"
     )
     con.commit()
 
@@ -237,6 +275,7 @@ def recompute(progress=None, built_after=None):
         if not os.path.exists(os.path.join(DATA, f"parcels_{bfs}.xml")):
             continue  # never downloaded; leave whatever is already stored
         try:
+            LC.fetch(bfs)
             res = engine.run(bfs)
         except Exception:
             continue
@@ -269,7 +308,8 @@ def _row(bfs, name, r):
         "sv_e": r["sv_east"], "sv_n": r["sv_north"],
         "unconvertible": r["unconvertible"], "e": r["east"], "n": r["north"],
         "area": r["area"], "buildable": r["buildable"],
-        "zone_share": r["share"], "buildings": r["n"], "existing": r["existing"],
+        "zone_share": r["share"], "transport_share": r["transport_share"],
+        "buildings": r["n"], "existing": r["existing"],
         "delta": r["delta"], "heritage": r["heritage"],
         "design_plan": int(r["design_plan"]),
         "calculated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -301,6 +341,7 @@ def main():
         t0 = time.time()
         try:
             fetch_parcels(bfs)
+            LC.fetch(bfs)
             res = engine.run(bfs)
         except Exception as exc:
             print(f"  [{i}/{len(todo)}] {bfs} {name[:22]:22} FAILED: {str(exc)[:60]}")
