@@ -325,7 +325,17 @@ def _rebuild_workflow_check(con):
         return False
 
     have = {row[1] for row in con.execute("PRAGMA table_info(parcel_workflow)")}
-    carried = ", ".join(name for name, _ in WORKFLOW_COLUMNS if name in have)
+    carried = [name for name, _ in WORKFLOW_COLUMNS if name in have]
+    carried_cols = ", ".join(carried)
+    # `_add_missing_columns` strips `DEFAULT CURRENT_TIMESTAMP` when it widens a
+    # table (SQLite's ADD COLUMN only accepts a constant default), so a legacy
+    # row that just gained `updated_at` there carries NULL, not a timestamp.
+    # The rebuilt table declares the column NOT NULL, so that NULL has to be
+    # replaced on the way across rather than copied straight through.
+    select_exprs = ", ".join(
+        f"COALESCE({name}, CURRENT_TIMESTAMP)" if name == "updated_at" else name
+        for name in carried
+    )
     statuses = ", ".join(f"'{status}'" for status in WF.CONTACT_STATUS_LABELS)
     before = con.execute("SELECT COUNT(*) FROM parcel_workflow").fetchone()[0]
 
@@ -354,8 +364,8 @@ def _rebuild_workflow_check(con):
             # diverge, and the shift would be invisible until someone read a
             # phone number out of the note field.
             con.execute(
-                f"INSERT INTO parcel_workflow_new ({carried}) "
-                f"SELECT {carried} FROM parcel_workflow"
+                f"INSERT INTO parcel_workflow_new ({carried_cols}) "
+                f"SELECT {select_exprs} FROM parcel_workflow"
             )
             after = con.execute(
                 "SELECT COUNT(*) FROM parcel_workflow_new"
