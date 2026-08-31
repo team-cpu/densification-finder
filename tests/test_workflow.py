@@ -97,6 +97,64 @@ class ParcelWorkflowTest(unittest.TestCase):
             ],
         )
 
+    def test_acquisition_fields_survive_a_round_trip(self):
+        workflow.update(
+            [(4001, "12")],
+            owner_name="Erbengemeinschaft Weber",
+            contact_person="Dr. T. Weber, Erbenvertreter",
+            phone="+41 44 712 08 41",
+            email="t.weber@example.ch",
+            last_contact="2026-08-21",
+            due_date="2026-09-04",
+            next_step="Zweitgespräch, Wertindikation vorlegen",
+            note="Drei Erben, einer im Ausland",
+            db=self.database,
+        )
+
+        state = workflow.load(self.database).iloc[0]
+        self.assertEqual(state["contact_person"], "Dr. T. Weber, Erbenvertreter")
+        self.assertEqual(state["phone"], "+41 44 712 08 41")
+        self.assertEqual(state["email"], "t.weber@example.ch")
+        self.assertEqual(state["last_contact"], "2026-08-21")
+        self.assertEqual(state["due_date"], "2026-09-04")
+        self.assertEqual(state["note"], "Drei Erben, einer im Ausland")
+
+    def test_an_omitted_field_keeps_its_stored_value(self):
+        workflow.update(
+            [(4001, "12")], note="Wohnsitz vermutlich Zug", db=self.database
+        )
+        workflow.update([(4001, "12")], due_date="2026-09-02", db=self.database)
+
+        state = workflow.load(self.database).iloc[0]
+        self.assertEqual(state["note"], "Wohnsitz vermutlich Zug")
+        self.assertEqual(state["due_date"], "2026-09-02")
+
+    def test_a_date_can_be_cleared_but_not_malformed(self):
+        workflow.update([(4001, "12")], due_date="2026-09-02", db=self.database)
+        workflow.update([(4001, "12")], due_date="", db=self.database)
+        self.assertEqual(workflow.load(self.database).iloc[0]["due_date"], "")
+
+        for bad in ("02.09.2026", "2026-9-2", "20260902", "morgen"):
+            with self.assertRaises(ValueError, msg=bad):
+                workflow.update([(4001, "12")], due_date=bad, db=self.database)
+
+    def test_an_impossible_calendar_date_is_rejected(self):
+        """Right shape, wrong day. A regex alone would let this through."""
+        with self.assertRaises(ValueError):
+            workflow.update([(4001, "12")], due_date="2026-02-30", db=self.database)
+
+    def test_acquisition_text_is_trimmed_and_bounded(self):
+        workflow.update(
+            [(4001, "12")], next_step="  Brief aufsetzen  ", db=self.database
+        )
+        self.assertEqual(
+            workflow.load(self.database).iloc[0]["next_step"], "Brief aufsetzen"
+        )
+        with self.assertRaises(ValueError):
+            workflow.update([(4001, "12")], note="x" * 1001, db=self.database)
+        with self.assertRaises(ValueError):
+            workflow.update([(4001, "12")], phone="x" * 51, db=self.database)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,8 +7,10 @@ them.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Iterable
+from datetime import date
 
 import pandas as pd
 
@@ -29,6 +31,50 @@ CONTACT_STATUS_LABELS = {
 }
 DEFAULT_CONTACT_STATUS = "not_contacted"
 
+#: How long each free-text acquisition field may be. The limits are generous
+#: enough that nobody meets them in normal use and small enough that a paste
+#: accident cannot put a document into a database column.
+TEXT_LIMITS = {
+    "owner_name": 200,
+    "contact_person": 200,
+    "phone": 50,
+    "email": 200,
+    "next_step": 300,
+    "note": 1000,
+}
+
+DATE_FIELDS = ("due_date", "last_contact")
+
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _text(field: str, value: str) -> str:
+    """Trim a free-text field and hold it to its documented length."""
+    value = str(value).strip()
+    limit = TEXT_LIMITS[field]
+    if len(value) > limit:
+        raise ValueError(f"{field} must be {limit} characters or fewer")
+    return value
+
+
+def _date(field: str, value: str) -> str:
+    """An ISO date, or the empty string for "no date decided yet".
+
+    Checked twice: the shape, so that a Swiss `02.09.2026` is refused rather
+    than silently sorted as text, and then the calendar, so that `2026-02-30`
+    is refused as well.
+    """
+    value = str(value).strip()
+    if not value:
+        return ""
+    if not _ISO_DATE.match(value):
+        raise ValueError(f"{field} must be an ISO date (YYYY-MM-DD) or empty")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"{field} is not a date on the calendar") from None
+    return value
+
 
 def _keys(keys: Iterable[tuple[int, str]]) -> list[tuple[int, str]]:
     """Normalise and deduplicate database keys before a batch update."""
@@ -44,7 +90,9 @@ def load(db: str | None = None) -> pd.DataFrame:
     """
     with sqlite3.connect(db or paths.DB) as connection:
         return pd.read_sql_query(
-            "SELECT bfs, parcel, saved, hidden, owner_name, contact_status, updated_at "
+            "SELECT bfs, parcel, saved, hidden, owner_name, contact_status, "
+            "due_date, last_contact, next_step, note, contact_person, "
+            "phone, email, updated_at "
             "FROM parcel_workflow",
             connection,
         )
@@ -57,6 +105,13 @@ def update(
     hidden: bool | None = None,
     owner_name: str | None = None,
     contact_status: str | None = None,
+    due_date: str | None = None,
+    last_contact: str | None = None,
+    next_step: str | None = None,
+    note: str | None = None,
+    contact_person: str | None = None,
+    phone: str | None = None,
+    email: str | None = None,
     db: str | None = None,
 ) -> int:
     """Persist one or more parcel decisions atomically.
@@ -70,10 +125,30 @@ def update(
         return 0
     if contact_status is not None and contact_status not in CONTACT_STATUS_LABELS:
         raise ValueError(f"Unknown contact status: {contact_status}")
-    if owner_name is not None:
-        owner_name = owner_name.strip()
-        if len(owner_name) > 200:
-            raise ValueError("Owner name must be 200 characters or fewer")
+
+    # Validated before a single write, so a bad date in one field cannot leave
+    # the other fields of the same save applied.
+    text = {
+        "owner_name": owner_name,
+        "next_step": next_step,
+        "note": note,
+        "contact_person": contact_person,
+        "phone": phone,
+        "email": email,
+    }
+    dates = {"due_date": due_date, "last_contact": last_contact}
+    clean = {
+        field: _text(field, value)
+        for field, value in text.items()
+        if value is not None
+    }
+    clean.update(
+        {
+            field: _date(field, value)
+            for field, value in dates.items()
+            if value is not None
+        }
+    )
 
     assignments: list[str] = []
     values: list[object] = []
@@ -83,12 +158,12 @@ def update(
     if hidden is not None:
         assignments.append("hidden = ?")
         values.append(int(hidden))
-    if owner_name is not None:
-        assignments.append("owner_name = ?")
-        values.append(owner_name)
     if contact_status is not None:
         assignments.append("contact_status = ?")
         values.append(contact_status)
+    for field, value in clean.items():
+        assignments.append(f"{field} = ?")
+        values.append(value)
     if not assignments:
         return 0
 
