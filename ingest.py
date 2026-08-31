@@ -20,6 +20,7 @@ Resumable: a municipality already present in the database is skipped unless
 import glob
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -187,6 +188,102 @@ def _add_missing_columns(con, table, columns):
             con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {compatible}")
 
 
+def _workflow_statuses(con):
+    """The status values the stored `parcel_workflow` CHECK constraint allows.
+
+    An empty set means the table has no such constraint — either it predates
+    the contact status entirely, or it was created by hand. Both are reasons to
+    rebuild: an unconstrained column is not the schema this release declares.
+    """
+    row = con.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'parcel_workflow'"
+    ).fetchone()
+    if not row or not row[0]:
+        return set()
+    clause = re.search(
+        r"CHECK\s*\(\s*contact_status\s+IN\s*\((.*?)\)\s*\)", row[0], re.S | re.I
+    )
+    if not clause:
+        return set()
+    return set(re.findall(r"'([^']*)'", clause.group(1)))
+
+
+def _rebuild_workflow_check(con):
+    """Copy `parcel_workflow` when its status constraint is out of date.
+
+    Compared as sets, so reordering `CONTACT_STATUS_LABELS` — which is also the
+    board's column order — is never mistaken for a schema change.
+
+    Returns whether the table was rebuilt.
+    """
+    if _workflow_statuses(con) == set(WF.CONTACT_STATUS_LABELS):
+        return False
+
+    have = {row[1] for row in con.execute("PRAGMA table_info(parcel_workflow)")}
+    carried = [name for name, _ in WORKFLOW_COLUMNS if name in have]
+    carried_cols = ", ".join(carried)
+    # `_add_missing_columns` strips `DEFAULT CURRENT_TIMESTAMP` when it widens a
+    # table (SQLite's ADD COLUMN only accepts a constant default), so a legacy
+    # row that just gained `updated_at` there carries NULL, not a timestamp.
+    # The rebuilt table declares the column NOT NULL, so that NULL has to be
+    # replaced on the way across rather than copied straight through.
+    select_exprs = ", ".join(
+        f"COALESCE({name}, CURRENT_TIMESTAMP)" if name == "updated_at" else name
+        for name in carried
+    )
+    statuses = ", ".join(f"'{status}'" for status in WF.CONTACT_STATUS_LABELS)
+    before = con.execute("SELECT COUNT(*) FROM parcel_workflow").fetchone()[0]
+
+    # SQLite runs DDL inside a transaction, but python's sqlite3 opens implicit
+    # transactions for DML only — so CREATE and DROP would each commit on their
+    # own and a failure halfway through would leave no table at all. Explicit
+    # control for the duration of the copy, restored afterwards.
+    previous = con.isolation_level
+    con.isolation_level = None
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            con.execute(
+                f"""
+                CREATE TABLE parcel_workflow_new (
+                    {_column_definitions(WORKFLOW_COLUMNS)},
+                    CHECK (saved IN (0, 1)),
+                    CHECK (hidden IN (0, 1)),
+                    CHECK (contact_status IN ({statuses})),
+                    PRIMARY KEY (bfs, parcel)
+                )
+                """
+            )
+            # Both halves name their columns. `SELECT *` would silently shift
+            # every value one place the first time the two column orders
+            # diverge, and the shift would be invisible until someone read a
+            # phone number out of the note field.
+            con.execute(
+                f"INSERT INTO parcel_workflow_new ({carried_cols}) "
+                f"SELECT {select_exprs} FROM parcel_workflow"
+            )
+            after = con.execute(
+                "SELECT COUNT(*) FROM parcel_workflow_new"
+            ).fetchone()[0]
+            if after != before:
+                raise RuntimeError(
+                    "parcel_workflow rebuild would lose leads: "
+                    f"{before} rows in, {after} rows out"
+                )
+            con.execute("DROP TABLE parcel_workflow")
+            con.execute(
+                "ALTER TABLE parcel_workflow_new RENAME TO parcel_workflow"
+            )
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
+    finally:
+        con.isolation_level = previous
+    return True
+
+
 def schema(con):
     parcel_cols = _column_definitions(COLUMNS)
     run_cols = _column_definitions(RUN_COLUMNS)
@@ -228,6 +325,10 @@ def schema(con):
     _add_missing_columns(con, "runs", RUN_COLUMNS)
     _add_missing_columns(con, "oereb_cache", OEREB_COLUMNS)
     _add_missing_columns(con, "parcel_workflow", WORKFLOW_COLUMNS)
+    # After widening, because the copy carries whichever columns the widened
+    # table has; before the indexes, because DROP TABLE takes its indexes with
+    # it and the CREATE INDEX statements below put them back.
+    _rebuild_workflow_check(con)
     # Create indexes after widening so an index introduced alongside a column
     # never runs before that column exists on a legacy database.
     con.execute(

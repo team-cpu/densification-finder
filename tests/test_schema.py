@@ -145,6 +145,115 @@ class SchemaMigrationTest(unittest.TestCase):
         self.assertEqual(workflow_tables, 1)
 
 
+class WorkflowStatusRebuildTest(unittest.TestCase):
+    """A database whose CHECK constraint predates a status the code allows.
+
+    `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table and
+    `_add_missing_columns` can only widen one, so without an explicit rebuild
+    the deployment rejects the new status while every test on a fresh database
+    passes. This fixture is the only thing that can fail.
+    """
+
+    def setUp(self):
+        self.con = sqlite3.connect(":memory:")
+        self.con.executescript(
+            """
+            CREATE TABLE parcel_workflow (
+                bfs            INTEGER NOT NULL,
+                parcel         TEXT NOT NULL,
+                saved          INTEGER NOT NULL DEFAULT 0,
+                hidden         INTEGER NOT NULL DEFAULT 0,
+                owner_name     TEXT NOT NULL DEFAULT '',
+                contact_status TEXT NOT NULL DEFAULT 'not_contacted',
+                updated_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (saved IN (0, 1)),
+                CHECK (hidden IN (0, 1)),
+                CHECK (contact_status IN
+                    ('not_contacted', 'contacted', 'meeting_scheduled')),
+                PRIMARY KEY (bfs, parcel)
+            );
+            INSERT INTO parcel_workflow
+                (bfs, parcel, saved, hidden, owner_name, contact_status)
+            VALUES
+                (4001, '1', 1, 0, 'Muster AG', 'contacted'),
+                (4002, '7', 1, 0, '', 'meeting_scheduled'),
+                (4003, '12', 0, 1, '', 'not_contacted');
+            """
+        )
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_rebuild_keeps_every_row_and_admits_the_missing_status(self):
+        ingest.schema(self.con)
+
+        self.assertEqual(
+            self.con.execute(
+                "SELECT bfs, parcel, saved, hidden, owner_name, contact_status "
+                "FROM parcel_workflow ORDER BY bfs"
+            ).fetchall(),
+            [
+                (4001, "1", 1, 0, "Muster AG", "contacted"),
+                (4002, "7", 1, 0, "", "meeting_scheduled"),
+                (4003, "12", 0, 1, "", "not_contacted"),
+            ],
+        )
+        # The status the legacy constraint refused.
+        self.con.execute(
+            "INSERT INTO parcel_workflow (bfs, parcel, contact_status) "
+            "VALUES (4004, '9', 'declined')"
+        )
+
+    def test_rebuild_restores_the_indexes_it_dropped(self):
+        ingest.schema(self.con)
+
+        indexes = {
+            row[0]
+            for row in self.con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' "
+                "AND tbl_name = 'parcel_workflow'"
+            )
+        }
+        self.assertIn("idx_workflow_saved", indexes)
+        self.assertIn("idx_workflow_hidden", indexes)
+
+    def test_rebuild_reports_that_it_fired_once_and_then_stops(self):
+        ingest.schema(self.con)
+
+        self.assertFalse(ingest._rebuild_workflow_check(self.con))
+        self.assertEqual(
+            self.con.execute("SELECT COUNT(*) FROM parcel_workflow").fetchone()[0],
+            3,
+        )
+
+    def test_a_table_without_any_status_constraint_is_rebuilt(self):
+        """The oldest shape on the volume: `parcel_workflow` from before the
+        contact status existed at all. An unconstrained column is not the
+        schema this release declares, so it is rebuilt rather than left."""
+        con = sqlite3.connect(":memory:")
+        con.executescript(
+            """
+            CREATE TABLE parcel_workflow (
+                bfs    INTEGER NOT NULL,
+                parcel TEXT NOT NULL,
+                saved  INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (bfs, parcel)
+            );
+            INSERT INTO parcel_workflow (bfs, parcel, saved) VALUES (4001, '1', 1);
+            """
+        )
+
+        ingest.schema(con)
+
+        self.assertEqual(
+            con.execute(
+                "SELECT bfs, parcel, saved, contact_status FROM parcel_workflow"
+            ).fetchone(),
+            (4001, "1", 1, "not_contacted"),
+        )
+        con.close()
+
+
 class DatabaseBootstrapTest(unittest.TestCase):
     def test_bootstrap_migrates_a_persistent_legacy_database(self):
         with tempfile.TemporaryDirectory() as directory:
