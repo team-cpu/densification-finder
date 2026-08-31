@@ -152,6 +152,18 @@ WORKFLOW_COLUMNS = [
         f"TEXT NOT NULL DEFAULT '{WF.DEFAULT_CONTACT_STATUS}'",
     ),
     ("updated_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+    # The acquisition fields. Every one carries DEFAULT '' rather than being
+    # left nullable: `_add_missing_columns` strips NOT NULL but keeps a quoted
+    # default, and SQLite backfills existing rows from it, so a lead saved
+    # before this release arrives as an empty string like every other. Absent
+    # is one value here, not two.
+    ("due_date", "TEXT NOT NULL DEFAULT ''"),
+    ("last_contact", "TEXT NOT NULL DEFAULT ''"),
+    ("next_step", "TEXT NOT NULL DEFAULT ''"),
+    ("note", "TEXT NOT NULL DEFAULT ''"),
+    ("contact_person", "TEXT NOT NULL DEFAULT ''"),
+    ("phone", "TEXT NOT NULL DEFAULT ''"),
+    ("email", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 

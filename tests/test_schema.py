@@ -100,6 +100,38 @@ class SchemaMigrationTest(unittest.TestCase):
             ("Aarau", "1", 250.0, None, None),
         )
 
+    def test_acquisition_columns_reach_a_legacy_workflow_row(self):
+        """A lead saved by an older release must read back as empty strings,
+        not as NULL: the board sorts and compares these fields directly, and a
+        null branch in every one of them would be the cost of getting this
+        wrong."""
+        self.con.execute(
+            "INSERT INTO parcel_workflow (bfs, parcel, saved) VALUES (4001, '1', 1)"
+        )
+
+        ingest.schema(self.con)
+
+        columns = {
+            row[1] for row in self.con.execute("PRAGMA table_info(parcel_workflow)")
+        }
+        for name in (
+            "due_date",
+            "last_contact",
+            "next_step",
+            "note",
+            "contact_person",
+            "phone",
+            "email",
+        ):
+            self.assertIn(name, columns)
+        self.assertEqual(
+            self.con.execute(
+                "SELECT saved, due_date, last_contact, next_step, note, "
+                "contact_person, phone, email FROM parcel_workflow"
+            ).fetchone(),
+            (1, "", "", "", "", "", "", ""),
+        )
+
     def test_schema_migration_is_idempotent(self):
         ingest.schema(self.con)
         ingest.schema(self.con)
