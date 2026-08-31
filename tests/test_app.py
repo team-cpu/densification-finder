@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+import ingest
 import paths
 import workflow
 
@@ -19,6 +20,13 @@ class AppRegressionTest(unittest.TestCase):
         shutil.copy2(paths.SEED_DB, self.database)
         with sqlite3.connect(self.database) as connection:
             connection.execute("DELETE FROM oereb_cache")
+            # The committed fixture predates fields later tasks added to
+            # `parcel_workflow` (e.g. `due_date`, `next_step`) — on disk it
+            # only ever gets to current schema via `app.py`'s own bootstrap.
+            # A test that calls `workflow.update()` before the app has run
+            # once needs that widening done here, the same way it would
+            # already be done on any database a real deploy has touched.
+            ingest.schema(connection)
 
         self.original_database = paths.DB
         paths.DB = self.database
@@ -206,6 +214,44 @@ class AppRegressionTest(unittest.TestCase):
         )
         self.assertEqual(list(app.with_extract(cache)), [])
         self.assertEqual(list(app.failed_egrids(cache)), [])
+
+    def test_the_board_renders_a_saved_lead_with_its_acquisition_fields(self):
+        """The whole path: a decision in `parcel_workflow`, joined to a parcel
+        the cascade produced, drawn as a card. The join is `validate=
+        "one_to_one"`, so a duplicate decision would raise here rather than
+        double a lead on the board."""
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
+            sqlite3.connect(self.database),
+        ).iloc[0]
+        key = [(int(first["bfs"]), str(first["parcel"]))]
+        workflow.set_saved(key, True, self.database)
+        workflow.update(
+            key,
+            contact_status="in_discussion",
+            owner_name="Erbengemeinschaft Weber",
+            due_date="2020-01-01",
+            next_step="Zweitgespräch vereinbaren",
+            db=self.database,
+        )
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=30
+        ).run()
+
+        self.assertFalse(app.exception)
+        text = " ".join(element.value for element in app.markdown)
+        self.assertIn("Im Gespräch", text)
+        # Due in 2020 and today is not: the overdue list must have drawn.
+        overdue = [
+            frame.value
+            for frame in app.dataframe
+            if "Wiedervorlage" in getattr(frame.value, "columns", [])
+        ]
+        self.assertEqual(len(overdue), 1)
+        self.assertEqual(
+            list(overdue[0]["Nächster Schritt"]), ["Zweitgespräch vereinbaren"]
+        )
 
 
 if __name__ == "__main__":
