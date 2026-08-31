@@ -20,6 +20,19 @@ import workflow as WF
 #: section is a glance at what needs chasing, not a second copy of the board.
 DUE_PREVIEW = 4
 
+#: Scoped to the board's own keyed container (`st-key-acq_board`) so it does
+#: not touch the unrelated `st.columns` layouts elsewhere in `app.py`. Five
+#: fixed-width columns held their shape at any viewport, which shredded
+#: addresses and stage labels into unreadable fragments around 683px; letting
+#: the row wrap and giving each column a floor width fixes the small-viewport
+#: case without changing anything at desktop width, where five still fit.
+_BOARD_CSS = """
+<style>
+.st-key-acq_board [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+.st-key-acq_board [data-testid="stColumn"] { min-width: 260px; }
+</style>
+"""
+
 
 def leads(parcels: pd.DataFrame, decisions: pd.DataFrame, field: str) -> pd.DataFrame:
     """Saved or hidden decisions joined back to the parcel facts they name.
@@ -209,13 +222,18 @@ def _render_overdue(shortlist, today):
 
 def _render_board(shortlist, db, price_of):
     stages = by_stage(shortlist)
-    columns = st.columns(len(WF.CONTACT_STATUS_LABELS))
-    for column, (stage, label) in zip(columns, WF.CONTACT_STATUS_LABELS.items()):
-        frame = stages[stage]
-        with column:
-            st.markdown(f"**{label}** · {len(frame)}")
-            for _, row in frame.iterrows():
-                _render_card(row, db, price_of)
+    with st.container(key="acq_board"):
+        # Once per render, not once per card — a `<style>` tag is idempotent
+        # on the page, so 25 identical copies would cost 25x the HTML for the
+        # same effect a single one already has.
+        st.html(_BOARD_CSS)
+        columns = st.columns(len(WF.CONTACT_STATUS_LABELS))
+        for column, (stage, label) in zip(columns, WF.CONTACT_STATUS_LABELS.items()):
+            frame = stages[stage]
+            with column:
+                st.markdown(f"**{label}** · {len(frame)}")
+                for _, row in frame.iterrows():
+                    _render_card(row, db, price_of)
 
 
 def _render_card(row, db, price_of):
