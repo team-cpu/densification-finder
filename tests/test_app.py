@@ -13,6 +13,13 @@ import paths
 import workflow
 
 
+def field(app, label):
+    """Contact-form inputs carry no widget key, only a label — this is how
+    the acquisition-board tests address one instead of relying on the
+    form's field order."""
+    return next(w for w in app.text_input if w.label == label)
+
+
 class AppRegressionTest(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -251,6 +258,181 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(len(overdue), 1)
         self.assertEqual(
             list(overdue[0]["Nächster Schritt"]), ["Zweitgespräch vereinbaren"]
+        )
+
+    def test_moving_a_card_to_another_stage_persists_it(self):
+        """A stage change that only moves the widget and never reaches
+        `parcel_workflow` would look real on screen right up until the next
+        reload put the lead back where it started."""
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
+            sqlite3.connect(self.database),
+        ).iloc[0]
+        bfs, parcel = int(first["bfs"]), str(first["parcel"])
+        key = [(bfs, parcel)]
+        workflow.set_saved(key, True, self.database)
+        workflow.update(key, contact_status="contacted", db=self.database)
+        slug = f"{bfs}_{parcel}"
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        ).run()
+        self.assertFalse(app.exception)
+
+        app.selectbox(key=f"stage_{slug}").select("in_discussion").run()
+        self.assertFalse(app.exception)
+
+        with sqlite3.connect(self.database) as connection:
+            stored = connection.execute(
+                "SELECT contact_status FROM parcel_workflow "
+                "WHERE bfs = ? AND parcel = ?",
+                (bfs, parcel),
+            ).fetchone()[0]
+        self.assertEqual(stored, "in_discussion")
+
+    def test_the_contact_form_stores_what_was_typed(self):
+        """`Speichern` fires the same toast whether or not the write behind
+        it succeeded — a field `_render_contact_form` dropped on the way to
+        `WF.update` would only surface the next time someone reopened this
+        exact lead and found their own note missing."""
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
+            sqlite3.connect(self.database),
+        ).iloc[0]
+        bfs, parcel = int(first["bfs"]), str(first["parcel"])
+        key = [(bfs, parcel)]
+        workflow.set_saved(key, True, self.database)
+        slug = f"{bfs}_{parcel}"
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        ).run()
+
+        field(app, "Kontaktperson").set_value("Frau Meier")
+        field(app, "Telefon").set_value("+41 79 000 00 00")
+        field(app, "Wiedervorlage").set_value("2026-09-15")
+        app.text_area[0].set_value("Rückruf nächste Woche vereinbart.")
+        app.button(key=f"FormSubmitter:contact_{slug}-Speichern").click().run()
+        self.assertFalse(app.exception)
+
+        with sqlite3.connect(self.database) as connection:
+            row = connection.execute(
+                "SELECT contact_person, phone, due_date, note "
+                "FROM parcel_workflow WHERE bfs = ? AND parcel = ?",
+                (bfs, parcel),
+            ).fetchone()
+        self.assertEqual(
+            row,
+            (
+                "Frau Meier",
+                "+41 79 000 00 00",
+                "2026-09-15",
+                "Rückruf nächste Woche vereinbart.",
+            ),
+        )
+
+    def test_a_malformed_date_is_reported_and_the_whole_save_is_refused(self):
+        """`workflow.update` validates every field before it writes any of
+        them, but only because `_render_contact_form` stops on the
+        `ValueError` instead of ignoring it. A save that let the good fields
+        through anyway would leave a contact name typed today sitting next
+        to a Wiedervorlage date nobody actually entered."""
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
+            sqlite3.connect(self.database),
+        ).iloc[0]
+        bfs, parcel = int(first["bfs"]), str(first["parcel"])
+        key = [(bfs, parcel)]
+        workflow.set_saved(key, True, self.database)
+        workflow.update(
+            key,
+            due_date="2026-01-01",
+            contact_person="Herr Muster",
+            db=self.database,
+        )
+        slug = f"{bfs}_{parcel}"
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        ).run()
+
+        field(app, "Wiedervorlage").set_value("02.09.2026")
+        field(app, "Kontaktperson").set_value("Neuer Name")
+        app.button(key=f"FormSubmitter:contact_{slug}-Speichern").click().run()
+        self.assertFalse(app.exception)
+
+        self.assertEqual(len(app.error), 1)
+        self.assertEqual(
+            app.error[0].value,
+            "due_date must be an ISO date (YYYY-MM-DD) or empty",
+        )
+
+        with sqlite3.connect(self.database) as connection:
+            due_date, contact_person = connection.execute(
+                "SELECT due_date, contact_person FROM parcel_workflow "
+                "WHERE bfs = ? AND parcel = ?",
+                (bfs, parcel),
+            ).fetchone()
+        # Refused together, not partially applied: neither field moved.
+        self.assertEqual(due_date, "2026-01-01")
+        self.assertEqual(contact_person, "Herr Muster")
+
+    def test_removing_a_lead_takes_it_off_the_board(self):
+        """`Von Merkliste entfernen` sits one button away from `Speichern`
+        in the same form — a copy-paste of the wrong boolean into
+        `WF.set_saved` would silently keep a declined lead on the board
+        instead of taking it off."""
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
+            sqlite3.connect(self.database),
+        ).iloc[0]
+        bfs, parcel = int(first["bfs"]), str(first["parcel"])
+        key = [(bfs, parcel)]
+        workflow.set_saved(key, True, self.database)
+        slug = f"{bfs}_{parcel}"
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        ).run()
+
+        remove_key = f"FormSubmitter:contact_{slug}-Von Merkliste entfernen"
+        app.button(key=remove_key).click().run()
+        self.assertFalse(app.exception)
+
+        with sqlite3.connect(self.database) as connection:
+            saved = connection.execute(
+                "SELECT saved FROM parcel_workflow WHERE bfs = ? AND parcel = ?",
+                (bfs, parcel),
+            ).fetchone()[0]
+        self.assertEqual(saved, 0)
+        self.assertFalse(
+            any(
+                str(widget.key or "").startswith("stage_")
+                for widget in app.selectbox
+            )
+        )
+
+    def test_the_analyse_button_opens_the_single_parcel_view(self):
+        """Analyse is the only door into the detail view; if the session key
+        it sets ever drifted from what `detail.find` reads back, the button
+        would still render and still be clickable while doing nothing."""
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
+            sqlite3.connect(self.database),
+        ).iloc[0]
+        bfs, parcel = int(first["bfs"]), str(first["parcel"])
+        key = [(bfs, parcel)]
+        workflow.set_saved(key, True, self.database)
+        slug = f"{bfs}_{parcel}"
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        ).run()
+
+        app.button(key=f"open_{slug}").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(
+            app.session_state["selected_parcel_id"], f"{bfs}:{parcel}"
         )
 
 
