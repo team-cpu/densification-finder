@@ -20,6 +20,16 @@ import workflow as WF
 #: section is a glance at what needs chasing, not a second copy of the board.
 DUE_PREVIEW = 4
 
+#: Which lead's contact dialog is open, as `bfs:parcel`, or absent for none.
+#:
+#: A dialog cannot be driven from `if st.button(...): open_dialog()` — the
+#: button that reads `True` when the user clicks "Kontakt" reads `False` again
+#: on the rerun that `Speichern` itself triggers inside the dialog, so the
+#: dialog body (and the save it contains) never runs a second time. Session
+#: state survives that rerun, so the dialog keeps reopening itself on every
+#: rerun until something explicitly pops this key.
+CONTACT_OPEN = "acquisition_contact_open"
+
 #: Scoped to the board's own keyed container (`st-key-acq_board`) so it does
 #: not touch the unrelated `st.columns` layouts elsewhere in `app.py`. Five
 #: fixed-width columns held their shape at any viewport, which shredded
@@ -235,6 +245,45 @@ def _render_board(shortlist, db, price_of):
                 for _, row in frame.iterrows():
                     _render_card(row, db, price_of)
 
+    _render_open_contact_dialog(shortlist, db)
+
+
+def _render_open_contact_dialog(shortlist, db):
+    """Runs once after the board, not from inside a card, because the open
+    lead can be in any column (or, once removed, in none of them) — finding
+    it by the session key instead of by card position is what lets a card's
+    own rerun close the dialog it opened."""
+    open_pid = st.session_state.get(CONTACT_OPEN)
+    if open_pid is None:
+        return
+    row = _lead_by_pid(shortlist, open_pid)
+    if row is None:
+        # Removed ("Von Merkliste entfernen") or moved out of the shortlist
+        # since the dialog was opened — nothing left to edit, and re-raising
+        # here would trade a closed dialog for a crashed board.
+        st.session_state.pop(CONTACT_OPEN, None)
+        return
+    key = (int(row["bfs"]), str(row["parcel"]))
+    _contact_dialog(row, key, db)
+
+
+def _lead_by_pid(shortlist, pid):
+    """The shortlist row named by a `bfs:parcel` pid, or `None`.
+
+    Matches on the same two-part key `_render_card` builds, not on the
+    shortlist's pandas index — that index is not part of the pid and is free
+    to change (a stage move or a hidden lead reorders `by_stage`'s frames).
+    """
+    bfs_part, _, parcel_part = str(pid).partition(":")
+    try:
+        bfs = int(bfs_part)
+    except ValueError:
+        return None
+    match = shortlist[
+        (shortlist["bfs"] == bfs) & (shortlist["parcel"].astype(str) == parcel_part)
+    ]
+    return None if match.empty else match.iloc[0]
+
 
 def _render_card(row, db, price_of):
     key = int(row["bfs"]), str(row["parcel"])
@@ -281,77 +330,98 @@ def _render_card(row, db, price_of):
             detail.open_parcel(detail.parcel_id(row))
             st.rerun()
 
-        with st.expander("Kontaktdetails"):
-            _render_contact_form(row, key, slug, db)
+        if st.button("Kontakt", key=f"contact_{slug}", width="stretch"):
+            st.session_state[CONTACT_OPEN] = f"{key[0]}:{key[1]}"
+            st.rerun()
 
 
-def _render_contact_form(row, key, slug, db):
-    """Dates are text rather than `st.date_input` because "no date yet" is a
+@st.dialog("Kontaktdetails")
+def _contact_dialog(row, key, db):
+    """The contact form for one lead, built once per open dialog rather than
+    once per card. A per-card `st.expander` built the same 9 widgets whether
+    or not it was open — at 100 leads that was ~900 invisible widgets the
+    browser still carried. A single dialog for the session's one open lead
+    turns that into 9 widgets that exist only while someone is actually
+    looking at them.
+
+    Dates are text rather than `st.date_input` because "no date yet" is a
     real and common state here, and a date picker has to invent a day to show.
     The format is stated in the placeholder and enforced by `workflow.update`,
-    which reports what it refused."""
-    with st.form(f"contact_{slug}"):
-        owner_name = st.text_input(
-            "Eigentümerschaft", value=str(row["owner_name"]), max_chars=200
-        )
-        contact_person = st.text_input(
-            "Kontaktperson",
-            value=str(row["contact_person"]),
-            max_chars=200,
-            placeholder="Name, Funktion",
-        )
-        phone = st.text_input(
-            "Telefon", value=str(row["phone"]), max_chars=50, placeholder="+41 …"
-        )
-        email = st.text_input(
-            "E-Mail",
-            value=str(row["email"]),
-            max_chars=200,
-            placeholder="name@domain.ch",
-        )
-        last_contact = st.text_input(
-            "Letzter Kontakt",
-            value=str(row["last_contact"]),
-            max_chars=10,
-            placeholder="JJJJ-MM-TT",
-        )
-        due_date = st.text_input(
-            "Wiedervorlage",
-            value=str(row["due_date"]),
-            max_chars=10,
-            placeholder="JJJJ-MM-TT",
-        )
-        next_step = st.text_input(
-            "Nächster Schritt", value=str(row["next_step"]), max_chars=300
-        )
-        note = st.text_area("Notiz", value=str(row["note"]), max_chars=1000)
-        store = st.form_submit_button("Speichern")
-        remove = st.form_submit_button("Von Merkliste entfernen")
+    which reports what it refused.
 
-    if remove:
+    No `st.form`: a dialog already gates everything behind its own explicit
+    buttons, and a form here would only add a second, redundant submit
+    boundary and more button-key bookkeeping for no behaviour gained.
+    """
+    owner_name = st.text_input(
+        "Eigentümerschaft", value=str(row["owner_name"]), max_chars=200
+    )
+    contact_person = st.text_input(
+        "Kontaktperson",
+        value=str(row["contact_person"]),
+        max_chars=200,
+        placeholder="Name, Funktion",
+    )
+    phone = st.text_input(
+        "Telefon", value=str(row["phone"]), max_chars=50, placeholder="+41 …"
+    )
+    email = st.text_input(
+        "E-Mail",
+        value=str(row["email"]),
+        max_chars=200,
+        placeholder="name@domain.ch",
+    )
+    last_contact = st.text_input(
+        "Letzter Kontakt",
+        value=str(row["last_contact"]),
+        max_chars=10,
+        placeholder="JJJJ-MM-TT",
+    )
+    due_date = st.text_input(
+        "Wiedervorlage",
+        value=str(row["due_date"]),
+        max_chars=10,
+        placeholder="JJJJ-MM-TT",
+    )
+    next_step = st.text_input(
+        "Nächster Schritt", value=str(row["next_step"]), max_chars=300
+    )
+    note = st.text_area("Notiz", value=str(row["note"]), max_chars=1000)
+
+    if st.button("Speichern", key="acq_contact_save"):
+        try:
+            WF.update(
+                [key],
+                owner_name=owner_name,
+                contact_person=contact_person,
+                phone=phone,
+                email=email,
+                last_contact=last_contact,
+                due_date=due_date,
+                next_step=next_step,
+                note=note,
+                db=db,
+            )
+        except ValueError as error:
+            # Left open on the error rather than popped/rerun: the whole point
+            # of `WF.update`'s all-or-nothing validation is that a bad date
+            # cannot lose a good field along with it, and closing here anyway
+            # would silently drop everything the user just typed.
+            st.error(str(error))
+            return
+        st.toast("Kontaktdaten gespeichert.")
+        st.session_state.pop(CONTACT_OPEN, None)
+        st.rerun()
+
+    if st.button("Von Merkliste entfernen", key="acq_contact_remove"):
         WF.set_saved([key], False, db)
         st.toast("Parzelle von der Merkliste entfernt.")
+        st.session_state.pop(CONTACT_OPEN, None)
         st.rerun()
-    if not store:
-        return
-    try:
-        WF.update(
-            [key],
-            owner_name=owner_name,
-            contact_person=contact_person,
-            phone=phone,
-            email=email,
-            last_contact=last_contact,
-            due_date=due_date,
-            next_step=next_step,
-            note=note,
-            db=db,
-        )
-    except ValueError as error:
-        st.error(str(error))
-        return
-    st.toast("Kontaktdaten gespeichert.")
-    st.rerun()
+
+    if st.button("Abbrechen", key="acq_contact_cancel"):
+        st.session_state.pop(CONTACT_OPEN, None)
+        st.rerun()
 
 
 def _render_hidden(parcels, decisions, db):

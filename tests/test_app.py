@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+import acquisition
 import ingest
 import paths
 import workflow
@@ -292,7 +293,7 @@ class AppRegressionTest(unittest.TestCase):
 
     def test_the_contact_form_stores_what_was_typed(self):
         """`Speichern` fires the same toast whether or not the write behind
-        it succeeded — a field `_render_contact_form` dropped on the way to
+        it succeeded — a field `_contact_dialog` dropped on the way to
         `WF.update` would only surface the next time someone reopened this
         exact lead and found their own note missing."""
         first = pd.read_sql_query(
@@ -308,11 +309,16 @@ class AppRegressionTest(unittest.TestCase):
             os.path.join(paths.HERE, "app.py"), default_timeout=60
         ).run()
 
+        # The dialog only exists once `Kontakt` opens it — the card itself
+        # carries no form widgets any more.
+        app.button(key=f"contact_{slug}").click().run()
+        self.assertFalse(app.exception)
+
         field(app, "Kontaktperson").set_value("Frau Meier")
         field(app, "Telefon").set_value("+41 79 000 00 00")
         field(app, "Wiedervorlage").set_value("2026-09-15")
         app.text_area[0].set_value("Rückruf nächste Woche vereinbart.")
-        app.button(key=f"FormSubmitter:contact_{slug}-Speichern").click().run()
+        app.button(key="acq_contact_save").click().run()
         self.assertFalse(app.exception)
 
         with sqlite3.connect(self.database) as connection:
@@ -333,10 +339,12 @@ class AppRegressionTest(unittest.TestCase):
 
     def test_a_malformed_date_is_reported_and_the_whole_save_is_refused(self):
         """`workflow.update` validates every field before it writes any of
-        them, but only because `_render_contact_form` stops on the
-        `ValueError` instead of ignoring it. A save that let the good fields
-        through anyway would leave a contact name typed today sitting next
-        to a Wiedervorlage date nobody actually entered."""
+        them, but only because `_contact_dialog` stops on the `ValueError`
+        instead of ignoring it — and leaves the dialog open on the error
+        rather than closing it, which would read as "saved" to the user. A
+        save that let the good fields through anyway would leave a contact
+        name typed today sitting next to a Wiedervorlage date nobody actually
+        entered."""
         first = pd.read_sql_query(
             "SELECT bfs, parcel FROM parcel_results LIMIT 1",
             sqlite3.connect(self.database),
@@ -356,15 +364,22 @@ class AppRegressionTest(unittest.TestCase):
             os.path.join(paths.HERE, "app.py"), default_timeout=60
         ).run()
 
+        app.button(key=f"contact_{slug}").click().run()
+        self.assertFalse(app.exception)
+
         field(app, "Wiedervorlage").set_value("02.09.2026")
         field(app, "Kontaktperson").set_value("Neuer Name")
-        app.button(key=f"FormSubmitter:contact_{slug}-Speichern").click().run()
+        app.button(key="acq_contact_save").click().run()
         self.assertFalse(app.exception)
 
         self.assertEqual(len(app.error), 1)
         self.assertEqual(
             app.error[0].value,
             "due_date must be an ISO date (YYYY-MM-DD) or empty",
+        )
+        # A refused save must not look like a closed, successful one.
+        self.assertEqual(
+            app.session_state[acquisition.CONTACT_OPEN], f"{bfs}:{parcel}"
         )
 
         with sqlite3.connect(self.database) as connection:
@@ -379,7 +394,7 @@ class AppRegressionTest(unittest.TestCase):
 
     def test_removing_a_lead_takes_it_off_the_board(self):
         """`Von Merkliste entfernen` sits one button away from `Speichern`
-        in the same form — a copy-paste of the wrong boolean into
+        in the same dialog — a copy-paste of the wrong boolean into
         `WF.set_saved` would silently keep a declined lead on the board
         instead of taking it off."""
         first = pd.read_sql_query(
@@ -395,8 +410,10 @@ class AppRegressionTest(unittest.TestCase):
             os.path.join(paths.HERE, "app.py"), default_timeout=60
         ).run()
 
-        remove_key = f"FormSubmitter:contact_{slug}-Von Merkliste entfernen"
-        app.button(key=remove_key).click().run()
+        app.button(key=f"contact_{slug}").click().run()
+        self.assertFalse(app.exception)
+
+        app.button(key="acq_contact_remove").click().run()
         self.assertFalse(app.exception)
 
         with sqlite3.connect(self.database) as connection:
@@ -411,6 +428,38 @@ class AppRegressionTest(unittest.TestCase):
                 for widget in app.selectbox
             )
         )
+
+    def test_a_closed_board_carries_no_contact_form_widgets(self):
+        """The reason the dialog exists at all: a per-card `st.expander`
+        built the same 9 form widgets for every lead whether or not it was
+        open, so a board of 100 leads shipped ~900 invisible widgets to the
+        browser. A regression that put the form back on the card — even
+        collapsed — would leave those widgets in the page tree with the
+        dialog still reporting closed, so this counts them directly rather
+        than trusting a toggle that a moved-back form wouldn't touch."""
+        parcels = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 5",
+            sqlite3.connect(self.database),
+        )
+        keys = [(int(row.bfs), str(row.parcel)) for row in parcels.itertuples()]
+        workflow.set_saved(keys, True, self.database)
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        ).run()
+        self.assertFalse(app.exception)
+
+        self.assertNotIn(acquisition.CONTACT_OPEN, app.session_state)
+        self.assertEqual(len(app.text_input), 0)
+        self.assertEqual(len(app.text_area), 0)
+        # The zero counts above are only meaningful if the leads actually
+        # rendered — an empty shortlist would pass them for the wrong reason.
+        stage_selectboxes = [
+            widget
+            for widget in app.selectbox
+            if str(widget.key or "").startswith("stage_")
+        ]
+        self.assertEqual(len(stage_selectboxes), len(keys))
 
     def test_the_analyse_button_opens_the_single_parcel_view(self):
         """Analyse is the only door into the detail view; if the session key
