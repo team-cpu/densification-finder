@@ -43,8 +43,6 @@ TEXT_LIMITS = {
     "note": 1000,
 }
 
-DATE_FIELDS = ("due_date", "last_contact")
-
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
