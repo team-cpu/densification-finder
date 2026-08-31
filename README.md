@@ -18,16 +18,23 @@ then be stored in the CRM list.
 
 ## Lead workflow
 
-The hotlist supports multi-row selection. Selected parcels can be saved in a
-municipality-grouped list or marked **Nicht interessant**, which removes them
+The hotlist supports multi-row selection. Selected parcels can be saved to
+the acquisition board or marked **Nicht interessant**, which removes them
 before the next shortlist is ranked. Hidden parcels remain recoverable from the
 workflow panel.
 
-Saved leads carry an optional manually entered owner/contact name and one of
-four statuses: *Noch nicht kontaktiert*, *Kontaktiert*, *Abgelehnt*, or *Termin
-vereinbart*. These decisions live in `parcel_workflow`, separate from calculated
-results, so a cascade recompute cannot erase them. On Railway they share the
-same persistent SQLite volume as the ÖREB cache.
+The board groups saved leads by contact stage rather than by municipality — a
+lead's municipality still appears on its card, but what the work moves through
+day to day is where the owner conversation stands. A lead carries one of five
+stages: *Nicht kontaktiert*, *Brief versandt*, *Im Gespräch*, *Termin
+vereinbart*, or *Abgelehnt*. Alongside the stage, a lead can hold a follow-up
+date (*Wiedervorlage*), a last-contact date, a next step, a note, and a
+contact person with phone and email. A *Fällige Wiedervorlagen* list above the
+board surfaces the leads whose follow-up date needs chasing, so a promised
+call-back does not depend on anyone remembering to look for it. These
+decisions live in `parcel_workflow`, separate from calculated results, so a
+cascade recompute cannot erase them. On Railway they share the same
+persistent SQLite volume as the ÖREB cache.
 
 ## Running it
 
