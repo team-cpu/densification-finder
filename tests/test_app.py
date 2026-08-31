@@ -169,7 +169,7 @@ class AppRegressionTest(unittest.TestCase):
             & (shown["Parzelle"].astype(str) == str(first["Parzelle"]))
         ]
         self.assertEqual(match.iloc[0]["Merkliste"], "Gespeichert")
-        self.assertEqual(match.iloc[0]["Kontaktstatus"], "Kontaktiert")
+        self.assertEqual(match.iloc[0]["Kontaktstatus"], "Brief versandt")
 
         workflow.set_hidden([key], True, self.database)
         app.run()

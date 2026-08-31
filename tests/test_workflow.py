@@ -78,6 +78,25 @@ class ParcelWorkflowTest(unittest.TestCase):
                 [(4209, "3967")], "x" * 201, self.database
             )
 
+    def test_the_new_stage_is_stored_and_the_order_is_the_board_order(self):
+        workflow.set_contact_status(
+            [(4001, "12")], "in_discussion", self.database
+        )
+        self.assertEqual(
+            workflow.load(self.database).iloc[0]["contact_status"],
+            "in_discussion",
+        )
+        self.assertEqual(
+            list(workflow.CONTACT_STATUS_LABELS),
+            [
+                "not_contacted",
+                "contacted",
+                "in_discussion",
+                "meeting_scheduled",
+                "declined",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

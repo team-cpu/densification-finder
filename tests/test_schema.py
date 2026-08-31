@@ -253,6 +253,44 @@ class WorkflowStatusRebuildTest(unittest.TestCase):
         )
         con.close()
 
+    def test_the_four_status_release_upgrades_to_five(self):
+        """The exact shape on the deployed volume: the four statuses this
+        application shipped with, and leads sitting in them."""
+        con = sqlite3.connect(":memory:")
+        con.executescript(
+            """
+            CREATE TABLE parcel_workflow (
+                bfs            INTEGER NOT NULL,
+                parcel         TEXT NOT NULL,
+                saved          INTEGER NOT NULL DEFAULT 0,
+                hidden         INTEGER NOT NULL DEFAULT 0,
+                owner_name     TEXT NOT NULL DEFAULT '',
+                contact_status TEXT NOT NULL DEFAULT 'not_contacted',
+                updated_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (contact_status IN ('not_contacted', 'contacted',
+                                          'declined', 'meeting_scheduled')),
+                PRIMARY KEY (bfs, parcel)
+            );
+            INSERT INTO parcel_workflow (bfs, parcel, saved, contact_status)
+            VALUES (4001, '1', 1, 'contacted'),
+                   (4002, '7', 1, 'declined');
+            """
+        )
+
+        ingest.schema(con)
+
+        self.assertEqual(
+            con.execute(
+                "SELECT contact_status FROM parcel_workflow ORDER BY bfs"
+            ).fetchall(),
+            [("contacted",), ("declined",)],
+        )
+        con.execute(
+            "INSERT INTO parcel_workflow (bfs, parcel, contact_status) "
+            "VALUES (4003, '9', 'in_discussion')"
+        )
+        con.close()
+
 
 class DatabaseBootstrapTest(unittest.TestCase):
     def test_bootstrap_migrates_a_persistent_legacy_database(self):

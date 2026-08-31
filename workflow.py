@@ -15,11 +15,17 @@ import pandas as pd
 import paths
 
 
+#: Dictionary order is the acquisition board's column order, left to right —
+#: the sequence a lead actually moves through. The codes are stable; only the
+#: labels are display. `contacted` is shown as "Brief versandt" because that is
+#: the step it has always meant in practice, and renaming the code would mean
+#: rewriting stored values for a caption.
 CONTACT_STATUS_LABELS = {
-    "not_contacted": "Noch nicht kontaktiert",
-    "contacted": "Kontaktiert",
-    "declined": "Abgelehnt",
+    "not_contacted": "Nicht kontaktiert",
+    "contacted": "Brief versandt",
+    "in_discussion": "Im Gespräch",
     "meeting_scheduled": "Termin vereinbart",
+    "declined": "Abgelehnt",
 }
 DEFAULT_CONTACT_STATUS = "not_contacted"
 
