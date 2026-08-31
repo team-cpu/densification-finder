@@ -25,7 +25,10 @@ def leads_frame(rows):
 
 
 class OverdueTest(unittest.TestCase):
-    def test_a_lead_due_today_is_not_yet_overdue(self):
+    def test_a_lead_due_today_is_overdue(self):
+        """The design prototype's own rule is `dd <= TODAY`; a `<` boundary
+        here meant a lead due today did not show up as needing a call until
+        tomorrow, by which point it was already a day late."""
         leads = leads_frame(
             [
                 (4001, "1", "Aarau", "contacted", "2026-08-30"),
@@ -36,7 +39,22 @@ class OverdueTest(unittest.TestCase):
 
         due = acquisition.overdue(leads, "2026-08-31")
 
-        self.assertEqual(list(due["parcel"]), ["1"])
+        self.assertEqual(list(due["parcel"]), ["1", "2"])
+
+    def test_a_declined_lead_is_never_overdue(self):
+        """`Abgelehnt` already means the owner said no; a lead marked
+        no-interest and given a distant revisit date must not nag every day
+        until that date arrives."""
+        leads = leads_frame(
+            [
+                (4001, "1", "Aarau", "declined", "2020-01-01"),
+                (4002, "2", "Baden", "contacted", "2020-01-01"),
+            ]
+        )
+
+        due = acquisition.overdue(leads, "2026-08-31")
+
+        self.assertEqual(list(due["parcel"]), ["2"])
 
     def test_a_lead_without_a_date_is_never_chased(self):
         leads = leads_frame(
@@ -69,6 +87,79 @@ class OverdueTest(unittest.TestCase):
         due = acquisition.overdue(leads_frame([]), "2026-08-31")
 
         self.assertTrue(due.empty)
+
+
+class DueItemsTest(unittest.TestCase):
+    def test_overdue_leads_come_before_not_yet_due_dated_leads(self):
+        """Mirrors the design prototype's `dueItems`: overdue first, then a
+        look-ahead at what's coming — not the overdue set alone, which made
+        the preview go quiet the moment the last overdue lead cleared."""
+        leads = leads_frame(
+            [
+                (4001, "1", "Aarau", "contacted", "2026-09-10"),  # not yet due
+                (4002, "2", "Baden", "contacted", "2026-08-20"),  # overdue
+                (4003, "3", "Brugg", "contacted", "2026-09-05"),  # not yet due
+            ]
+        )
+
+        items = acquisition.due_items(leads, "2026-08-31")
+
+        self.assertEqual(list(items["parcel"]), ["2", "3", "1"])
+
+    def test_due_items_caps_at_four_rows(self):
+        """The preview is a glance at what needs chasing, not a second copy
+        of the board — an uncapped list defeats that."""
+        leads = leads_frame(
+            [
+                (4000 + i, str(i), "Aarau", "contacted", f"2026-09-0{i}")
+                for i in range(1, 7)
+            ]
+        )
+
+        items = acquisition.due_items(leads, "2026-08-31")
+
+        self.assertEqual(len(items), 4)
+
+    def test_a_declined_lead_is_absent_even_when_dated(self):
+        """Declined is excluded from both halves of `dueItems` in the
+        prototype, not just from the overdue half."""
+        leads = leads_frame(
+            [
+                (4001, "1", "Aarau", "declined", "2020-01-01"),
+                (4002, "2", "Baden", "declined", "2026-09-10"),
+            ]
+        )
+
+        items = acquisition.due_items(leads, "2026-08-31")
+
+        self.assertTrue(items.empty)
+
+    def test_a_lead_with_no_date_is_absent(self):
+        leads = leads_frame([(4001, "1", "Aarau", "contacted", "")])
+
+        items = acquisition.due_items(leads, "2026-08-31")
+
+        self.assertTrue(items.empty)
+
+    def test_overdue_leads_within_due_items_are_earliest_first(self):
+        leads = leads_frame(
+            [
+                (4001, "1", "Aarau", "contacted", "2026-08-27"),
+                (4002, "2", "Baden", "contacted", "2026-08-12"),
+                (4003, "3", "Brugg", "contacted", "2026-08-21"),
+            ]
+        )
+
+        items = acquisition.due_items(leads, "2026-08-31")
+
+        self.assertEqual(
+            list(items["due_date"]), ["2026-08-12", "2026-08-21", "2026-08-27"]
+        )
+
+    def test_an_empty_shortlist_returns_an_empty_frame(self):
+        items = acquisition.due_items(leads_frame([]), "2026-08-31")
+
+        self.assertTrue(items.empty)
 
 
 class ByStageTest(unittest.TestCase):

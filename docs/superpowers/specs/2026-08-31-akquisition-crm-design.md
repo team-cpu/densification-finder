@@ -171,13 +171,15 @@ a Streamlit runtime:
 
 ```python
 def leads(parcels, decisions, field):   # saved/hidden decisions ⋈ parcel facts
-def overdue(shortlist, today):          # -> due_date < today, ascending
+def overdue(shortlist, today):          # -> due_date <= today, not declined, ascending
+def due_items(shortlist, today, limit): # -> overdue, then not-yet-due, capped
 def by_stage(shortlist):                # -> dict[code, DataFrame], board order
 def render(parcels, decisions, db, today, price_of)   # the only Streamlit part
 ```
 
-`leads`, `overdue` and `by_stage` take and return plain data. `render` composes
-them and takes its column counts from `len()` of each `by_stage` frame.
+`leads`, `overdue`, `due_items` and `by_stage` take and return plain data.
+`render` composes them and takes its column counts from `len()` of each
+`by_stage` frame.
 
 Two of `render`'s arguments are injected rather than imported. `today` is an ISO
 string instead of a call to `date.today()`, so the overdue boundary is testable.
@@ -190,10 +192,18 @@ card.
 
 Top to bottom, following the canvas:
 
-1. **Fällige Wiedervorlagen** — a table of leads whose `due_date` has passed,
-   ascending, with a count. Columns: date, address, Gemeinde · Parzelle, owner,
-   stage, next step. Overdue dates are tinted. The section is hidden entirely
-   when nothing is due, rather than showing an empty frame.
+1. **Fällige Wiedervorlagen** — overdue leads first, then dated leads not yet
+   due, each group ascending, capped at four rows total (`due_items`). The
+   count next to the heading is the overdue count alone, not the row count —
+   a lead due today is already in it. Columns: date, address, Gemeinde ·
+   Parzelle, owner, stage, next step. The `Wiedervorlage` cell of an overdue
+   row is tinted; a not-yet-due row is not. The section is hidden entirely
+   when nothing is due, rather than showing an empty frame. This is the
+   design prototype's own rule, ported exactly (`overdue`/`dueItems`/
+   `dueCount` in the canvas source) rather than reinvented from the German
+   copy: `dd <= TODAY`, `status !== 'Abgelehnt'`, and a `dueItems` list that
+   is overdue-then-upcoming sliced to four while `dueCount` stays the overdue
+   count.
 2. **The board** — `st.columns(5)`, one per stage in dictionary order, each with
    a header carrying the stage name and its count, then one bordered container
    per lead. A card shows address, Gemeinde · Parzelle, Potenzial m², reference
@@ -229,8 +239,11 @@ Alongside it:
 - each new field survives a write-and-read round trip through `update()`;
 - an omitted field keeps its stored value while a sibling field is written;
 - a malformed date and an over-length text field each raise `ValueError`;
-- `overdue()` treats a lead due *today* as not yet overdue, and excludes leads
-  with an empty `due_date`;
+- `overdue()` treats a lead due *today* as overdue, excludes a `declined`
+  lead regardless of its date, and excludes leads with an empty `due_date`;
+- `due_items()` returns overdue leads before not-yet-due dated leads, each
+  group earliest first, capped at four, with `declined` and undated leads
+  absent from both groups;
 - `by_stage()` returns all five stages in dictionary order, including the empty
   ones, so the board renders five columns on an empty database.
 

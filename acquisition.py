@@ -16,6 +16,10 @@ import streamlit as st
 import detail
 import workflow as WF
 
+#: How many rows the due-follow-up preview shows. The design caps it: the
+#: section is a glance at what needs chasing, not a second copy of the board.
+DUE_PREVIEW = 4
+
 
 def leads(parcels: pd.DataFrame, decisions: pd.DataFrame, field: str) -> pd.DataFrame:
     """Saved or hidden decisions joined back to the parcel facts they name.
@@ -36,12 +40,19 @@ def leads(parcels: pd.DataFrame, decisions: pd.DataFrame, field: str) -> pd.Data
 
 
 def overdue(shortlist: pd.DataFrame, today: str) -> pd.DataFrame:
-    """Leads whose follow-up date has passed, earliest first.
+    """Leads whose follow-up date is today or earlier, earliest first,
+    excluding leads marked `declined`.
 
     `today` is an ISO string parameter rather than a call to `date.today()`, so
-    the boundary is testable. A lead due today is not yet overdue. A lead with
-    no date is not chased at all: an empty `due_date` means nobody has decided
-    when to come back, which is a different state from being late.
+    the boundary is testable. The rule is ported from the design prototype's
+    own `overdue` flag (`dd <= TODAY`): a lead due today is due today, not
+    tomorrow — a `<` boundary here meant a follow-up sat unmentioned until the
+    day after it actually needed chasing. A `declined` lead is never due
+    regardless of its date: the status already means the owner said no, and a
+    lead like "no interest, revisit 2027" must not nag every day until then. A
+    lead with no date is not chased at all: an empty `due_date` means nobody
+    has decided when to come back, which is a different state from being
+    late.
 
     ISO dates compare as strings exactly as they compare as dates, so no
     parsing is needed to sort them.
@@ -49,9 +60,34 @@ def overdue(shortlist: pd.DataFrame, today: str) -> pd.DataFrame:
     if shortlist.empty:
         return shortlist
     due = shortlist["due_date"].fillna("").astype(str)
-    return shortlist[(due != "") & (due < today)].sort_values(
+    not_declined = shortlist["contact_status"] != "declined"
+    return shortlist[(due != "") & (due <= today) & not_declined].sort_values(
         "due_date", kind="stable"
     )
+
+
+def due_items(
+    shortlist: pd.DataFrame, today: str, limit: int = DUE_PREVIEW
+) -> pd.DataFrame:
+    """The follow-up preview: overdue leads first, then dated leads not yet
+    due, each group earliest first, capped at `limit` rows.
+
+    Ported from the design prototype's `dueItems`: overdue leads concatenated
+    with not-yet-due dated leads (declined and undated leads excluded from
+    both), then sliced to four. Showing only the overdue rows told the user
+    what is already late but nothing about what is coming, so the desk looked
+    clear the moment the last overdue lead was cleared even with a wall of
+    follow-ups due next week.
+    """
+    if shortlist.empty:
+        return shortlist
+    late = overdue(shortlist, today)
+    due = shortlist["due_date"].fillna("").astype(str)
+    not_declined = shortlist["contact_status"] != "declined"
+    upcoming = shortlist[(due != "") & (due > today) & not_declined].sort_values(
+        "due_date", kind="stable"
+    )
+    return pd.concat([late, upcoming]).head(limit)
 
 
 def _board_order(frame: pd.DataFrame) -> pd.DataFrame:
@@ -128,30 +164,47 @@ def render(parcels, decisions, db, today, price_of):
 
 def _render_overdue(shortlist, today):
     """Hidden entirely when nothing is due, rather than shown as an empty frame
-    — an empty table reads as a broken query, not as a clear desk."""
-    due = overdue(shortlist, today)
-    if due.empty:
+    — an empty table reads as a broken query, not as a clear desk.
+
+    The rows are `due_items` (overdue leads, then a look-ahead at what is
+    coming, capped), but the badge counts `overdue` alone — the badge answers
+    "how many need chasing right now", and counting the look-ahead rows too
+    would make it lie the moment the preview shows anything upcoming.
+    """
+    rows = due_items(shortlist, today)
+    if rows.empty:
         return
-    st.markdown(f"**Fällige Wiedervorlagen** · {len(due)} offen")
-    st.dataframe(
-        pd.DataFrame(
-            {
-                "Wiedervorlage": due["due_date"],
-                "Adresse": due["address"].map(_or_dash),
-                "Gemeinde": due["municipality"],
-                "Parzelle": due["parcel"],
-                "Eigentümerschaft": due["owner_name"].map(_or_dash),
-                "Stufe": due["contact_status"].map(
-                    lambda code: WF.CONTACT_STATUS_LABELS.get(
-                        code, WF.CONTACT_STATUS_LABELS[WF.DEFAULT_CONTACT_STATUS]
-                    )
-                ),
-                "Nächster Schritt": due["next_step"].map(_or_dash),
-            }
-        ),
-        hide_index=True,
-        width="stretch",
+    overdue_count = len(overdue(shortlist, today))
+    st.markdown(f"**Fällige Wiedervorlagen** · {overdue_count} offen")
+    frame = pd.DataFrame(
+        {
+            "Wiedervorlage": rows["due_date"],
+            "Adresse": rows["address"].map(_or_dash),
+            "Gemeinde": rows["municipality"],
+            "Parzelle": rows["parcel"],
+            "Eigentümerschaft": rows["owner_name"].map(_or_dash),
+            "Stufe": rows["contact_status"].map(
+                lambda code: WF.CONTACT_STATUS_LABELS.get(
+                    code, WF.CONTACT_STATUS_LABELS[WF.DEFAULT_CONTACT_STATUS]
+                )
+            ),
+            "Nächster Schritt": rows["next_step"].map(_or_dash),
+        }
+    # `due_items` puts overdue rows first but keeps `shortlist`'s original
+    # (non-contiguous) index; the tint below picks rows by position, so it
+    # needs a plain 0..n-1 index or it would tint the wrong cells whenever the
+    # original index skipped or reordered.
+    ).reset_index(drop=True)
+    # `due_items` orders overdue leads first, so the first `overdue_count`
+    # positions in `frame` are exactly the overdue ones — a subset built from
+    # that row range, rather than an `axis=1` scan of every row, says so
+    # directly instead of re-deriving it from `Wiedervorlage <= today`.
+    overdue_rows = frame.index[:overdue_count]
+    styled = frame.style.map(
+        lambda _: "background-color:#fdf5e7;color:#8a5a12",
+        subset=(overdue_rows, "Wiedervorlage"),
     )
+    st.dataframe(styled, hide_index=True, width="stretch")
 
 
 def _render_board(shortlist, db, price_of):
