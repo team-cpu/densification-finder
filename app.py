@@ -25,6 +25,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+import acquisition as ACQ
 import detail
 import economics as EC
 import formatting as F
@@ -552,176 +553,9 @@ if paths.on_persistent_disk() is False:
     )
 
 
-def workflow_parcels(field):
-    """Join saved/hidden decisions back to the current parcel facts."""
-    if parcel_workflow.empty:
-        return parcels.iloc[0:0].copy()
-    selected_state = parcel_workflow[parcel_workflow[field].fillna(0).astype(bool)]
-    if selected_state.empty:
-        return parcels.iloc[0:0].copy()
-    return selected_state.merge(
-        parcels,
-        on=["bfs", "parcel"],
-        how="inner",
-        validate="one_to_one",
-    )
-
-
-def render_workflow():
-    """Saved leads grouped by municipality, plus a recoverable hidden list."""
-    st.divider()
-    st.subheader("Merkliste & Eigentümerkontakte")
-    st.caption(
-        "Gespeicherte Parzellen sind nach Gemeinde gruppiert. Eigentümer werden "
-        "weiterhin manuell im AGIS nachgeschlagen; hier wird der Kontaktstatus "
-        "pro Parzelle festgehalten."
-    )
-
-    saved_leads = workflow_parcels("saved")
-    if saved_leads.empty:
-        st.info("Noch keine Parzellen gespeichert.")
-    else:
-        status_from_label = {
-            label: status for status, label in WF.CONTACT_STATUS_LABELS.items()
-        }
-        saved_leads = saved_leads.sort_values(
-            ["municipality", "parcel"], kind="stable"
-        )
-        for (bfs, municipality), group in saved_leads.groupby(
-            ["bfs", "municipality"], sort=False
-        ):
-            with st.expander(f"{municipality} · {len(group)} Parzelle(n)"):
-                contact_codes = group["contact_status"].fillna(
-                    WF.DEFAULT_CONTACT_STATUS
-                )
-                crm = pd.DataFrame(
-                    {
-                        "_bfs": group["bfs"].astype(int),
-                        "_parcel": group["parcel"].astype(str),
-                        "Parzelle": group["parcel"].astype(str),
-                        "Adresse": group["address"].fillna("—").replace("", "—"),
-                        "Zone": group["zone"].fillna("—").replace("", "—"),
-                        "Ziffer": group["az"],
-                        "Potenzial m²": group["delta"].round(0),
-                        "Eigentümer / Kontakt": group["owner_name"].fillna(""),
-                        "Kontaktstatus": contact_codes.map(
-                            WF.CONTACT_STATUS_LABELS
-                        ).fillna(
-                            WF.CONTACT_STATUS_LABELS[WF.DEFAULT_CONTACT_STATUS]
-                        ),
-                        "AGIS": group.apply(
-                            lambda row: L.agis_link(row["e"], row["n"]), axis=1
-                        ),
-                        "Von Merkliste entfernen": False,
-                    }
-                )
-                with st.form(f"crm_form_{int(bfs)}"):
-                    edited = st.data_editor(
-                        crm,
-                        key=f"crm_editor_{int(bfs)}",
-                        width="stretch",
-                        hide_index=True,
-                        column_order=(
-                            "Parzelle",
-                            "Adresse",
-                            "Zone",
-                            "Ziffer",
-                            "Potenzial m²",
-                            "Eigentümer / Kontakt",
-                            "Kontaktstatus",
-                            "AGIS",
-                            "Von Merkliste entfernen",
-                        ),
-                        disabled=(
-                            "_bfs",
-                            "_parcel",
-                            "Parzelle",
-                            "Adresse",
-                            "Zone",
-                            "Ziffer",
-                            "Potenzial m²",
-                            "AGIS",
-                        ),
-                        column_config={
-                            "Ziffer": st.column_config.NumberColumn(format="%g"),
-                            "Potenzial m²": st.column_config.NumberColumn(
-                                format="%.0f"
-                            ),
-                            "Kontaktstatus": st.column_config.SelectboxColumn(
-                                options=list(WF.CONTACT_STATUS_LABELS.values()),
-                                required=True,
-                                width="medium",
-                            ),
-                            "Eigentümer / Kontakt": st.column_config.TextColumn(
-                                "Eigentümer / Kontakt",
-                                max_chars=200,
-                                width="medium",
-                                help="Manuell aus dem AGIS-Eigentumsnachweis eintragen.",
-                            ),
-                            "AGIS": st.column_config.LinkColumn(
-                                display_text="Karte", width="small"
-                            ),
-                            "Von Merkliste entfernen": st.column_config.CheckboxColumn(
-                                width="small"
-                            ),
-                        },
-                    )
-                    save_crm = st.form_submit_button("Änderungen speichern")
-
-                if save_crm:
-                    by_status = {status: [] for status in WF.CONTACT_STATUS_LABELS}
-                    by_owner = {}
-                    remove_keys = []
-                    for _, row in edited.iterrows():
-                        key = int(row["_bfs"]), str(row["_parcel"])
-                        status_code = status_from_label[str(row["Kontaktstatus"])]
-                        by_status[status_code].append(key)
-                        owner_name = str(row["Eigentümer / Kontakt"] or "")
-                        by_owner.setdefault(owner_name, []).append(key)
-                        if bool(row["Von Merkliste entfernen"]):
-                            remove_keys.append(key)
-                    for status_code, keys in by_status.items():
-                        WF.set_contact_status(keys, status_code, DB)
-                    for owner_name, keys in by_owner.items():
-                        WF.set_owner_name(keys, owner_name, DB)
-                    WF.set_saved(remove_keys, False, DB)
-                    st.toast("Kontaktstatus und Merkliste gespeichert.")
-                    st.rerun()
-
-    hidden_leads = workflow_parcels("hidden")
-    if not hidden_leads.empty:
-        hidden_options = [
-            parcel_key(row) for _, row in hidden_leads.sort_values(
-                ["municipality", "parcel"], kind="stable"
-            ).iterrows()
-        ]
-        hidden_labels = {
-            parcel_key(row): (
-                f"{row['municipality']} · Parzelle {row['parcel']} · "
-                f"{row['address'] if pd.notna(row['address']) and row['address'] else 'ohne Adresse'}"
-            )
-            for _, row in hidden_leads.iterrows()
-        }
-        with st.expander(f"Ausgeblendete Parzellen · {len(hidden_leads)}"):
-            restore = st.multiselect(
-                "Wieder in der Ergebnisliste anzeigen",
-                hidden_options,
-                format_func=lambda key: hidden_labels[key],
-                key="restore_hidden_selection",
-            )
-            if st.button(
-                "Auswahl wieder anzeigen",
-                key="restore_hidden_button",
-                disabled=not restore,
-            ):
-                WF.set_hidden(restore, False, DB)
-                st.toast(f"{len(restore)} Parzelle(n) wieder eingeblendet.")
-                st.rerun()
-
-
 if final.empty:
     st.info("Keine Parzelle erfüllt diese Kriterien.")
-    render_workflow()
+    ACQ.render(parcels, parcel_workflow, DB, date.today().isoformat(), price_of)
     st.stop()
 
 # ── table ───────────────────────────────────────────────────────────────────
@@ -968,7 +802,7 @@ st.caption(
     "Potenzial und Residualwertrechnung mit eigenen Annahmen, als PDF exportierbar."
 )
 
-render_workflow()
+ACQ.render(parcels, parcel_workflow, DB, date.today().isoformat(), price_of)
 
 if not excluded.empty:
     with st.expander(f"{len(excluded)} Parzellen durch ÖREB ausgeschlossen"):

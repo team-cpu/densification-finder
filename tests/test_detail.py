@@ -279,7 +279,7 @@ class DetailViewTest(unittest.TestCase):
         self.assertIn("Adresse", app.dataframe[0].value.columns)
         self.assertEqual(
             [heading.value for heading in app.subheader],
-            ["Merkliste & Eigentümerkontakte"],
+            ["Akquisition — Eigentümerdialog"],
         )
 
     def test_editing_an_assumption_recalculates_live(self):
