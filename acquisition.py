@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 import detail
+import navigation
 import workflow as WF
 
 #: How many rows the due-follow-up preview shows. The design caps it: the
@@ -341,6 +342,7 @@ def _render_card(row, db, price_of):
 
         if st.button("Analyse", key=f"open_{slug}", width="stretch"):
             detail.open_parcel(detail.parcel_id(row))
+            navigation.go_to("Analyse")
             st.rerun()
 
         if st.button("Kontakt", key=f"contact_{slug}", width="stretch"):

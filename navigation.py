@@ -27,6 +27,9 @@ PAGE = "acq_page"
 #: A parked request to move, honoured by `reconcile` on the next run.
 PENDING = "acq_page_go"
 
+#: The page a jump came from, so "back" returns there.
+ORIGIN = "acq_page_from"
+
 
 def reconcile(state) -> str:
     """Apply any parked navigation request. Call before rendering the control.
@@ -49,7 +52,18 @@ def go_to(page: str, state=None) -> None:
     """
     if page not in PAGES:
         raise ValueError(f"Unknown page: {page}")
-    (st.session_state if state is None else state)[PENDING] = page
+    target = st.session_state if state is None else state
+    # Recorded before the request so "← Zurück zur Liste" can return to the
+    # list the reader actually came from. Analyse is reachable from three
+    # pages, and a fixed destination strands anyone who arrived from the board.
+    target[ORIGIN] = target.get(PAGE, DEFAULT_PAGE)
+    target[PENDING] = page
+
+
+def go_back(state=None) -> None:
+    """Return to the page a jump came from, or to the default if none was."""
+    target = st.session_state if state is None else state
+    go_to(target.get(ORIGIN, DEFAULT_PAGE), target)
 
 
 def render() -> str:

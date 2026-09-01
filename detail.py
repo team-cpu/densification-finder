@@ -28,6 +28,7 @@ import economics as E
 import regulations as R
 import formatting as F
 import links as L
+import navigation
 import report
 
 #: Which parcel the app is showing, or absent for the list view. The whole
@@ -596,6 +597,10 @@ def page(parcels, cache, price_of, news=None):
     top = st.columns([2, 5, 2], vertical_alignment="center")
     if top[0].button("← Zurück zur Liste", width="stretch"):
         close()
+        # Back to the list the reader came from. Analyse is now a page
+        # rather than a view that replaced the list, so dropping the parcel
+        # key alone would leave them here looking at an empty state.
+        navigation.go_back()
         st.rerun()
 
     if row is None:

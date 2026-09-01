@@ -282,14 +282,14 @@ class DetailViewTest(unittest.TestCase):
         back.click().run()
         self.assertFalse(app.exception)
         self.assertNotIn(detail.SELECTED, app.session_state)
+        # Dropping the parcel key is no longer enough now that Analyse is a
+        # page of its own: without the navigation the reader would still be
+        # standing on it, looking at its empty state.
+        self.assertEqual(app.session_state[navigation.PAGE], "Screening")
         # The hotlist is back. Counting tables would be counting the wrong
         # thing: a second one appears as soon as the cadastre has excluded a
         # parcel from the shortlist, which is data, not behaviour.
         self.assertIn("Adresse", app.dataframe[0].value.columns)
-        self.assertEqual(
-            [heading.value for heading in app.subheader],
-            ["Akquisition — Eigentümerdialog"],
-        )
 
     def test_editing_an_assumption_recalculates_live(self):
         """No recalculate button: the residual value has to follow the input on
@@ -327,7 +327,11 @@ class DetailViewTest(unittest.TestCase):
                 (self.pid,),
             ).fetchone()
         next(b for b in app.button if b.label.startswith("←")).click().run()
+        # Back now lands on Screening, so choosing the next parcel means both
+        # the key and the page — the parcel key alone stopped being the whole
+        # navigation when Analyse became a page.
         app.session_state[detail.SELECTED] = f"{other[0]}:{other[1]}"
+        app.session_state[navigation.PAGE] = "Analyse"
         app.run()
         self.assertFalse(app.exception)
 

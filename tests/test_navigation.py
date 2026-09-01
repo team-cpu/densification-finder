@@ -53,5 +53,27 @@ class NavigationTest(unittest.TestCase):
         self.assertEqual(state[navigation.PAGE], "Screening")
 
 
+    def test_go_back_returns_to_the_page_a_jump_came_from(self):
+        """Analyse is reachable from Screening, the Merkliste and the board.
+        Sending every "back" to Screening would lose the board position of
+        anyone who arrived from it."""
+        state = FakeState({navigation.PAGE: "Akquisition"})
+
+        navigation.go_to("Analyse", state)
+        navigation.reconcile(state)
+        navigation.go_back(state)
+
+        self.assertEqual(state[navigation.PENDING], "Akquisition")
+
+    def test_go_back_falls_to_the_default_when_no_origin_was_recorded(self):
+        """A parcel opened by a deep link, or by a session restored from an
+        older release, has no origin to return to."""
+        state = FakeState({navigation.PAGE: "Analyse"})
+
+        navigation.go_back(state)
+
+        self.assertEqual(state[navigation.PENDING], "Screening")
+
+
 if __name__ == "__main__":
     unittest.main()
