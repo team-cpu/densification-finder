@@ -506,6 +506,38 @@ class AppRegressionTest(unittest.TestCase):
             app.session_state["selected_parcel_id"], f"{bfs}:{parcel}"
         )
 
+    def test_the_merkliste_totals_the_shortlist_it_lists(self):
+        """The board groups the same leads by stage; this page's whole job is
+        the total. A tile that drifted from the table beneath it would be the
+        number someone quotes without ever scrolling down to check it."""
+        rows = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 2",
+            sqlite3.connect(self.database),
+        )
+        keys = [(int(row.bfs), str(row.parcel)) for row in rows.itertuples()]
+        workflow.set_saved(keys, True, self.database)
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=30
+        )
+        app.session_state[navigation.PAGE] = "Merkliste"
+        app.run()
+
+        self.assertFalse(app.exception)
+
+        table = next(
+            frame.value
+            for frame in app.dataframe
+            if "Kontaktstand" in getattr(frame.value, "columns", [])
+        )
+        self.assertEqual(len(table), 2)
+
+        # `app.metric[i].value` is the formatted body text (`MetricProto.body`,
+        # e.g. "2"), not a number — read via the label so this does not depend
+        # on tile order.
+        parcels_tile = next(m for m in app.metric if m.label == "Parzellen")
+        self.assertEqual(parcels_tile.value, "2")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,7 @@ import streamlit as st
 import acquisition as ACQ
 import detail
 import land_prices as LP
+import merkliste
 import navigation
 import regulations as REG
 import screening
@@ -139,7 +140,7 @@ page = navigation.render()
 if page == "Screening":
     screening.page(parcels, parcel_workflow, DB, price_of, land_price_references, runs)
 elif page == "Merkliste":
-    st.info("Merkliste folgt.")
+    merkliste.page(parcels, parcel_workflow, DB, price_of)
 elif page == "Analyse":
     if detail.selected():
         detail.page(
