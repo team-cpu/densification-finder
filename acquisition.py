@@ -33,13 +33,21 @@ CONTACT_OPEN = "acquisition_contact_open"
 #: Scoped to the board's own keyed container (`st-key-acq_board`) so it does
 #: not touch the unrelated `st.columns` layouts elsewhere in `app.py`. Five
 #: fixed-width columns held their shape at any viewport, which shredded
-#: addresses and stage labels into unreadable fragments around 683px; letting
-#: the row wrap and giving each column a floor width fixes the small-viewport
-#: case without changing anything at desktop width, where five still fit.
+#: addresses and stage labels into unreadable fragments around 683px.
+#:
+#: The wrap is gated behind a viewport query rather than applied always. A
+#: floor width is measured against Streamlit's content area, which is narrower
+#: than the window, so an ungated `min-width` broke the desktop case it was
+#: supposed to leave alone: at a 1440px window five 260px columns plus their
+#: gaps no longer fit the content area and the fifth stage wrapped to a
+#: full-width row of its own. Above the breakpoint the board keeps Streamlit's
+#: own five-column behaviour and sets no floor at all.
 _BOARD_CSS = """
 <style>
-.st-key-acq_board [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
-.st-key-acq_board [data-testid="stColumn"] { min-width: 260px; }
+@media (max-width: 1100px) {
+  .st-key-acq_board [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+  .st-key-acq_board [data-testid="stColumn"] { min-width: 260px; }
+}
 </style>
 """
 
