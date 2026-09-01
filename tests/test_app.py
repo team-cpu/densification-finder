@@ -68,7 +68,9 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(app.number_input[1].label, "Ziffer")
         self.assertIsNone(app.number_input[1].value)
 
-        app.selectbox[0].select("Alle").run()
+        # The Kanton selector sits ahead of Grundstückstyp in the control row,
+        # so it is selectbox[0]; Grundstückstyp moved to selectbox[1].
+        app.selectbox[1].select("Alle").run()
         self.assertFalse(app.exception)
         frame = app.dataframe[0].value
         self.assertEqual(
@@ -94,7 +96,9 @@ class AppRegressionTest(unittest.TestCase):
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=30
         ).run()
-        app.selectbox[0].select("Alle").run()
+        # The Kanton selector sits ahead of Grundstückstyp in the control row,
+        # so it is selectbox[0]; Grundstückstyp moved to selectbox[1].
+        app.selectbox[1].select("Alle").run()
 
         app.select_slider[0].set_value((5000, float("inf"))).run()
         self.assertFalse(app.exception)
@@ -114,7 +118,9 @@ class AppRegressionTest(unittest.TestCase):
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=30
         ).run()
-        app.selectbox[0].select("Unbebaut").run()
+        # The Kanton selector sits ahead of Grundstückstyp in the control row,
+        # so it is selectbox[0]; Grundstückstyp moved to selectbox[1].
+        app.selectbox[1].select("Unbebaut").run()
         self.assertFalse(app.exception)
         top = app.dataframe[0].value.iloc[0]
         self.assertEqual(top["Gemeinde"], "Rheinfelden")
@@ -257,6 +263,20 @@ class AppRegressionTest(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertEqual(field(app, "Parzellen-Nr. suchen").value, "")
         self.assertEqual(app.number_input[0].value, 130)
+
+    def test_only_aargau_can_be_chosen(self):
+        """The dataset is Aargau. Omitting the others implies they were never
+        planned; offering them as working options returns an empty list that
+        reads as a fault in the app rather than as the end of the data."""
+        app = self.screening()
+
+        canton = next(w for w in app.selectbox if w.label == "Kanton")
+        self.assertEqual(canton.value, "Aargau")
+        self.assertTrue(len(app.dataframe[0].value) > 0)
+        self.assertTrue(
+            any("noch nicht verfügbar" in str(option) for option in canton.options),
+            "the unavailable cantons are not named",
+        )
 
     def test_the_csv_export_carries_the_shown_rows(self):
         import io

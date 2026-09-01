@@ -162,13 +162,31 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             "screening_municipality", "screening_type", "screening_ziffer",
             "screening_hide_inventory", "screening_hide_design_plan",
             "screening_hide_transport", "screening_top_n", "screening_min_age",
+            "screening_canton",
         ):
             st.session_state.pop(key, None)
         st.rerun()
 
-    # c0 is left empty for a Kanton selector — Task 5 adds it, and the rest of
-    # the row keeps its shape rather than reflowing when that lands.
     c0, c1, c2, c3, c4, c5, c6 = st.columns(7)
+    #: Only Aargau has been ingested. The others are listed and labelled rather
+    #: than omitted: a selector that hides them implies they were never planned,
+    #: and one that offers them as working options returns an empty list that
+    #: reads as a fault in the app rather than as the end of the data.
+    CANTONS = (
+        "Aargau",
+        "Luzern (noch nicht verfügbar)",
+        "Zürich (noch nicht verfügbar)",
+    )
+    canton = c0.selectbox(
+        "Kanton",
+        CANTONS,
+        index=0,
+        key="screening_canton",
+        help="Die Ergebnisdatenbank deckt zurzeit nur den Kanton Aargau ab.",
+    )
+    if canton != "Aargau":
+        st.warning("Für diesen Kanton liegen noch keine Daten vor.")
+        return
     min_delta = c1.number_input(
         "Mindestpotenzial (m² GF)",
         MIN_STORED_DELTA,
