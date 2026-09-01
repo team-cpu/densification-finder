@@ -54,6 +54,12 @@ def page(parcels, decisions, db, price_of):
         return
 
     def land_value(row):
+        # Unreachable today and deliberately kept: the committed
+        # `land_prices.csv` carries a canton-wide fallback, so every one of the
+        # 36,274 stored parcels resolves to a reference. Replace that fallback
+        # with licensed municipality rows — which the README describes as the
+        # intended path — and a parcel outside them resolves to None. Without
+        # this the tile would not merely be wrong, it would raise.
         reference = price_of(row)
         if reference is None or pd.isna(row["area"]):
             return None
