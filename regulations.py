@@ -20,6 +20,7 @@ NEWSFEED.md.
 """
 import json
 import threading
+import time
 import urllib.request
 from dataclasses import dataclass
 from datetime import date
@@ -106,10 +107,19 @@ def load(timeout=30):
 # Streamlit `ScriptRunContext`, so `_fetch` below stays pure Python — no
 # `st.*` calls — and `_LOCK` is the only thing the worker and the render
 # thread both touch.
+#: How long a fetched list stays current. Twelve hours is the cadence the
+#: `st.cache_data` TTL this replaced enforced, and its reasoning still
+#: holds: one to two municipalities put a new building regulation in force
+#: per month. Without a TTL the process would fetch once at startup and
+#: serve that same list until it was restarted — on a long-running
+#: deployment, indefinitely.
+NEWS_TTL_SECONDS = 12 * 60 * 60
+
 _LOCK = threading.Lock()
 _STATUS = "not_started"    # "not_started" | "in_flight" | "done"
 _RESULT = None             # (edicts, error), once _STATUS == "done"
 _THREAD = None             # kept so tests can wait for a run to finish
+_FETCHED_AT = None         # monotonic seconds, set when _STATUS became "done"
 
 
 def ensure_news_started(timeout=8):
@@ -125,15 +135,26 @@ def ensure_news_started(timeout=8):
     """
     global _STATUS, _THREAD
     with _LOCK:
+        if (
+            _STATUS == "done"
+            and _FETCHED_AT is not None
+            and time.monotonic() - _FETCHED_AT >= NEWS_TTL_SECONDS
+        ):
+            # `_RESULT` is deliberately left in place. A refetch keeps the
+            # list already on screen rather than replacing it with a
+            # placeholder, so a reader who has edicts never loses them to a
+            # background refresh they did not ask for.
+            _STATUS = "not_started"
         if _STATUS != "not_started":
             return False
         _STATUS = "in_flight"
 
     def _fetch():
-        global _STATUS, _RESULT
+        global _STATUS, _RESULT, _FETCHED_AT
         result = load(timeout=timeout)
         with _LOCK:
             _RESULT = result
+            _FETCHED_AT = time.monotonic()
             _STATUS = "done"
 
     _THREAD = threading.Thread(target=_fetch, daemon=True)
@@ -155,13 +176,14 @@ def reset_news_cache():
     test left behind. Joining before clearing makes that deterministic
     instead of racing a stray thread's write against the next test's setup.
     """
-    global _STATUS, _RESULT, _THREAD
+    global _STATUS, _RESULT, _THREAD, _FETCHED_AT
     thread, _THREAD = _THREAD, None
     if thread is not None and thread.is_alive():
         thread.join(timeout=5)
     with _LOCK:
         _STATUS = "not_started"
         _RESULT = None
+        _FETCHED_AT = None
 
 
 def for_municipality(edicts, name: str, bfs: Optional[int] = None):

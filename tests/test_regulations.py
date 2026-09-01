@@ -1,3 +1,5 @@
+import threading
+import time
 import unittest
 from datetime import date
 
@@ -105,6 +107,84 @@ class JoinTest(unittest.TestCase):
         edict, _ = R.for_municipality(self.edicts, "Möhlin", 4254)
         self.assertEqual(edict.in_force.year, 2023)
 
+
+
+class NewsCacheFreshnessTest(unittest.TestCase):
+    """The background edict cache is a module-level singleton with no TTL of
+    its own from Streamlit — this is what stops it serving one startup fetch
+    for the life of a long-running deployment."""
+
+    def setUp(self):
+        R.reset_news_cache()
+        self.addCleanup(R.reset_news_cache)
+        self.real_load = R.load
+        self.addCleanup(lambda: setattr(R, "load", self.real_load))
+        self.calls = []
+
+    def _stub(self, marker):
+        def load(timeout=30):
+            self.calls.append(marker)
+            return ([marker], "")
+        R.load = load
+
+    def _settle(self):
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if R.news_state()[0] == "done":
+                return
+            time.sleep(0.005)
+        raise AssertionError("fetch did not settle")
+
+    def test_a_fresh_result_is_not_refetched(self):
+        self._stub("first")
+        R.ensure_news_started()
+        self._settle()
+
+        self.assertFalse(R.ensure_news_started())
+        self.assertEqual(self.calls, ["first"])
+
+    def test_a_stale_result_is_refetched(self):
+        """Twelve hours, because one to two municipalities put a new building
+        regulation in force per month. Without this the process would answer
+        with its startup fetch until someone restarted it."""
+        self._stub("first")
+        R.ensure_news_started()
+        self._settle()
+
+        # Age the cache rather than wait half a day for it.
+        R._FETCHED_AT -= R.NEWS_TTL_SECONDS + 1
+        self._stub("second")
+
+        self.assertTrue(R.ensure_news_started())
+        self._settle()
+        self.assertEqual(self.calls, ["first", "second"])
+        self.assertEqual(R.news_state()[1], (["second"], ""))
+
+    def test_the_previous_list_survives_the_refetch_that_replaces_it(self):
+        """A reader who already has edicts must not lose them to a background
+        refresh: block E renders from whatever result exists, so re-arming has
+        to leave the old one in place rather than blanking it."""
+        self._stub("first")
+        R.ensure_news_started()
+        self._settle()
+        R._FETCHED_AT -= R.NEWS_TTL_SECONDS + 1
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow(timeout=30):
+            started.set()
+            release.wait(5)
+            return (["second"], "")
+        R.load = slow
+
+        R.ensure_news_started()
+        started.wait(5)
+        status, result = R.news_state()
+        self.assertEqual(status, "in_flight")
+        self.assertEqual(result, (["first"], ""))
+        release.set()
+        self._settle()
 
 if __name__ == "__main__":
     unittest.main()

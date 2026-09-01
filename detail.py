@@ -890,8 +890,12 @@ def page(parcels, cache, price_of):
         news_status, news_result = "in_flight", None
     else:
         news_status, news_result = R.news_state()
+    # Rendered from whatever result exists, not from the status: once a
+    # twelve-hour refetch re-arms, the previous list is still the best
+    # answer available, and swapping it for a placeholder every half day
+    # would take information away to announce a request nobody asked for.
     edicts, news_error = (
-        news_result if news_status == "done"
+        news_result if news_result is not None
         else ([], "Änderungsliste wird noch geladen.")
     )
     # Looked up once. The panel and the exported sheet print the same sentence,
