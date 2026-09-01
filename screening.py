@@ -146,23 +146,61 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     }
 
     # ── controls ────────────────────────────────────────────────────────────────
-    c1, c2, c3, c4, c5 = st.columns(5)
+    # The search and the reset sit above the filter grid rather than inside it:
+    # neither narrows the result set the way the filters below do — one widens
+    # what's easy to find, the other clears everything at once.
+    query_col, reset_col = st.columns([5, 1])
+    query = query_col.text_input(
+        "Parzellen-Nr. suchen",
+        key="screening_query",
+        placeholder="z. B. 1284 oder Seestrasse",
+        help="Sucht in Parzellennummer, Adresse und Gemeinde.",
+    )
+    if reset_col.button("Zurücksetzen", key="screening_reset"):
+        for key in (
+            "screening_query", "screening_min_delta", "screening_area",
+            "screening_municipality", "screening_type", "screening_ziffer",
+            "screening_hide_inventory", "screening_hide_design_plan",
+            "screening_hide_transport", "screening_top_n", "screening_min_age",
+        ):
+            st.session_state.pop(key, None)
+        st.rerun()
+
+    # c0 is left empty for a Kanton selector — Task 5 adds it, and the rest of
+    # the row keeps its shape rather than reflowing when that lands.
+    c0, c1, c2, c3, c4, c5, c6 = st.columns(7)
     min_delta = c1.number_input(
         "Mindestpotenzial (m² GF)",
         MIN_STORED_DELTA,
         5000,
         MIN_STORED_DELTA,
         10,
+        key="screening_min_delta",
         help=(
             f"Die Ergebnisdatenbank enthält nur Parzellen ab {MIN_STORED_DELTA} m² "
             "Potenzial. Für eine tiefere Grenze muss die Kaskade neu gerechnet werden."
         ),
     )
-    area = c2.select_slider(
+    ziffer = c2.number_input(
+        "Ziffer",
+        min_value=float(parcels["az"].min()),
+        max_value=float(parcels["az"].max()),
+        value=None,
+        step=0.1,
+        format="%g",
+        placeholder="z. B. 0.8",
+        key="screening_ziffer",
+        help=(
+            "Exakter Filter für die flächengewichtete Nutzungsziffer. Leer lassen "
+            "für alle Werte; Dezimalwerte können direkt eingetippt werden."
+        ),
+    )
+    area = c3.select_slider(
         "Parzellenfläche (m²)",
         options=AREA_STEPS,
         value=AREA_DEFAULT,
         format_func=lambda v: "ohne Limite" if v == NO_LIMIT else f"{v:,.0f}",
+        key="screening_area",
         help=(
             "Deckt die ganze Ergebnisdatenbank ab: Die Kaskade speichert jede "
             f"Parzellenfläche (grösste gespeicherte: {parcels['area'].max():,.0f} m²). "
@@ -171,21 +209,25 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         ),
     )
     municipalities = sorted(parcels["municipality"].dropna().unique())
-    chosen = c3.multiselect("Gemeinde (leer = alle)", municipalities)
-    parcel_type = c4.selectbox(
+    chosen = c4.multiselect(
+        "Gemeinde (leer = alle)", municipalities, key="screening_municipality"
+    )
+    parcel_type = c5.selectbox(
         "Grundstückstyp",
         ("Bebaut", "Unbebaut", "Alle"),
+        key="screening_type",
         help=(
             "«Unbebaut» bedeutet: Im GWR ist kein stehendes Gebäude irgendeiner "
             "Nutzungsklasse mit dieser Parzelle verknüpft."
         ),
     )
-    top_n = c5.number_input(
+    top_n = c6.number_input(
         "Anzahl Resultate",
         5,
         SHORTLIST,
         20,
         5,
+        key="screening_top_n",
         help=(
             f"Maximal {SHORTLIST}: Nur diese Shortlist wird gegen den ÖREB-Kataster "
             "geprüft."
@@ -196,18 +238,29 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     #: deployment, which carries the results but not the ~600 MB of source geodata.
     _full_run = _ingest.geodata_available()
 
-    c6, c7, c8, c9, c10 = st.columns([1, 2, 2, 2, 1])
-    ziffer = c6.number_input(
-        "Ziffer",
-        min_value=float(parcels["az"].min()),
-        max_value=float(parcels["az"].max()),
-        value=None,
-        step=0.1,
-        format="%g",
-        placeholder="z. B. 0.8",
+    c7, c8, c9, c10 = st.columns([2, 2, 2, 1])
+    hide_design_plan = c7.checkbox(
+        "Parzellen mit Gestaltungsplan ausblenden", value=False,
+        key="screening_hide_design_plan",
+        help="Wo ein rechtsgültiger Gestaltungsplan gilt, kann er eigene "
+             "Nutzungsziffern festlegen — die Ausnützungsziffer der Grundzone ist "
+             "dort nicht zwingend massgebend.",
+    )
+    hide_inventory = c8.checkbox(
+        "Inventarisierte Gebäude ausblenden", value=False,
+        key="screening_hide_inventory",
+        help="Bauinventar und Kurzinventar verbieten einen Ersatzneubau nicht, "
+             "erschweren ihn aber. Geschützte Gebäude sind ohnehin ausgeschlossen.",
+    )
+    hide_transport = c9.checkbox(
+        "Strassen-/Bahnparzellen ausblenden",
+        value=True,
+        key="screening_hide_transport",
         help=(
-            "Exakter Filter für die flächengewichtete Nutzungsziffer. Leer lassen "
-            "für alle Werte; Dezimalwerte können direkt eingetippt werden."
+            "Blendet Parzellen aus, deren Fläche gemäss amtlicher Vermessung zu "
+            f"mindestens {LC.MIN_TRANSPORT_SHARE:.0%} aus Strasse/Weg, Trottoir, "
+            "Verkehrsinsel oder Bahn besteht. Einfahrten auf normalen Grundstücken "
+            "bleiben dadurch sichtbar. Wirkt nach einer lokalen Neuberechnung."
         ),
     )
     # The brief lists the year-built cutoff among the filter inputs. Unlike the
@@ -218,6 +271,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     # is disabled there rather than silently doing nothing.
     min_age = c10.number_input(
         "Mindestalter (Jahre)", 0, 100, 15, 1,
+        key="screening_min_age",
         disabled=not _full_run,
         help=(
             "Parzellen, deren Gebäude alle sicher jünger sind, werden aussortiert. "
@@ -229,27 +283,6 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             "kann in dieser Umgebung nicht neu gerechnet werden (die Geodaten fehlen). "
             "Die Liste ist mit 15 Jahren gerechnet; für einen anderen Wert lokal neu "
             "rechnen und mitdeployen."
-        ),
-    )
-    hide_inventory = c7.checkbox(
-        "Inventarisierte Gebäude ausblenden", value=False,
-        help="Bauinventar und Kurzinventar verbieten einen Ersatzneubau nicht, "
-             "erschweren ihn aber. Geschützte Gebäude sind ohnehin ausgeschlossen.",
-    )
-    hide_design_plan = c8.checkbox(
-        "Parzellen mit Gestaltungsplan ausblenden", value=False,
-        help="Wo ein rechtsgültiger Gestaltungsplan gilt, kann er eigene "
-             "Nutzungsziffern festlegen — die Ausnützungsziffer der Grundzone ist "
-             "dort nicht zwingend massgebend.",
-    )
-    hide_transport = c9.checkbox(
-        "Strassen-/Bahnparzellen ausblenden",
-        value=True,
-        help=(
-            "Blendet Parzellen aus, deren Fläche gemäss amtlicher Vermessung zu "
-            f"mindestens {LC.MIN_TRANSPORT_SHARE:.0%} aus Strasse/Weg, Trottoir, "
-            "Verkehrsinsel oder Bahn besteht. Einfahrten auf normalen Grundstücken "
-            "bleiben dadurch sichtbar. Wirkt nach einer lokalen Neuberechnung."
         ),
     )
 
@@ -266,6 +299,16 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
                 for bfs, parcel in zip(src["bfs"], src["parcel"])
             ]
         ]
+        # Applied before ranking so a search returns the best matches, not the
+        # matches that happen to survive the ranking of everything else.
+        text = (query or "").strip().lower()
+        if text:
+            haystack = (
+                visible["parcel"].astype(str).str.lower()
+                + " " + visible["address"].fillna("").str.lower()
+                + " " + visible["municipality"].fillna("").str.lower()
+            )
+            visible = visible[haystack.str.contains(text, regex=False)]
         out = visible[
             (visible["delta"] >= min_delta)
             & (visible["area"].between(area[0], area[1]))
@@ -551,6 +594,25 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
                 axis=1,
             ),
         }
+    )
+
+    # Skipping nulls rather than summing them is the same rule the Merkliste
+    # tiles use, for the same reason: one unpriced parcel would otherwise
+    # blank the figure.
+    priced = final[final["_land_price"].notna()]
+    land_value_total = float((priced["area"] * priced["_land_price"]).sum())
+
+    st.markdown(
+        f"**{len(view)}** Parzellen · "
+        f"Potenzial **{F.swiss(final['delta'].sum())} m²** · "
+        f"Landwert **CHF {F.swiss(land_value_total)}**"
+    )
+    st.download_button(
+        "CSV exportieren",
+        view.to_csv(index=False).encode("utf-8"),
+        file_name="verdichtungspotenzial.csv",
+        mime="text/csv",
+        key="screening_csv",
     )
 
     # Multi-row selection supports saving and dismissing several leads at once. An

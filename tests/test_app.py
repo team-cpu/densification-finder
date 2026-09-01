@@ -47,18 +47,26 @@ class AppRegressionTest(unittest.TestCase):
         paths.DB = self.original_database
         self.tempdir.cleanup()
 
+    def screening(self, timeout=60):
+        """The app with the Screening page showing, which is its default."""
+        return AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=timeout
+        ).run()
+
     def test_controls_mixed_results_and_economic_indicator(self):
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=30
         ).run()
         self.assertFalse(app.exception)
         self.assertEqual(app.number_input[0].min, 130)
-        self.assertEqual(app.number_input[1].max, 50)
+        # The filter regroup put Ziffer second and Anzahl Resultate sixth, so
+        # their number_input positions swapped from before the regroup.
+        self.assertEqual(app.number_input[2].max, 50)
         area = app.select_slider[0]
         self.assertEqual(area.value, (300, float("inf")))
         self.assertEqual(area.options[-1], "ohne Limite")
-        self.assertEqual(app.number_input[2].label, "Ziffer")
-        self.assertIsNone(app.number_input[2].value)
+        self.assertEqual(app.number_input[1].label, "Ziffer")
+        self.assertIsNone(app.number_input[1].value)
 
         app.selectbox[0].select("Alle").run()
         self.assertFalse(app.exception)
@@ -74,7 +82,7 @@ class AppRegressionTest(unittest.TestCase):
         self.assertIn("Merkliste", frame.columns)
         self.assertIn("Kontaktstatus", frame.columns)
 
-        app.number_input[1].set_value(50).run()
+        app.number_input[2].set_value(50).run()
         self.assertFalse(app.exception)
         self.assertEqual(len(app.dataframe[0].value), 50)
 
@@ -118,7 +126,8 @@ class AppRegressionTest(unittest.TestCase):
             os.path.join(paths.HERE, "app.py"), default_timeout=30
         ).run()
 
-        app.number_input[2].set_value(0.8).run()
+        # The filter regroup put Ziffer second, ahead of Anzahl Resultate.
+        app.number_input[1].set_value(0.8).run()
 
         self.assertFalse(app.exception)
         frame = app.dataframe[0].value
@@ -199,6 +208,80 @@ class AppRegressionTest(unittest.TestCase):
             ).any()
         )
 
+    def test_the_parcel_search_narrows_the_table(self):
+        app = self.screening()
+        full = len(app.dataframe[0].value)
+        target = str(app.dataframe[0].value.iloc[0]["Parzelle"])
+
+        field(app, "Parzellen-Nr. suchen").set_value(target).run()
+
+        self.assertFalse(app.exception)
+        narrowed = app.dataframe[0].value
+        self.assertLess(len(narrowed), full)
+        self.assertTrue((narrowed["Parzelle"].astype(str) == target).any())
+
+    def test_the_search_also_matches_an_address(self):
+        """Philipp knows the street more often than the parcel number."""
+        app = self.screening()
+        address = str(app.dataframe[0].value.iloc[0]["Adresse"])
+        if address == "—":
+            self.skipTest("first row has no address in this fixture")
+
+        field(app, "Parzellen-Nr. suchen").set_value(address[:6]).run()
+
+        self.assertFalse(app.exception)
+        self.assertTrue(len(app.dataframe[0].value) >= 1)
+
+    def test_the_summary_line_agrees_with_the_table(self):
+        app = self.screening()
+        shown = app.dataframe[0].value
+        text = " ".join(element.value for element in app.markdown)
+
+        self.assertIn(str(len(shown)), text)
+
+    def test_reset_restores_the_defaults(self):
+        app = self.screening()
+        app.number_input[0].set_value(2000).run()
+        self.assertNotEqual(app.number_input[0].value, 130)
+
+        app.button(key="screening_reset").click().run()
+
+        self.assertFalse(app.exception)
+        self.assertEqual(app.number_input[0].value, 130)
+
+    def test_the_csv_export_carries_the_shown_rows(self):
+        import io
+        from unittest.mock import patch
+
+        from streamlit.runtime.memory_media_file_storage import (
+            MemoryMediaFileStorage,
+        )
+
+        # This Streamlit version puts a download button's bytes in the
+        # in-memory media store and leaves only a content-addressed `url` on
+        # the button's own proto — there is no `.proto.data` to read. The
+        # store itself is torn down the moment `.run()` returns, so the
+        # bytes have to be caught as they go in, keyed by the same file id
+        # the button's url exposes afterwards.
+        captured = {}
+        original = MemoryMediaFileStorage.load_and_get_id
+
+        def spy(self, path_or_data, mimetype, kind, filename=None):
+            file_id = original(self, path_or_data, mimetype, kind, filename)
+            captured[file_id] = path_or_data
+            return file_id
+
+        with patch.object(MemoryMediaFileStorage, "load_and_get_id", spy):
+            app = self.screening()
+
+        shown = app.dataframe[0].value
+        exported = list(app.get("download_button"))
+        self.assertTrue(exported, "no CSV export on the screening page")
+        file_id = os.path.splitext(os.path.basename(exported[0].proto.url))[0]
+        payload = captured[file_id]
+        frame = pd.read_csv(io.BytesIO(payload))
+        self.assertEqual(len(frame), len(shown))
+        self.assertIn("Parzelle", frame.columns)
 
     def test_a_failed_cadastre_call_is_retried_rather_than_cached_forever(self):
         """A transient 502 used to count as an answer: the parcel stayed

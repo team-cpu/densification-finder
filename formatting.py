@@ -21,6 +21,11 @@ METRIC_LABELS = {
 }
 
 
+def swiss(value):
+    """1'740, not 1,740 — the separator the cadastre and the canton use."""
+    return f"{value:,.0f}".replace(",", "’")
+
+
 def short_year(text):
     """"von 1946 bis 1960" is seventeen characters to say what "1946–60" says in
     seven, and the column is competing for width with the address."""

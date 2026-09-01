@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 import detail
+import formatting as F
 import navigation
 import workflow as WF
 
@@ -165,8 +166,7 @@ def by_stage(shortlist: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
 
 def _swiss(value: float) -> str:
-    """1'740, not 1,740 — the separator the cadastre and the canton use."""
-    return f"{value:,.0f}".replace(",", "’")
+    return F.swiss(value)
 
 
 def _or_dash(value) -> str:
