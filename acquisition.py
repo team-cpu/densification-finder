@@ -42,9 +42,14 @@ CONTACT_OPEN = "acquisition_contact_open"
 #: gaps no longer fit the content area and the fifth stage wrapped to a
 #: full-width row of its own. Above the breakpoint the board keeps Streamlit's
 #: own five-column behaviour and sets no floor at all.
+#:
+#: 1150px is measured, not guessed. Five columns stay readable down to about
+#: 1150px (185px each); at 1120px the stage labels begin to truncate. The
+#: breakpoint sits at the top of that band so the board wraps just before the
+#: labels break rather than just after.
 _BOARD_CSS = """
 <style>
-@media (max-width: 1100px) {
+@media (max-width: 1150px) {
   .st-key-acq_board [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
   .st-key-acq_board [data-testid="stColumn"] { min-width: 260px; }
 }
