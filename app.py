@@ -27,7 +27,6 @@ import detail
 import land_prices as LP
 import merkliste
 import navigation
-import regulations as REG
 import screening
 import workflow as WF
 
@@ -76,21 +75,6 @@ def load():
     parcels = pd.read_sql_query("SELECT * FROM parcel_results", con)
     runs = pd.read_sql_query("SELECT * FROM runs", con)
     return parcels, runs
-
-
-@st.cache_data(ttl=60 * 60 * 12)
-def load_regulation_news():
-    """OEREBlex's edict list for the whole canton, for block E.
-
-    Half a day between fetches is generous: one to two municipalities put a new
-    building regulation in force per month. Cached here rather than in
-    `regulations` so that module stays importable without Streamlit.
-
-    Eight seconds, not the module's default thirty: this runs while a parcel is
-    being opened, so a slow OEREBlex has to become a line of text on the panel
-    quickly rather than hold the whole detail view.
-    """
-    return REG.load(timeout=8)
 
 
 @st.cache_data(ttl=60)
@@ -147,7 +131,6 @@ elif page == "Analyse":
             parcels,
             screening.read_oereb_cache(),
             price_of,
-            load_regulation_news(),
         )
     else:
         st.info(

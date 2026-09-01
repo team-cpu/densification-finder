@@ -19,6 +19,7 @@ Only the Amtsblatt carries those, and it forbids automated access — see
 NEWSFEED.md.
 """
 import json
+import threading
 import urllib.request
 from dataclasses import dataclass
 from datetime import date
@@ -94,6 +95,73 @@ def load(timeout=30):
         return parse(fetch(timeout=timeout)), ""
     except Exception as exc:            # offline, DNS, 5xx, malformed body
         return [], str(exc)
+
+
+# ── Background fetch for the Streamlit panel ────────────────────────────────
+# `load()` above is a synchronous network call — fine for a script, wrong for
+# a page that has to appear before it returns. What follows lets the caller
+# start it once, off whatever thread is rendering, and poll a module-level
+# result every parcel's view shares (the edict list is canton-wide, so there
+# is nothing to key a cache on). A bare `threading.Thread` carries no
+# Streamlit `ScriptRunContext`, so `_fetch` below stays pure Python — no
+# `st.*` calls — and `_LOCK` is the only thing the worker and the render
+# thread both touch.
+_LOCK = threading.Lock()
+_STATUS = "not_started"    # "not_started" | "in_flight" | "done"
+_RESULT = None             # (edicts, error), once _STATUS == "done"
+_THREAD = None             # kept so tests can wait for a run to finish
+
+
+def ensure_news_started(timeout=8):
+    """Start the canton-wide fetch in the background, once per process.
+
+    Returns True only on the call that actually starts it, so the caller can
+    treat *this* render as "in flight" without a second, later read of
+    `news_state` — the worker can finish before the next line runs (it does,
+    reliably, whenever `load` is stubbed to return immediately, which every
+    test that exercises this does), and racing that would make the very first
+    frame skip the placeholder depending on how the thread happens to get
+    scheduled instead of showing it every time.
+    """
+    global _STATUS, _THREAD
+    with _LOCK:
+        if _STATUS != "not_started":
+            return False
+        _STATUS = "in_flight"
+
+    def _fetch():
+        global _STATUS, _RESULT
+        result = load(timeout=timeout)
+        with _LOCK:
+            _RESULT = result
+            _STATUS = "done"
+
+    _THREAD = threading.Thread(target=_fetch, daemon=True)
+    _THREAD.start()
+    return True
+
+
+def news_state():
+    """(status, result) — result is None until status is "done"."""
+    with _LOCK:
+        return _STATUS, _RESULT
+
+
+def reset_news_cache():
+    """Test-only. The cache above is a module-level singleton keyed by
+    nothing — that is the point, the edict list is canton-wide rather than
+    per-session — so without an explicit reset, every test after the first
+    would see whatever fetch state (or worker thread) an earlier, unrelated
+    test left behind. Joining before clearing makes that deterministic
+    instead of racing a stray thread's write against the next test's setup.
+    """
+    global _STATUS, _RESULT, _THREAD
+    thread, _THREAD = _THREAD, None
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=5)
+    with _LOCK:
+        _STATUS = "not_started"
+        _RESULT = None
 
 
 def for_municipality(edicts, name: str, bfs: Optional[int] = None):

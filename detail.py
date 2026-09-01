@@ -230,6 +230,26 @@ def _edict_rows(edicts):
     return rows
 
 
+@st.fragment(run_every=1)
+def _regulation_news_poll():
+    """Block E's placeholder while the canton-wide fetch is still in flight.
+
+    A fragment reruns on its own schedule, independent of the rest of the
+    page — that is what lets the panel fill in without the user clicking
+    anything. `page` only ever calls this function while the fetch is not
+    done, so once it is, escalating to a full `st.rerun()` (rather than
+    rendering the result here, which this fragment has no access to) is also
+    what stops the polling: the next full run takes `page`'s direct branch
+    instead, and this fragment is never invoked again — a fragment `page`
+    does not draw on a given run keeps no schedule of its own.
+    """
+    status, _ = R.news_state()
+    if status != "done":
+        st.caption("Wird geladen …")
+        return
+    st.rerun()
+
+
 def _regulation_block(own, own_note, news_error):
     """The one part of block E that belongs on paper.
 
@@ -571,13 +591,15 @@ DISCLAIMER = (
 )
 
 
-def page(parcels, cache, price_of, news=None):
+def page(parcels, cache, price_of):
     """Render the detail view for the selected parcel.
 
     `price_of` is a callable returning the land-price reference for a row, so
-    this module does not need to know how that lookup is configured. `news` is
-    the `(edicts, error)` pair from `regulations.load()`, fetched and cached by
-    the caller for the same reason.
+    this module does not need to know how that lookup is configured. Block E's
+    canton-wide edict list is a different kind of dependency: it is fetched in
+    the background (see `regulations.ensure_news_started`) rather than passed
+    in, because the whole point of that block is that it must not make this
+    function wait on it.
 
     Two columns, because the two halves of this screen are read against each
     other: what the registers say about the parcel is fixed and stands on the
@@ -858,16 +880,33 @@ def page(parcels, cache, price_of, news=None):
     # Three rows visible and the rest folded, rather than folded entirely: a
     # change list nobody opens is a change list nobody reads, and the top of it
     # is short enough to take in at a glance.
+    #
+    # The request itself runs in a background thread (`regulations.
+    # ensure_news_started`), started here rather than awaited here: block E is
+    # the only thing in this view that depends on a third-party server, and
+    # this function has no business making the other four blocks wait on it.
     st.subheader("E · Neueste Änderungen")
-    edicts, news_error = news if news else ([], "")
+    if R.ensure_news_started():
+        news_status, news_result = "in_flight", None
+    else:
+        news_status, news_result = R.news_state()
+    edicts, news_error = (
+        news_result if news_status == "done"
+        else ([], "Änderungsliste wird noch geladen.")
+    )
     # Looked up once. The panel and the exported sheet print the same sentence,
-    # and two calls could answer differently the day the join changes.
+    # and two reads could answer differently if the fetch finishes in between
+    # them — including "in flight" vs. "done" now that this runs in the
+    # background rather than being handed in as one fixed value.
     own, own_note = (
-        (None, "") if news_error
+        (None, "") if news_status != "done" or news_error
         else R.for_municipality(edicts, _text(row["municipality"]), int(row["bfs"]))
     )
     with st.container(key="facts_e"):
-        if news_error:
+        if news_status != "done":
+            # Fills itself in on its own schedule — see `_regulation_news_poll`.
+            _regulation_news_poll()
+        elif news_error:
             # Never a blank panel: an empty change list reads as "nothing has
             # changed lately", which is the opposite of "we could not ask".
             st.caption(

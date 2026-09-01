@@ -4,6 +4,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import time
 import unittest
 
 import streamlit as st
@@ -72,6 +73,24 @@ def stub_regulations(case, municipality=None, bfs=None):
     case.addCleanup(lambda: setattr(regulations, "load", real))
 
 
+def wait_for_news(timeout=5):
+    """Block until the background edict fetch settles.
+
+    Block E's whole point is that the page does not wait for this — so a test
+    that wants to see the *result* has to wait for it deliberately instead,
+    the way the fragment's own `run_every` tick would once the browser is the
+    one driving it. Polls rather than sleeping a fixed amount: the fixture
+    fetch settles in well under a millisecond, and a fixed sleep long enough
+    to be safe for the slow-fetch tests would make every other test pay for it.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if regulations.news_state()[0] == "done":
+            return
+        time.sleep(0.01)
+    raise AssertionError("regulation news fetch did not settle in time")
+
+
 class DetailViewTest(unittest.TestCase):
     """The single-parcel analysis view, driven the way the interface drives it."""
 
@@ -82,6 +101,11 @@ class DetailViewTest(unittest.TestCase):
         self.original_database = paths.DB
         paths.DB = self.database
         st.cache_data.clear()
+        # The edict fetch cache is a module-level singleton (canton-wide, keyed
+        # by nothing) rather than per-session state, so without this reset a
+        # test here would see whatever an earlier, unrelated test's stub left
+        # behind instead of its own.
+        regulations.reset_news_cache()
 
         with sqlite3.connect(self.database) as connection:
             (self.bfs, self.parcel, self.delta, self.area,
@@ -216,11 +240,99 @@ class DetailViewTest(unittest.TestCase):
             [e.label for column in app.columns for e in column.expander],
         )
 
+    def test_the_page_does_not_wait_on_a_slow_oereblex(self):
+        """The bug this change fixes: block E's fetch used to run on the render
+        path, so a slow OEREBlex held up every other block on the page for as
+        long as its eight-second timeout. Proven by making the fetch itself
+        slow and timing how long `app.run()` actually takes — not by reading a
+        docstring and trusting that it still describes what the code does.
+        """
+        sleep_seconds = 3.0
+
+        def slow_load(timeout=8):
+            time.sleep(sleep_seconds)
+            return regulations.parse(EDICTS_FIXTURE), ""
+
+        real = regulations.load
+        regulations.load = slow_load
+        self.addCleanup(lambda: setattr(regulations, "load", real))
+
+        app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=30)
+        app.session_state[detail.SELECTED] = self.pid
+        app.session_state[navigation.PAGE] = "Analyse"
+
+        started = time.monotonic()
+        app.run()
+        elapsed = time.monotonic() - started
+
+        self.assertFalse(app.exception)
+        self.assertLess(
+            elapsed, sleep_seconds / 2,
+            f"render took {elapsed:.2f}s while the fetch sleeps {sleep_seconds:.0f}s "
+            "— the fetch is back on the render path",
+        )
+        # Fast because the page actually rendered, not because it gave up early.
+        self.assertEqual(
+            [s.value for s in app.subheader],
+            ["A · Grunddaten", "B · Potenzial", "C · Residualwertrechnung",
+             "E · Neueste Änderungen"],
+        )
+        self.assertTrue(any(m.label == "Residualer Landwert" for m in app.metric))
+        self.assertIn("Wird geladen", " ".join(c.value for c in app.caption))
+
+        # The fetch is still running in the background when the test's own
+        # assertions finish; let it settle before `tearDown`'s next `setUp`
+        # tries to reset the cache, rather than leaving a stray thread that
+        # would race the next test's reset.
+        wait_for_news()
+
+    def test_block_e_shows_a_loading_state_then_the_edicts(self):
+        """The other half of the fix, not just its speed: the placeholder has
+        to actually say something ("Wird geladen …"), and the real content has
+        to actually arrive once the fetch answers — a page that is merely fast
+        because block E silently never fills in would pass the timing test
+        above and still be broken."""
+        def slow_load(timeout=8):
+            time.sleep(0.3)
+            return regulations.parse(EDICTS_FIXTURE), ""
+
+        real = regulations.load
+        regulations.load = slow_load
+        self.addCleanup(lambda: setattr(regulations, "load", real))
+
+        app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=30)
+        app.session_state[detail.SELECTED] = self.pid
+        app.session_state[navigation.PAGE] = "Analyse"
+        app.run()
+        self.assertFalse(app.exception)
+
+        self.assertIn("Wird geladen", " ".join(c.value for c in app.caption))
+        self.assertEqual(
+            " ".join(m.value for m in app.markdown).count("Im Kanton zuletzt"), 0,
+            "the edict list rendered before the fetch had answered",
+        )
+
+        wait_for_news()
+        app.run()
+        self.assertFalse(app.exception)
+
+        body = " ".join(m.value for m in app.markdown)
+        self.assertIn("Im Kanton zuletzt in Kraft getreten", body)
+        self.assertIn("Gipf-Oberfrick", body)
+        self.assertNotIn("Wird geladen", " ".join(c.value for c in app.caption))
+
     def test_the_change_list_says_when_it_could_not_be_fetched(self):
         """The dangerous failure mode for this panel is the silent one: an empty
         change list reads as "nothing has changed lately", which is the opposite
         of "the canton did not answer". Block D has to be unaffected — it comes
-        out of the parcel's own ÖREB extract, not this request."""
+        out of the parcel's own ÖREB extract, not this request.
+
+        The fetch is asynchronous now — the first render always shows the
+        loading placeholder rather than the outcome, on purpose, which is the
+        entire point of this fix. So this test waits for the background fetch
+        the way a browser's `run_every` tick would, then reruns once to pick
+        up the settled state, before checking the panel says what it says.
+        """
         real = regulations.load
         regulations.load = lambda timeout=30: ([], "URLError: [Errno 8] nodename nor servname provided")
         self.addCleanup(lambda: setattr(regulations, "load", real))
@@ -229,6 +341,10 @@ class DetailViewTest(unittest.TestCase):
         app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=30)
         app.session_state[detail.SELECTED] = self.pid
         app.session_state[navigation.PAGE] = "Analyse"
+        app.run()
+        self.assertFalse(app.exception)
+
+        wait_for_news()
         app.run()
         self.assertFalse(app.exception)
 
@@ -242,8 +358,14 @@ class DetailViewTest(unittest.TestCase):
 
     def test_the_parcel_carries_its_own_regulation_date(self):
         """What block D cannot say: since when. It is the first line of E, above
-        the canton-wide list, because it is the only line about this parcel."""
+        the canton-wide list, because it is the only line about this parcel.
+
+        Waits for the background fetch and reruns once, same reason as above:
+        the first render is always the loading placeholder now."""
         app = self.open_detail()
+        wait_for_news()
+        app.run()
+        self.assertFalse(app.exception)
         body = " ".join(m.value for m in app.markdown)
         self.assertIn("in Kraft seit", body)
         # three rows on show, the remainder folded away
@@ -383,6 +505,10 @@ class DetailEdgeCaseTest(unittest.TestCase):
         # this, a doctored database is read as the previous test's data and the
         # test passes or fails for the wrong reason.
         st.cache_data.clear()
+        # Same reasoning as `st.cache_data.clear()` above, for the edict fetch:
+        # it is a module-level singleton, not per-session state, so a leftover
+        # result from an earlier test would otherwise leak in here.
+        regulations.reset_news_cache()
         with sqlite3.connect(self.database) as con:
             self.bfs, self.parcel, self.egrid = con.execute(
                 "SELECT bfs, parcel, egrid FROM parcel_results ORDER BY delta DESC LIMIT 1"
