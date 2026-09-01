@@ -770,6 +770,14 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(
             app.session_state["selected_parcel_id"], f"{bfs}:{parcel}"
         )
+        # Absence, not just presence: the companion test proves the empty state
+        # appears with nothing selected, which a branch that always showed it
+        # would also satisfy. Only asserting it is gone here can tell the two
+        # apart, and a banner saying no parcel is chosen sitting above the
+        # parcel would be a plain contradiction on screen.
+        self.assertNotIn(
+            "Keine Parzelle", " ".join(element.value for element in app.info)
+        )
 
 
 if __name__ == "__main__":
