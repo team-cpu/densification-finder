@@ -707,6 +707,70 @@ class AppRegressionTest(unittest.TestCase):
         parcels_tile = next(m for m in app.metric if m.label == "Parzellen")
         self.assertEqual(parcels_tile.value, "2")
 
+    def test_only_the_selected_page_renders(self):
+        """The reason navigation is a segmented control and not `st.tabs`:
+        tabs run every tab body on every rerun, and Analyse recomputes residual
+        values, reads the ÖREB cache and can build a PDF. If the screening
+        table ever appears while another page is selected, that laziness has
+        been lost and every keystroke pays for all four pages."""
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        ).run()
+        self.assertTrue(app.dataframe, "screening table missing on the default page")
+
+        app.segmented_control(key="acq_page").set_value("Merkliste").run()
+
+        self.assertFalse(app.exception)
+        headings = " ".join(h.value for h in app.subheader)
+        self.assertIn("Merkliste", headings)
+        columns = [
+            list(frame.value.columns)
+            for frame in app.dataframe
+            if hasattr(frame.value, "columns")
+        ]
+        self.assertFalse(
+            any("Ziffer" in cols for cols in columns),
+            "the screening table rendered while another page was selected",
+        )
+
+    def test_analyse_says_so_when_nothing_is_selected(self):
+        """Reachable only now that Analyse is a page rather than an early
+        return that could not be reached without a parcel — so it had never
+        been designed."""
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        ).run()
+
+        app.segmented_control(key="acq_page").set_value("Analyse").run()
+
+        self.assertFalse(app.exception)
+        self.assertTrue(app.info)
+        self.assertIn("Keine Parzelle", " ".join(i.value for i in app.info))
+
+    def test_opening_a_lead_from_the_board_lands_on_analyse(self):
+        """The whole reason navigation carries a second state key. Selecting
+        the parcel without moving the reader leaves them on the board wondering
+        what the button did."""
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
+            sqlite3.connect(self.database),
+        ).iloc[0]
+        bfs, parcel = int(first["bfs"]), str(first["parcel"])
+        workflow.set_saved([(bfs, parcel)], True, self.database)
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        )
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
+        app.button(key=f"open_{bfs}_{parcel}").click().run()
+
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state["acq_page"], "Analyse")
+        self.assertEqual(
+            app.session_state["selected_parcel_id"], f"{bfs}:{parcel}"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
