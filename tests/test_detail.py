@@ -11,6 +11,7 @@ from streamlit.testing.v1 import AppTest
 
 import detail
 import economics as E
+import navigation
 import paths
 import regulations
 import report
@@ -99,6 +100,9 @@ class DetailViewTest(unittest.TestCase):
                          getattr(self, "bfs", None))
         app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=30)
         app.session_state[detail.SELECTED] = self.pid
+        # Analyse is a page now, not the whole script: without this the router
+        # draws Screening (the default) and the parcel never opens.
+        app.session_state[navigation.PAGE] = "Analyse"
         app.run()
         self.assertFalse(app.exception)
         return app
@@ -224,6 +228,7 @@ class DetailViewTest(unittest.TestCase):
 
         app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=30)
         app.session_state[detail.SELECTED] = self.pid
+        app.session_state[navigation.PAGE] = "Analyse"
         app.run()
         self.assertFalse(app.exception)
 
@@ -263,9 +268,13 @@ class DetailViewTest(unittest.TestCase):
         """A conditional view, not a second page — and not both at once."""
         app = self.open_detail()
         self.assertEqual(len(app.dataframe), 0)
-        self.assertNotIn(
-            "Verdichtungspotenzial — Kanton Aargau", [t.value for t in app.title]
-        )
+        # The app-level title is a header shared by all four pages now, drawn
+        # once above the navigation control before the page split — it no
+        # longer marks "the list" specifically, so it is expected here too,
+        # alongside detail's own title for the parcel.
+        titles = [t.value for t in app.title]
+        self.assertEqual(titles[0], "Verdichtungspotenzial — Kanton Aargau")
+        self.assertEqual(len(titles), 2)
 
     def test_back_returns_to_the_list(self):
         app = self.open_detail()
@@ -343,6 +352,7 @@ class DetailViewTest(unittest.TestCase):
         stub_regulations(self)
         app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=30)
         app.session_state[detail.SELECTED] = "9999:12345"
+        app.session_state[navigation.PAGE] = "Analyse"
         app.run()
         self.assertFalse(app.exception)
         self.assertTrue(any("steht nicht mehr" in w.value for w in app.warning))
@@ -388,6 +398,9 @@ class DetailEdgeCaseTest(unittest.TestCase):
                          getattr(self, "bfs", None))
         app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=30)
         app.session_state[detail.SELECTED] = self.pid
+        # Analyse is a page now, not the whole script: without this the router
+        # draws Screening (the default) and the parcel never opens.
+        app.session_state[navigation.PAGE] = "Analyse"
         app.run()
         self.assertFalse(app.exception)
         return app

@@ -10,6 +10,7 @@ from streamlit.testing.v1 import AppTest
 
 import acquisition
 import ingest
+import navigation
 import paths
 import workflow
 
@@ -202,26 +203,26 @@ class AppRegressionTest(unittest.TestCase):
     def test_a_failed_cadastre_call_is_retried_rather_than_cached_forever(self):
         """A transient 502 used to count as an answer: the parcel stayed
         unchecked and the interface still called the shortlist complete."""
-        import app
+        import screening
 
         cache = pd.DataFrame(
             {"details": ["", "{}"], "error": ["HTTP Error 502: Bad Gateway", ""]},
             index=pd.Index(["CH_FAILED", "CH_OK"], name="egrid"),
         )
-        self.assertEqual(list(app.with_extract(cache)), ["CH_OK"])
-        self.assertEqual(list(app.failed_egrids(cache)), ["CH_FAILED"])
+        self.assertEqual(list(screening.with_extract(cache)), ["CH_OK"])
+        self.assertEqual(list(screening.failed_egrids(cache)), ["CH_FAILED"])
 
     def test_a_legacy_row_without_the_extract_is_asked_again(self):
         """Rows written before the legal basis was stored carry restrictions but
         no documents, and must not count as complete."""
-        import app
+        import screening
 
         cache = pd.DataFrame(
             {"details": [None], "error": [None]},
             index=pd.Index(["CH_OLD"], name="egrid"),
         )
-        self.assertEqual(list(app.with_extract(cache)), [])
-        self.assertEqual(list(app.failed_egrids(cache)), [])
+        self.assertEqual(list(screening.with_extract(cache)), [])
+        self.assertEqual(list(screening.failed_egrids(cache)), [])
 
     def test_the_board_renders_a_saved_lead_with_its_acquisition_fields(self):
         """The whole path: a decision in `parcel_workflow`, joined to a parcel
@@ -245,7 +246,10 @@ class AppRegressionTest(unittest.TestCase):
 
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=30
-        ).run()
+        )
+        # The board is its own page now, not stacked under Screening.
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
 
         self.assertFalse(app.exception)
         text = " ".join(element.value for element in app.markdown)
@@ -277,7 +281,10 @@ class AppRegressionTest(unittest.TestCase):
 
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=60
-        ).run()
+        )
+        # The board is its own page now, not stacked under Screening.
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
         self.assertFalse(app.exception)
 
         app.selectbox(key=f"stage_{slug}").select("in_discussion").run()
@@ -307,7 +314,10 @@ class AppRegressionTest(unittest.TestCase):
 
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=60
-        ).run()
+        )
+        # The board is its own page now, not stacked under Screening.
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
 
         # The dialog only exists once `Kontakt` opens it — the card itself
         # carries no form widgets any more.
@@ -362,7 +372,10 @@ class AppRegressionTest(unittest.TestCase):
 
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=60
-        ).run()
+        )
+        # The board is its own page now, not stacked under Screening.
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
 
         app.button(key=f"contact_{slug}").click().run()
         self.assertFalse(app.exception)
@@ -408,7 +421,10 @@ class AppRegressionTest(unittest.TestCase):
 
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=60
-        ).run()
+        )
+        # The board is its own page now, not stacked under Screening.
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
 
         app.button(key=f"contact_{slug}").click().run()
         self.assertFalse(app.exception)
@@ -446,7 +462,10 @@ class AppRegressionTest(unittest.TestCase):
 
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=60
-        ).run()
+        )
+        # The board is its own page now, not stacked under Screening.
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
         self.assertFalse(app.exception)
 
         self.assertNotIn(acquisition.CONTACT_OPEN, app.session_state)
@@ -476,7 +495,10 @@ class AppRegressionTest(unittest.TestCase):
 
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=60
-        ).run()
+        )
+        # The board is its own page now, not stacked under Screening.
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
 
         app.button(key=f"open_{slug}").click().run()
         self.assertFalse(app.exception)
