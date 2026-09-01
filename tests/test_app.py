@@ -592,6 +592,63 @@ class AppRegressionTest(unittest.TestCase):
         ]
         self.assertEqual(len(stage_selectboxes), len(keys))
 
+    def test_the_contact_list_exports_every_saved_lead(self):
+        """Owner details are typed in by hand from the AGIS extract. The export
+        has to carry exactly what was recorded, because it is the only way that
+        work leaves the application."""
+        import io
+        from unittest.mock import patch
+
+        from streamlit.runtime.memory_media_file_storage import (
+            MemoryMediaFileStorage,
+        )
+
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 2",
+            sqlite3.connect(self.database),
+        )
+        keys = [(int(r.bfs), str(r.parcel)) for r in first.itertuples()]
+        workflow.set_saved(keys, True, self.database)
+        workflow.update(
+            keys, owner_name="Muster AG", phone="+41 44 000 00 00",
+            db=self.database,
+        )
+
+        # Same capture as `test_the_csv_export_carries_the_shown_rows`: the
+        # button's own proto carries only a content-addressed `url`, and the
+        # in-memory store behind it is torn down the moment `.run()` returns.
+        captured = {}
+        original = MemoryMediaFileStorage.load_and_get_id
+
+        def spy(self, path_or_data, mimetype, kind, filename=None):
+            file_id = original(self, path_or_data, mimetype, kind, filename)
+            captured[file_id] = path_or_data
+            return file_id
+
+        with patch.object(MemoryMediaFileStorage, "load_and_get_id", spy):
+            app = AppTest.from_file(
+                os.path.join(paths.HERE, "app.py"), default_timeout=60
+            )
+            # The board is its own page now, not stacked under Screening.
+            app.session_state[navigation.PAGE] = "Akquisition"
+            app.run()
+
+        self.assertFalse(app.exception)
+        exported = list(app.get("download_button"))
+        self.assertTrue(exported, "no contact-list export on the acquisition board")
+        file_id = os.path.splitext(os.path.basename(exported[0].proto.url))[0]
+        payload = captured[file_id]
+        frame = pd.read_csv(io.BytesIO(payload))
+
+        self.assertEqual(len(frame), 2)
+        for column in (
+            "Adresse", "Gemeinde", "Eigentümerschaft", "Telefon", "Stufe",
+            "Wiedervorlage", "Nächster Schritt",
+        ):
+            self.assertIn(column, frame.columns)
+        self.assertTrue((frame["Eigentümerschaft"] == "Muster AG").all())
+        self.assertTrue((frame["Telefon"] == "+41 44 000 00 00").all())
+
     def test_the_analyse_button_opens_the_single_parcel_view(self):
         """Analyse is the only door into the detail view; if the session key
         it sets ever drifted from what `detail.find` reads back, the button

@@ -173,6 +173,37 @@ def _or_dash(value) -> str:
     return str(value) if pd.notna(value) and str(value).strip() else "—"
 
 
+def contact_list(shortlist: pd.DataFrame) -> pd.DataFrame:
+    """The saved leads as a flat table, for a mail merge or a phone list.
+
+    Owner details are typed in by hand from the AGIS extract, so this exports
+    what the user recorded and invents nothing.
+    """
+    if shortlist.empty:
+        return pd.DataFrame()
+    return pd.DataFrame(
+        {
+            "Adresse": shortlist["address"].map(_or_dash),
+            "Gemeinde": shortlist["municipality"],
+            "Parzelle": shortlist["parcel"],
+            "Potenzial m²": shortlist["delta"].round(0),
+            "Eigentümerschaft": shortlist["owner_name"],
+            "Kontaktperson": shortlist["contact_person"],
+            "Telefon": shortlist["phone"],
+            "E-Mail": shortlist["email"],
+            "Stufe": shortlist["contact_status"].map(
+                lambda code: WF.CONTACT_STATUS_LABELS.get(
+                    code, WF.CONTACT_STATUS_LABELS[WF.DEFAULT_CONTACT_STATUS]
+                )
+            ),
+            "Letzter Kontakt": shortlist["last_contact"],
+            "Wiedervorlage": shortlist["due_date"],
+            "Nächster Schritt": shortlist["next_step"],
+            "Notiz": shortlist["note"],
+        }
+    )
+
+
 def render(parcels, decisions, db, today, price_of):
     """The acquisition board, and the recoverable list of hidden parcels.
 
@@ -195,6 +226,13 @@ def render(parcels, decisions, db, today, price_of):
     else:
         _render_overdue(shortlist, today)
         _render_board(shortlist, db, price_of)
+        st.download_button(
+            "Kontaktliste exportieren",
+            contact_list(shortlist).to_csv(index=False).encode("utf-8"),
+            file_name="akquisition-kontakte.csv",
+            mime="text/csv",
+            key="acq_contacts_csv",
+        )
 
     _render_hidden(parcels, decisions, db)
 
