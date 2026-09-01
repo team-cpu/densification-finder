@@ -240,13 +240,22 @@ class AppRegressionTest(unittest.TestCase):
         self.assertIn(str(len(shown)), text)
 
     def test_reset_restores_the_defaults(self):
+        """The search field is the assertion that can actually fail. Every
+        other control is created *after* the reset button, so the `st.rerun()`
+        orphans its widget state whether or not the handler cleared it — those
+        controls come back to their defaults even with an empty clear-list, and
+        asserting on them proves nothing. The search box is rendered before the
+        button, so it survives the rerun and only the handler can empty it."""
         app = self.screening()
+        field(app, "Parzellen-Nr. suchen").set_value("Seestrasse").run()
         app.number_input[0].set_value(2000).run()
+        self.assertEqual(field(app, "Parzellen-Nr. suchen").value, "Seestrasse")
         self.assertNotEqual(app.number_input[0].value, 130)
 
         app.button(key="screening_reset").click().run()
 
         self.assertFalse(app.exception)
+        self.assertEqual(field(app, "Parzellen-Nr. suchen").value, "")
         self.assertEqual(app.number_input[0].value, 130)
 
     def test_the_csv_export_carries_the_shown_rows(self):
