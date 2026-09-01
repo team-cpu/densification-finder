@@ -1,0 +1,143 @@
+# The design system, expressed as Streamlit theme configuration rather than as
+# injected CSS. Nearly every token the prototype uses has a real key here —
+# colours, fonts, radii, border and dataframe chrome — so the parts that have
+# to be fought for with a stylesheet are the exceptions, not the rule.
+#
+# Values are read from the prototype itself, not sampled from screenshots.
+
+[server]
+# Serves ./static, which holds the two font families below.
+enableStaticServing = true
+
+[theme]
+base = "light"
+
+# #1c4e4a is the prototype's accent throughout — the logo mark, primary
+# buttons, links and the active navigation pill.
+primaryColor = "#1c4e4a"
+backgroundColor = "#fbfbfc"
+secondaryBackgroundColor = "#f2f2f5"
+textColor = "#17171b"
+borderColor = "#ebebef"
+linkColor = "#1c4e4a"
+linkUnderline = false
+
+font = "Instrument Sans"
+headingFont = "Instrument Sans"
+codeFont = "IBM Plex Mono"
+# The prototype is denser than Streamlit's 16px default: its table rows run at
+# 12px and its navigation at 13.5px. 14 keeps the whole app on that footing
+# rather than shrinking type case by case.
+baseFontSize = 14
+
+baseRadius = "small"
+buttonRadius = "small"
+showWidgetBorder = true
+
+# Tables carry the same quiet header the prototype's result list has.
+dataframeHeaderBackgroundColor = "#f5f5f7"
+dataframeBorderColor = "#ebebef"
+
+# The badge palette, mapped onto Streamlit's semantic colour slots so that
+# st.badge and coloured text land on the prototype's tints instead of
+# Streamlit's own. Green reads "unbelastet", blue "Gestaltungsplan", violet
+# "Inventar", orange every warning tint, grey the neutral state.
+greenBackgroundColor = "#eef6f0"
+greenColor = "#2f6b45"
+greenTextColor = "#2f6b45"
+blueBackgroundColor = "#eef2fb"
+blueColor = "#33538f"
+blueTextColor = "#33538f"
+violetBackgroundColor = "#f2f0fb"
+violetColor = "#4e4899"
+violetTextColor = "#4e4899"
+orangeBackgroundColor = "#fdf5e7"
+orangeColor = "#8a5a12"
+orangeTextColor = "#8a5a12"
+grayBackgroundColor = "#f4f4f6"
+grayColor = "#6a6a74"
+grayTextColor = "#6a6a74"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/fonts/IBMPlexMono-400-normal-latin-ext.woff2"
+weight = "400"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/fonts/IBMPlexMono-400-normal-latin.woff2"
+weight = "400"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/fonts/IBMPlexMono-500-normal-latin-ext.woff2"
+weight = "500"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/fonts/IBMPlexMono-500-normal-latin.woff2"
+weight = "500"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/fonts/IBMPlexMono-600-normal-latin-ext.woff2"
+weight = "600"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/fonts/IBMPlexMono-600-normal-latin.woff2"
+weight = "600"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Instrument Sans"
+url = "app/static/fonts/InstrumentSans-400-italic-latin-ext.woff2"
+weight = "400"
+style = "italic"
+
+[[theme.fontFaces]]
+family = "Instrument Sans"
+url = "app/static/fonts/InstrumentSans-400-italic-latin.woff2"
+weight = "400"
+style = "italic"
+
+[[theme.fontFaces]]
+family = "Instrument Sans"
+url = "app/static/fonts/InstrumentSans-400-normal-latin-ext.woff2"
+weight = "400"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Instrument Sans"
+url = "app/static/fonts/InstrumentSans-400-normal-latin.woff2"
+weight = "400"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Instrument Sans"
+url = "app/static/fonts/InstrumentSans-500-normal-latin-ext.woff2"
+weight = "500"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Instrument Sans"
+url = "app/static/fonts/InstrumentSans-500-normal-latin.woff2"
+weight = "500"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Instrument Sans"
+url = "app/static/fonts/InstrumentSans-600-normal-latin-ext.woff2"
+weight = "600"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Instrument Sans"
+url = "app/static/fonts/InstrumentSans-600-normal-latin.woff2"
+weight = "600"
+style = "normal"
