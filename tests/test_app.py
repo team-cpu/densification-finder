@@ -918,5 +918,41 @@ class AppRegressionTest(unittest.TestCase):
         self.assertNotIn("2099-01-01", tinted[0].value)
 
 
+    def test_a_hand_edited_due_date_cannot_inject_markup(self):
+        """The tinted date is the one field on a follow-up row interpolated
+        into markup rather than written through `st.write`. `workflow.update`
+        would refuse this value, but the database is a file on a volume that
+        can be edited by hand, so the row must defend itself rather than trust
+        a validator in another module."""
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
+            sqlite3.connect(self.database),
+        ).iloc[0]
+        bfs, parcel = int(first["bfs"]), str(first["parcel"])
+        workflow.set_saved([(bfs, parcel)], True, self.database)
+        # Written straight past the validation `workflow.update` would apply.
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "UPDATE parcel_workflow SET due_date = ? "
+                "WHERE bfs = ? AND parcel = ?",
+                ("2020-01-01<img src=x onerror=alert(1)>", bfs, parcel),
+            )
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        )
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
+
+        self.assertFalse(app.exception)
+        # The date still sorts as overdue, so it takes the tinted branch — the
+        # one that builds markup. Only that branch is asserted here: the plain
+        # cells go through `st.write`, whose element value is the markdown
+        # source Streamlit escapes when it renders, not markup it emits.
+        tinted = [m.value for m in app.markdown if "#fdf5e7" in m.value]
+        self.assertEqual(len(tinted), 1)
+        self.assertNotIn("<img src=x", tinted[0])
+        self.assertIn("&lt;img src=x", tinted[0])
+
 if __name__ == "__main__":
     unittest.main()

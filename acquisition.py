@@ -10,6 +10,8 @@ is still on its card; what the user works through day to day is the stage.
 """
 from __future__ import annotations
 
+from html import escape
+
 import pandas as pd
 import streamlit as st
 
@@ -292,8 +294,14 @@ def _render_due_row(row, is_overdue):
     columns = st.columns(_DUE_ROW_WIDTHS, vertical_alignment="center")
 
     if is_overdue:
+        # Escaped even though `workflow._date` only ever stores a strict
+        # YYYY-MM-DD: this is the one field on the row interpolated into markup
+        # rather than written through `st.write`, and the database is a file on
+        # a volume that can be edited by hand. Relying on a validator three
+        # modules away to keep this safe would make a change over there a hole
+        # over here, silently.
         columns[0].markdown(
-            f'<span style="{_OVERDUE_TINT}">{row["due_date"]}</span>',
+            f'<span style="{_OVERDUE_TINT}">{escape(str(row["due_date"]))}</span>',
             unsafe_allow_html=True,
         )
     else:
