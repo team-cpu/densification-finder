@@ -429,13 +429,12 @@ class DetailViewTest(unittest.TestCase):
         """A conditional view, not a second page — and not both at once."""
         app = self.open_detail()
         self.assertEqual(len(app.dataframe), 0)
-        # The app-level title is a header shared by all four pages now, drawn
-        # once above the navigation control before the page split — it no
-        # longer marks "the list" specifically, so it is expected here too,
-        # alongside detail's own title for the parcel.
+        # The app-level `st.title` is gone: `shell.header` draws the same
+        # "Verdichtungspotenzial" identity as HTML in the sticky bar instead,
+        # so it no longer shows up as an `st.title` widget at all — only
+        # detail's own title for the open parcel does.
         titles = [t.value for t in app.title]
-        self.assertEqual(titles[0], "Verdichtungspotenzial — Kanton Aargau")
-        self.assertEqual(len(titles), 2)
+        self.assertEqual(titles, ["Parzelle 574"])
 
     def test_back_returns_to_the_list(self):
         app = self.open_detail()

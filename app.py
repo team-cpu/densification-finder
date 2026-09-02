@@ -28,6 +28,7 @@ import land_prices as LP
 import merkliste
 import navigation
 import screening
+import shell
 import workflow as WF
 
 import ingest as _ingest
@@ -118,8 +119,11 @@ if parcels is None or parcels.empty:
 # `st.segmented_control` rather than `st.tabs` because tabs are not lazy: every
 # tab body runs on every rerun, and Analyse recomputes residual values, reads
 # the ÖREB cache and can build a PDF. One `if` renders one page.
-st.title("Verdichtungspotenzial — Kanton Aargau")
-page = navigation.render()
+#
+# `shell.header` draws the bar around the control and returns what
+# `navigation.render()` selected; the router below only cares about that
+# string, not about how it got drawn.
+page = shell.header(shell.data_as_of(runs))
 
 if page == "Screening":
     screening.page(parcels, parcel_workflow, DB, price_of, land_price_references, runs)
