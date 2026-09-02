@@ -8,6 +8,15 @@ import ui_components
 
 
 class ComponentAssetTest(unittest.TestCase):
+    def test_screening_page_css_matches_the_compact_export_controls(self):
+        css = screening._SCREENING_CSS
+        self.assertIn(".material-symbols-rounded", css)
+        self.assertIn(".screening-result-sort", css)
+        self.assertIn("gap: 14px", css)
+        self.assertIn("align-items: center !important", css)
+        self.assertIn("height: 30px !important", css)
+        self.assertIn("margin: 8px 0 -5px", css)
+
     def test_board_is_local_and_contains_native_drag_and_drop(self):
         html = (
             Path(ui_components.__file__).with_name("components")
@@ -45,6 +54,15 @@ class ComponentAssetTest(unittest.TestCase):
         self.assertIn("['Auszug',row.links?.oereb]", html)
         self.assertNotIn("['Google',row.links?.google]", html)
         self.assertIn("row.saved?'Gemerkt':'Merken'", html)
+        self.assertIn("Als «nicht interessant» markiert", html)
+        self.assertIn("emit('restore',row)", html)
+        self.assertIn("let dismissedOpen=false", html)
+        self.assertIn("draw();\n    return panel", html)
+        self.assertIn("badge-dev", html)
+        self.assertIn("badge-heritage", html)
+        self.assertIn("IBMPlexMono-500-normal-latin.woff2", html)
+        self.assertIn("'mono num strong',row.potential", html)
+        self.assertIn("'mono num strong',row.landValue", html)
         self.assertIn("streamlit:setComponentValue", html)
         self.assertNotIn("https://unpkg.com", html)
 
@@ -70,6 +88,34 @@ class EventConsumptionTest(unittest.TestCase):
                 {"type": "save", "bfs": 4001, "parcel": "1"}, final
             ),
             ("save", (4001, "1")),
+        )
+        self.assertEqual(
+            screening.resolve_table_event(
+                {"type": "restore", "bfs": 4001, "parcel": "1"}, final
+            ),
+            ("restore", (4001, "1")),
+        )
+
+    def test_screening_statuses_use_the_design_badge_vocabulary(self):
+        self.assertEqual(
+            screening.screening_status_badges("frei"),
+            [{"label": "Unbelastet", "tone": "clear"}],
+        )
+        badges = screening.screening_status_badges(
+            "unbebaut (kein stehendes GWR-Gebäude) · "
+            "Gestaltungsplan — AZ evtl. überlagert · Gewässerraum (4 m²)"
+        )
+        self.assertEqual(
+            [(badge["label"], badge["tone"]) for badge in badges],
+            [("Gestaltungsplan", "dev"), ("Gewässerabstand", "water")],
+        )
+        self.assertEqual(
+            screening.screening_status_badges("seltene amtliche Beschränkung"),
+            [{
+                "label": "Prüfen",
+                "tone": "muted",
+                "detail": "seltene amtliche Beschränkung",
+            }],
         )
 
 

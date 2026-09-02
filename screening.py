@@ -150,9 +150,35 @@ _SCREENING_CSS = """
   align-items: end;
 }
 
+.st-key-screening_header_actions {
+  gap: 8px !important;
+}
+
+.st-key-screening_header_actions > [data-testid="stElementContainer"],
+.st-key-screening_header_actions > [data-testid="stLayoutWrapper"] {
+  flex: 0 0 119px !important;
+  width: 119px !important;
+}
+
 .st-key-screening_header_actions [data-testid="stBaseButton-secondary"],
-.st-key-screening_header_actions [data-testid="stDownloadButton"] button {
+.st-key-screening_header_actions [data-testid="stDownloadButton"] button,
+.st-key-screening_header_actions [data-testid="stPopoverButton"] {
+  width: 119px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  padding: 0 12px !important;
+  border-radius: 6px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
   white-space: nowrap;
+}
+
+/* The export's saved-search action is a plain button. Streamlit's popover adds
+   a material expand_more glyph; keep the real popover behaviour but remove the
+   extra glyph so the trigger keeps the supplied 30px button silhouette. */
+.st-key-screening_header_actions .stPopover button [data-testid="stIconMaterial"],
+.st-key-screening_header_actions .stPopover button .material-symbols-rounded {
+  display: none !important;
 }
 
 .st-key-screening_filters {
@@ -173,8 +199,54 @@ _SCREENING_CSS = """
 }
 
 .st-key-screening_filter_header {
+  display: flex;
+  position: relative;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
   padding: 8px 16px;
   border-bottom: 1px solid #f0f0f3;
+}
+
+.st-key-screening_filter_header > [data-testid="stElementContainer"] {
+  flex: 0 0 auto !important;
+  width: auto !important;
+}
+
+.st-key-screening_filter_header .st-key-screening_reset,
+.st-key-screening_filter_header .st-key-screening_reset [data-testid="stButton"] {
+  display: flex;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.st-key-screening_filter_header > [data-testid="stLayoutWrapper"]
+  > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+  flex: 1 1 auto !important;
+}
+
+.st-key-screening_filter_header > [data-testid="stLayoutWrapper"]
+  > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  margin-left: auto;
+}
+
+.st-key-screening_filter_header [data-testid="stHorizontalBlock"]
+  > [data-testid="stColumn"]:first-child {
+  flex: 1 1 auto !important;
+}
+
+.st-key-screening_filter_header [data-testid="stHorizontalBlock"]
+  > [data-testid="stColumn"]:last-child {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  margin-left: auto;
+}
+
+.st-key-screening_filter_header [data-testid="stHorizontalBlock"]
+  > [data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"] {
+  align-items: flex-end;
 }
 
 .screening-filter-label {
@@ -202,10 +274,48 @@ _SCREENING_CSS = """
   text-transform: uppercase;
 }
 
+/* The export bottom-aligns the exclusion group with the 30px parcel-search
+   field. Its shorter checkbox row therefore starts lower than the search
+   group; Streamlit otherwise leaves both labels on the same top baseline. */
+.screening-exclusion-label {
+  display: inline-block;
+  transform: translateY(14px);
+}
+
 .st-key-screening_filters input,
 .st-key-screening_filters [data-baseweb="select"] > div {
+  height: 30px;
   min-height: 30px;
   font-size: 12.5px;
+  font-weight: 400;
+}
+
+.st-key-screening_filters .react-aria-ComboBox [role="group"],
+.st-key-screening_filters [data-testid="stNumberInputContainer"],
+.st-key-screening_filters [data-testid="stTextInputRootElement"] {
+  height: 30px;
+  min-height: 30px;
+}
+
+.st-key-screening_filters .react-aria-ComboBox input[role="combobox"] {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 28px;
+}
+
+.st-key-screening_filters .react-aria-ComboBox [role="group"] {
+  align-items: center !important;
+  padding-block: 0 !important;
+}
+
+.st-key-screening_filters .react-aria-ComboBox button {
+  height: 28px;
+  min-height: 28px;
 }
 
 /* BaseWeb's default fill is grey even when the surrounding filter card is
@@ -327,19 +437,33 @@ _SCREENING_CSS = """
 .screening-area-label {
   display: block;
   margin-bottom: 6px;
+  /* `st.html` sits one 12px line above Streamlit's native widget-label slot.
+     Move only the painted label down; the range inputs already share the
+     correct baseline with the two neighbouring number inputs. */
+  transform: translateY(12px);
 }
 
 .st-key-screening_result_toolbar {
-  margin: 0 0 9px;
-  align-items: end;
-}
-
-.st-key-screening_result_toolbar > [data-testid="stElementContainer"] {
-  width: auto !important;
+  min-height: 26px;
+  margin: 8px 0 -5px;
+  align-items: baseline !important;
+  gap: 14px !important;
 }
 
 .st-key-screening_result_toolbar > [data-testid="stElementContainer"]:first-child {
+  flex: 0 1 auto !important;
+  width: auto !important;
+}
+
+.st-key-screening_result_toolbar > [data-testid="stElementContainer"]:nth-child(2) {
   flex: 1 1 auto !important;
+  width: auto !important;
+}
+
+.st-key-screening_result_toolbar > [data-testid="stLayoutWrapper"] {
+  flex: 0 0 126px !important;
+  width: 126px !important;
+  height: 26px !important;
 }
 
 .st-key-screening_result_toolbar .react-aria-ComboBox [role="group"],
@@ -348,7 +472,24 @@ _SCREENING_CSS = """
 }
 
 .st-key-screening_result_toolbar .react-aria-ComboBox [role="group"] {
+  width: 54px;
+  height: 26px;
+  min-height: 26px;
   border-color: #e0e0e6 !important;
+}
+
+.st-key-screening_result_toolbar .react-aria-ComboBox input[role="combobox"] {
+  height: 24px;
+  min-height: 24px;
+  padding: 0 4px 0 6px;
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+.st-key-screening_result_toolbar .react-aria-ComboBox button {
+  width: 22px;
+  height: 24px;
+  min-height: 24px;
 }
 
 .st-key-screening_result_toolbar .react-aria-ComboBox [role="group"]:focus-within {
@@ -374,6 +515,11 @@ _SCREENING_CSS = """
   font-size: 11.5px;
 }
 
+.stHtml:has(.screening-result-sort) {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .screening-result-summary code {
   color: #4a4a54;
   font-family: "IBM Plex Mono", monospace;
@@ -381,10 +527,14 @@ _SCREENING_CSS = """
 }
 
 .st-key-screening_result_limit {
+  width: 126px !important;
   min-width: 126px;
+  height: 26px !important;
+  min-height: 26px !important;
+  flex: 0 0 auto !important;
   justify-content: flex-end;
   align-items: center;
-  gap: 8px;
+  gap: 7px !important;
 }
 
 .st-key-screening_result_limit > [data-testid="stElementContainer"] {
@@ -411,7 +561,8 @@ _SCREENING_CSS = """
 /* The native frame remains in the element tree as a regression-test and CSV
    oracle. The visible table is the local design-native component below. */
 .st-key-screening_native_table,
-.st-key-screening_native_actions {
+.st-key-screening_native_actions,
+.st-key-screening_non_design_footer {
   display: none;
 }
 
@@ -432,13 +583,13 @@ _SCREENING_CSS = """
   }
 
   .st-key-screening_result_toolbar > [data-testid="stLayoutWrapper"]
-    > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+    > [data-testid="stHorizontalBlock"] > [data-testid="stElementContainer"]:first-child {
     flex: 0 0 100% !important;
     width: 100% !important;
   }
 
   .st-key-screening_result_toolbar > [data-testid="stLayoutWrapper"]
-    > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) {
+    > [data-testid="stHorizontalBlock"] > [data-testid="stElementContainer"]:nth-child(2) {
     margin-left: auto;
   }
 }
@@ -580,17 +731,7 @@ def screening_table_rows(final, view):
     for index, row in final.iterrows():
         shown = view.loc[index]
         raw_status = str(shown["Status"] or "")
-        badges = []
-        if shown["Merkliste"] == "Gespeichert":
-            badges.append({"label": "Gemerkt", "tone": "saved"})
-        if raw_status == "frei":
-            badges.append({"label": "Frei", "tone": "clear"})
-        else:
-            badges.extend(
-                {"label": label, "tone": "warning"}
-                for label in raw_status.split(" · ")[:2]
-                if label
-            )
+        badges = screening_status_badges(raw_status)
 
         use = F.short_use(row.get("use_class"))
         object_type = (
@@ -631,10 +772,114 @@ def screening_table_rows(final, view):
     return rows
 
 
+def screening_status_badges(raw_status):
+    """Translate calculated facts into the prototype's compact badge language.
+
+    The source data remains authoritative: this only changes how a fact is
+    presented. Long or uncommon ÖREB findings become ``Prüfen`` and retain the
+    complete wording as a tooltip instead of stretching the result table.
+    Facts already visible in the object-type column (unbuilt/multiple buildings)
+    are intentionally not repeated as status badges.
+    """
+    text = str(raw_status or "").strip()
+    if text.casefold() in {"", "frei", "unbelastet"}:
+        return [{"label": "Unbelastet", "tone": "clear"}]
+
+    badges = []
+    seen = set()
+
+    def add(label, tone, detail=""):
+        key = (label, tone)
+        if key in seen:
+            return
+        seen.add(key)
+        badge = {"label": label, "tone": tone}
+        if detail and detail != label:
+            badge["detail"] = detail
+        badges.append(badge)
+
+    # ÖREB joins multiple findings with semicolons, while the screening status
+    # joins independent facts with middle dots. Treat both as badge boundaries.
+    facts = [
+        fact.strip()
+        for group in text.split(" · ")
+        for fact in group.split(";")
+        if fact.strip()
+    ]
+    for fact in facts:
+        folded = fact.casefold()
+        if (
+            folded.startswith("unbebaut")
+            or (folded.endswith("gebäude") and folded.split(" ", 1)[0].isdigit())
+        ):
+            continue
+        if "gestaltungsplan" in folded:
+            add("Gestaltungsplan", "dev", fact)
+        elif "inventar" in folded or "denkmal" in folded:
+            add("Inventar", "heritage", fact)
+        elif "lärm" in folded:
+            add("Lärm ES II", "noise", fact)
+        elif "gewässer" in folded:
+            add("Gewässerabstand", "water", fact)
+        elif "dienstbarkeit" in folded:
+            add("Dienstbarkeit", "servitude", fact)
+        elif "baurecht" in folded:
+            add("Baurecht", "lease", fact)
+        elif "öreb offen" in folded:
+            add("ÖREB offen", "muted")
+        else:
+            add("Prüfen", "muted", fact)
+
+    return badges[:2] or [{"label": "Unbelastet", "tone": "clear"}]
+
+
+def dismissed_table_rows(parcels, hidden_keys, price_of, cache):
+    """Serialize hidden leads for the prototype's restore panel."""
+    rows = []
+    for _, row in parcels.iterrows():
+        key = parcel_key(row)
+        if key not in hidden_keys:
+            continue
+        egrid = row.get("egrid")
+        checked = egrid in cache.index
+        notable = (cache.loc[egrid, "notable"] or "") if checked else ""
+        facts = [
+            row.get("heritage") or "",
+            "Gestaltungsplan" if row.get("design_plan") else "",
+            notable,
+            "" if checked else "ÖREB offen",
+        ]
+        reference = price_of(row)
+        land_value = (
+            None
+            if reference is None
+            else float(reference.price_chf_m2) * float(row["area"])
+        )
+        use = F.short_use(row.get("use_class"))
+        rows.append(
+            {
+                "bfs": key[0],
+                "parcel": key[1],
+                "address": str(row.get("address") or "—"),
+                "municipality": str(row.get("municipality") or "—"),
+                "type": (
+                    "Unbebaut" if int(row["buildings"]) == 0
+                    else use or f"{int(row['buildings'])} Gebäude"
+                ),
+                "potential": F.swiss(float(row["delta"])),
+                "landValue": "—" if land_value is None else F.swiss(land_value),
+                "badges": screening_status_badges(
+                    " · ".join(fact for fact in facts if fact) or "frei"
+                ),
+            }
+        )
+    return rows
+
+
 def resolve_table_event(event, final):
     """Return a validated ``(action, key)`` pair for a component event."""
     if not isinstance(event, dict) or event.get("type") not in {
-        "analyse", "save", "hide",
+        "analyse", "save", "hide", "restore",
     }:
         return None
     try:
@@ -794,13 +1039,17 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     # the reset button (the reset regression test depends on that lifecycle)
     # while appearing in the compact FILTER header from the design.
     filter_box = st.container(key="screening_filters")
-    filter_header = filter_box.container(key="screening_filter_header")
-    label_col, reset_col = filter_header.columns([8, 1])
+    filter_header = filter_box.container(
+        key="screening_filter_header",
+        horizontal=True,
+        horizontal_alignment="distribute",
+        vertical_alignment="center",
+    )
     primary_box = filter_box.container(key="screening_filter_primary")
     numeric_box = filter_box.container(key="screening_filter_numeric")
     flags_box = filter_box.container(key="screening_filter_flags")
-    label_col.html('<span class="screening-filter-label">Filter</span>')
-    if reset_col.button("Zurücksetzen", key="screening_reset"):
+    filter_header.html('<span class="screening-filter-label">Filter</span>')
+    if filter_header.button("Zurücksetzen", key="screening_reset"):
         for key in FILTER_KEYS:
             st.session_state.pop(key, None)
         st.session_state.pop("screening_area", None)
@@ -818,7 +1067,6 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         "Kanton",
         CANTONS,
         key="screening_canton",
-        help="Die Ergebnisdatenbank deckt zurzeit nur den Kanton Aargau ab.",
         **_initial_widget_value("screening_canton", index=0),
     )
     if canton != "Aargau":
@@ -830,10 +1078,6 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         max_value=5000,
         step=10,
         key="screening_min_delta",
-        help=(
-            f"Die Ergebnisdatenbank enthält nur Parzellen ab {MIN_STORED_DELTA} m² "
-            "Potenzial. Für eine tiefere Grenze muss die Kaskade neu gerechnet werden."
-        ),
         **_initial_widget_value("screening_min_delta", value=MIN_STORED_DELTA),
     )
     ziffer = c2.number_input(
@@ -844,10 +1088,6 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         format="%g",
         placeholder="z. B. 0.8",
         key="screening_ziffer",
-        help=(
-            "Exakter Filter für die flächengewichtete Nutzungsziffer. Leer lassen "
-            "für alle Werte; Dezimalwerte können direkt eingetippt werden."
-        ),
         **_initial_widget_value("screening_ziffer", value=None),
     )
     c3.html('<span class="screening-area-label">Fläche m² (von–bis)</span>')
@@ -891,15 +1131,10 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         PARCEL_TYPES,
         key="screening_type",
         format_func=lambda value: "Alle Objekttypen" if value == "Alle" else value,
-        help=(
-            "«Unbebaut» bedeutet: Im GWR ist kein stehendes Gebäude irgendeiner "
-            "Nutzungsklasse mit dieser Parzelle verknüpft."
-        ),
     )
     #: Whether the cascade can be recomputed in this environment. False on the
     #: deployment, which carries the results but not the ~600 MB of source geodata.
     _full_run = _ingest.geodata_available()
-
     flag_area, query_area = flags_box.columns([3, 1], vertical_alignment="bottom")
     flag_area.html(
         '<span class="screening-exclusion-label">Ausschliessen</span>'
@@ -930,7 +1165,6 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         key="screening_query",
         placeholder="z. B. 1284",
         icon=":material/search:",
-        help="Sucht in Parzellennummer, Adresse und Gemeinde.",
     )
 
     # ── filter and rank (cascade steps 1–4) ─────────────────────────────────────
@@ -959,7 +1193,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             exact_parcel = parcel_numbers.eq(text)
             # A typed parcel number is an identifier, not a fuzzy term. Prefer
             # exact parcel matches when they exist; otherwise keep the broader
-            # address/municipality search promised by the field's help text.
+            # address/municipality search supported by this control.
             visible = visible[
                 exact_parcel
                 if exact_parcel.any()
@@ -1000,8 +1234,9 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     # ── cascade step 5: ÖREB, shortlist only ────────────────────────────────────
     cache = read_oereb_cache()
     known = shortlist["egrid"].isin(with_extract(cache))
-    pending = shortlist.loc[~known & shortlist["egrid"].notna() & (shortlist["egrid"] != ""), "egrid"]
-
+    pending = shortlist.loc[
+        ~known & shortlist["egrid"].notna() & (shortlist["egrid"] != ""), "egrid"
+    ]
     # Excluded: a hard restriction — in Aargau that means a Planungszone, a planning
     # freeze under which no permit is issued.
     #
@@ -1020,15 +1255,18 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     )
     excluded = shortlist[shortlist["_hard"] != ""]
 
-    result_toolbar = st.container(key="screening_result_toolbar")
-    result_summary_col, result_sort_col, result_limit_col = result_toolbar.columns(
-        [8, 2, 1.2], vertical_alignment="bottom"
+    result_toolbar = st.container(
+        key="screening_result_toolbar",
+        horizontal=True,
+        horizontal_alignment="right",
+        vertical_alignment="center",
+        gap="medium",
     )
-    result_summary = result_summary_col.empty()
-    result_sort_col.html(
+    result_summary = result_toolbar.empty()
+    result_toolbar.html(
         '<span class="screening-result-sort">Sortiert nach Potenzial ↓</span>'
     )
-    with result_limit_col.container(
+    with result_toolbar.container(
         key="screening_result_limit",
         horizontal=True,
         horizontal_alignment="right",
@@ -1046,17 +1284,12 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         )
     final = shortlist[shortlist["_hard"] == ""].head(int(top_n))
 
-    # ── coverage, stated rather than implied ────────────────────────────────────
+    # Kept for the non-design maintenance surface below. It is intentionally
+    # absent from the customer-facing page but remains available to operators.
     MUNICIPALITIES_AG = 196
-
     assessed = int(runs["assessed"].sum())
     no_az = int(runs["no_az"].sum())
     missing = MUNICIPALITIES_AG - len(runs)
-
-    # Why a parcel could not be assessed, aggregated across the canton. The lump
-    # figure alone cannot distinguish "no building zone here" from "zoned, but the
-    # published figure does not convert into floor area" — and §3.5 step 1 asks for
-    # the distinction rather than a silent skip.
     reasons = {}
     for blob in runs.get("reasons", pd.Series(dtype=str)).dropna():
         try:
@@ -1273,14 +1506,21 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     # The supplied design is a dense action table, not Streamlit's generic
     # dataframe toolbar. The local component mirrors that table and returns
     # only a parcel intent; Python validates the key before doing anything.
+    dismissed_rows = dismissed_table_rows(parcels, hidden_keys, price_of, cache)
     with st.container(key="screening_design_table"):
         table_event = ui_components.screening_table(
-            screening_table_rows(final, view), key="screening_results"
+            screening_table_rows(final, view),
+            dismissed=dismissed_rows,
+            key="screening_results",
         )
     table_event = ui_components.consume_event(
         table_event, "screening_results"
     )
-    resolved_event = resolve_table_event(table_event, final)
+    hidden_candidates = parcels[
+        [parcel_key(row) in hidden_keys for _, row in parcels.iterrows()]
+    ]
+    valid_actions = pd.concat([final, hidden_candidates], ignore_index=True)
+    resolved_event = resolve_table_event(table_event, valid_actions)
     if resolved_event:
         action, key = resolved_event
         if action == "analyse":
@@ -1291,6 +1531,9 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             target = not bool(current is not None and current.saved)
             WF.set_saved([key], target, db)
             st.toast("Auf die Merkliste gesetzt." if target else "Von der Merkliste entfernt.")
+        elif action == "restore":
+            WF.set_hidden([key], False, db)
+            st.toast("Parzelle wiederhergestellt.")
         else:
             WF.set_hidden([key], True, db)
             st.toast("Parzelle als nicht interessant ausgeblendet.")
@@ -1426,9 +1669,11 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         navigation.go_to("Analyse")
         st.rerun()
 
-    # Maintenance follows the result table so it cannot displace the primary
-    # scan-and-open workflow from the first viewport.
-    with st.expander("Daten aktualisieren", expanded=False):
+    # This operator-only surface predates the supplied design. Keep the
+    # functionality available in the DOM for now, but remove its three generic
+    # Streamlit expanders from the customer-facing screening layout.
+    maintenance = st.container(key="screening_non_design_footer")
+    with maintenance.expander("Daten aktualisieren", expanded=False):
         run_col, age_col, note_col = st.columns([1, 1, 4])
         run = run_col.button(
             "▶ Neu berechnen" if _full_run else "▶ ÖREB prüfen",
@@ -1500,7 +1745,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         st.rerun()
 
     if not excluded.empty:
-        with st.expander(f"{len(excluded)} Parzellen durch ÖREB ausgeschlossen"):
+        with maintenance.expander(f"{len(excluded)} Parzellen durch ÖREB ausgeschlossen"):
             st.dataframe(
                 pd.DataFrame({
                     "Gemeinde": excluded["municipality"],
@@ -1512,7 +1757,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
                 hide_index=True,
             )
 
-    methodology = st.expander("Datenabdeckung und Methodik", expanded=False)
+    methodology = maintenance.expander("Datenabdeckung und Methodik", expanded=False)
     methodology.caption(
         f"{len(runs)} von {MUNICIPALITIES_AG} Gemeinden ausgewertet · "
         f"{assessed:,} Parzellen beurteilt · {no_az:,} nicht beurteilbar."

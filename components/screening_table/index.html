@@ -8,6 +8,7 @@
     @font-face{font-family:Instrument Sans;src:url('/app/static/fonts/InstrumentSans-500-normal-latin.woff2') format('woff2');font-weight:500}
     @font-face{font-family:Instrument Sans;src:url('/app/static/fonts/InstrumentSans-600-normal-latin.woff2') format('woff2');font-weight:600}
     @font-face{font-family:IBM Plex Mono;src:url('/app/static/fonts/IBMPlexMono-400-normal-latin.woff2') format('woff2');font-weight:400}
+    @font-face{font-family:IBM Plex Mono;src:url('/app/static/fonts/IBMPlexMono-500-normal-latin.woff2') format('woff2');font-weight:500}
     *{box-sizing:border-box}
     html,body,#root{width:100%;max-width:100%;min-width:0;margin:0;padding:0;overflow-x:hidden;background:transparent;color:#17171b;font-family:'Instrument Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased}
     .frame{border:1px solid #eaeaee;border-radius:9px;background:#fff;overflow:hidden}
@@ -22,17 +23,18 @@
     td.mono{font-family:'IBM Plex Mono',monospace;font-size:12px;font-variant-numeric:tabular-nums}
     td.strong{color:#17171b;font-weight:500}
     .badges{display:flex;gap:5px;flex-wrap:wrap;min-width:125px}
-    .badge{display:inline-flex;align-items:center;padding:3px 7px;border-radius:20px;font-size:10.5px;font-weight:500;white-space:nowrap}
-    .badge-clear{background:#e9f2f0;color:#2d625c}.badge-warning{background:#fdf5e7;color:#8a5a12}.badge-muted{background:#f1f1f4;color:#696972}.badge-saved{background:#eef3f7;color:#476579}
+    .badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:20px;font-size:10.5px;font-weight:500;line-height:1;white-space:nowrap}
+    .badge-clear{background:#eef6f0;color:#2f6b45}.badge-dev{background:#eef2fb;color:#33538f}.badge-heritage{background:#f2f0fb;color:#4e4899}.badge-noise,.badge-servitude,.badge-water,.badge-warning{background:#fdf5e7;color:#8a5a12}.badge-lease{background:#f6f2ee;color:#7a5a3a}.badge-muted{background:#f4f4f6;color:#6a6a74}
     .sources{display:flex;gap:9px;font-size:11.5px}.sources a{color:#1c4e4a;text-decoration:none}.sources a:hover{text-decoration:underline}
     .actions{display:flex;gap:6px;justify-content:flex-end}
+    .dismissed{margin-top:16px;border:1px solid #eaeaee;border-radius:9px;background:#fff;overflow:hidden}.dismissed-toggle{width:100%;height:auto;min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border:0;border-radius:0;background:none;text-align:left}.dismissed-copy{display:flex;align-items:baseline;gap:10px}.dismissed-title{color:#17171b;font-size:12.5px;font-weight:500}.dismissed-count{color:#b0b0b8;font-size:11.5px;font-weight:400}.dismissed-sign{color:#9a9aa6;font:400 11px 'IBM Plex Mono',monospace}.dismissed-list{border-top:1px solid #f0f0f3}.dismissed-row{display:grid;grid-template-columns:1.2fr 1fr .9fr .9fr 1fr 200px;gap:16px;align-items:center;padding:10px 16px;border-bottom:1px solid #f5f5f7}.dismissed-row:last-child{border-bottom:0}.dismissed-address{font-size:12.5px;font-weight:500}.dismissed-place{margin-top:2px;color:#9a9aa6;font-size:11.5px}.dismissed-value{color:#4a4a54;font:400 12px 'IBM Plex Mono',monospace;text-align:right}.dismissed-empty{padding:18px 16px;color:#c0c0c8;font-size:12px;text-align:center}.dismissed-actions{display:flex;gap:6px;justify-content:flex-end}
     button{height:26px;padding:0 9px;border:1px solid #e2e2e8;border-radius:5px;background:#fff;color:#3a3a44;font:500 11.5px 'Instrument Sans',sans-serif;cursor:pointer;white-space:nowrap}
     button:hover{border-color:#c9c9d2}button.primary{border-color:#1c4e4a;background:#1c4e4a;color:#fff}button.primary:hover{border-color:#143a37;background:#143a37}button.quiet{border-color:#ececf0;color:#8a8a94}button.quiet:hover{border-color:#d8d8de;color:#5f5f68}
     .empty{padding:34px 16px;color:#9a9aa6;font-size:12.5px;text-align:center}
     .mobile{display:none}
     @media(max-width:760px){
       .scroll{display:none}.frame{border:0;background:transparent;overflow:visible}.mobile{display:grid;gap:10px}
-      .parcel-card{width:100%;min-width:0;padding:12px;overflow:hidden;border:1px solid #eaeaee;border-radius:9px;background:#fff}.card-head{display:flex;min-width:0;justify-content:space-between;gap:10px}.card-head>div:first-child{min-width:0}.card-address,.card-place,.card-meta,.card-number{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.card-address{font-size:12.5px;font-weight:500}.card-place{margin-top:3px;color:#9a9aa6;font-size:11.5px}.card-values{display:grid;min-width:0;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px;padding:9px 0;border-top:1px solid #f2f2f5;border-bottom:1px solid #f2f2f5}.card-values>div{min-width:0}.card-label{color:#9a9aa6;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase}.card-number{margin-top:3px;font-family:'IBM Plex Mono',monospace;font-size:12px}.card-meta{margin-top:9px;color:#77777f;font-size:11.5px}.badges{margin-top:8px}.badge{max-width:100%;line-height:1.25;white-space:normal}.actions{width:100%;min-width:0;margin-top:10px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.actions button{width:100%;min-width:0}.actions .quiet{grid-column:1/-1}
+      .parcel-card{width:100%;min-width:0;padding:12px;overflow:hidden;border:1px solid #eaeaee;border-radius:9px;background:#fff}.card-head{display:flex;min-width:0;justify-content:space-between;gap:10px}.card-head>div:first-child{min-width:0}.card-address,.card-place,.card-meta,.card-number{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.card-address{font-size:12.5px;font-weight:500}.card-place{margin-top:3px;color:#9a9aa6;font-size:11.5px}.card-values{display:grid;min-width:0;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px;padding:9px 0;border-top:1px solid #f2f2f5;border-bottom:1px solid #f2f2f5}.card-values>div{min-width:0}.card-label{color:#9a9aa6;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase}.card-number{margin-top:3px;font-family:'IBM Plex Mono',monospace;font-size:12px}.card-meta{margin-top:9px;color:#77777f;font-size:11.5px}.badges{margin-top:8px}.badge{max-width:100%;line-height:1.25;white-space:normal}.actions{width:100%;min-width:0;margin-top:10px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.actions button{width:100%;min-width:0}.actions .quiet{grid-column:1/-1}.dismissed-copy{display:block}.dismissed-count{display:block;margin-top:3px}.dismissed-row{grid-template-columns:1fr 1fr}.dismissed-row>.badges{grid-column:1/-1}.dismissed-actions{grid-column:1/-1}.dismissed-actions button{flex:1}
     }
   </style>
 </head>
@@ -43,7 +45,7 @@
   const emit=(type,row)=>send('streamlit:setComponentValue',{value:{type,bfs:row.bfs,parcel:String(row.parcel),eventId:`${Date.now()}-${Math.random()}`}});
   const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node};
   const button=(label,cls,handler)=>{const node=el('button',cls,label);node.type='button';node.addEventListener('click',handler);return node};
-  const badge=(item)=>el('span',`badge badge-${item.tone||'muted'}`,item.label);
+  const badge=(item)=>{const node=el('span',`badge badge-${item.tone||'muted'}`,item.label);if(item.detail)node.title=item.detail;return node};
   const source=(label,url)=>{const a=el('a','',label);a.href=url;a.target='_blank';a.rel='noopener noreferrer';return a};
   function desktop(rows){
     const scroll=el('div','scroll'),table=el('table'),head=el('thead'),hr=el('tr');
@@ -67,8 +69,18 @@
       const actions=el('div','actions');actions.append(button('Analyse','primary',()=>emit('analyse',row)),button(row.saved?'Gemerkt':'Merken','',()=>emit('save',row)),button('Nicht interessant','quiet',()=>emit('hide',row)));card.append(actions);list.append(card);
     });return list;
   }
+  let dismissedOpen=false;
+  function dismissedPanel(rows){
+    const panel=el('section','dismissed'),toggle=el('button','dismissed-toggle');toggle.type='button';toggle.setAttribute('aria-expanded',String(dismissedOpen));
+    const copy=el('span','dismissed-copy');copy.append(el('span','dismissed-title','Als «nicht interessant» markiert'),el('span','dismissed-count',`${rows.length} Parzellen · aus den Resultaten ausgeblendet`));
+    const sign=el('span','dismissed-sign',dismissedOpen?'−':'+');toggle.append(copy,sign);panel.append(toggle);
+    toggle.addEventListener('click',()=>{dismissedOpen=!dismissedOpen;toggle.setAttribute('aria-expanded',String(dismissedOpen));sign.textContent=dismissedOpen?'−':'+';draw();height()});
+    function draw(){panel.querySelector('.dismissed-list')?.remove();if(!dismissedOpen)return;const list=el('div','dismissed-list');if(!rows.length){list.append(el('div','dismissed-empty','Noch keine Parzellen ausgeschlossen.'))}else rows.forEach(row=>{const item=el('div','dismissed-row'),identity=el('div');identity.append(el('div','dismissed-address',row.address),el('div','dismissed-place',`${row.municipality} · ${row.parcel}`));item.append(identity,el('span','',row.type),el('span','dismissed-value',`${row.potential} m²`),el('span','dismissed-value',`CHF ${row.landValue}`));const tags=el('div','badges');(row.badges||[]).forEach(value=>tags.append(badge(value)));item.append(tags);const actions=el('div','dismissed-actions');actions.append(button('Wiederherstellen','',()=>emit('restore',row)),button('Analyse','',()=>emit('analyse',row)));item.append(actions);list.append(item)});panel.append(list)}
+    draw();
+    return panel;
+  }
   function height(){requestAnimationFrame(()=>send('streamlit:setFrameHeight',{height:Math.ceil(document.documentElement.scrollHeight)}))}
-  function render(args){const rows=Array.isArray(args.rows)?args.rows:[];root.replaceChildren();if(!rows.length){root.append(el('div','empty','Keine Parzelle erfüllt diese Kriterien.'))}else{const frame=el('div','frame');frame.append(desktop(rows),mobile(rows));root.append(frame)}height()}
+  function render(args){const rows=Array.isArray(args.rows)?args.rows:[],dismissed=Array.isArray(args.dismissed)?args.dismissed:[];root.replaceChildren();if(!rows.length){root.append(el('div','empty','Keine Parzelle erfüllt diese Kriterien.'))}else{const frame=el('div','frame');frame.append(desktop(rows),mobile(rows));root.append(frame)}root.append(dismissedPanel(dismissed));height()}
   addEventListener('message',event=>{if(event.data?.type==='streamlit:render')render(event.data.args||{})});
   addEventListener('resize',height);new ResizeObserver(height).observe(root);
   send('streamlit:componentReady',{apiVersion:1});height();

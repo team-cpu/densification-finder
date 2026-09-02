@@ -169,11 +169,14 @@ class ShellHeaderRegressionTest(unittest.TestCase):
         rendered = " ".join(node.proto.body for node in app.get("html"))
         rendered += " " + " ".join(b.label or "" for b in app.button)
         self.assertIn("Gemeinsamer Zugang", rendered)
-        account = next(
-            button for button in app.button
-            if button.label == "Gemeinsamer Zugang"
-        )
-        self.assertEqual(account.icon, ":material/person:")
+        css = next(
+            body for body in app.get("html")
+            if ".st-key-app_shell" in body.proto.body
+        ).proto.body
+        self.assertIn('content: "MB"', css)
+        self.assertIn('content: "▾"', css)
+        self.assertIn("color: #a8a8b2", css)
+        self.assertIn("font-size: 9px", css)
         for invented in ("Brunner", "Hochbau"):
             self.assertNotIn(invented, rendered)
 

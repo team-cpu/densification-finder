@@ -31,9 +31,14 @@ def merkliste_table(rows: list[dict], *, key: str):
     return _MERKLISTE(rows=rows, key=key, default=None)
 
 
-def screening_table(rows: list[dict], *, key: str):
+def screening_table(rows: list[dict], *, dismissed: list[dict] | None = None, key: str):
     """Render the prototype's screening table and return its latest row action."""
-    return _SCREENING_TABLE(rows=rows, key=key, default=None)
+    return _SCREENING_TABLE(
+        rows=rows,
+        dismissed=dismissed or [],
+        key=key,
+        default=None,
+    )
 
 
 def acquisition_board(stages: list[dict], *, key: str):

@@ -108,7 +108,6 @@ def _account_chip() -> None:
     if st.button(
         _ACCOUNT_LABEL,
         key="app_shell_account_open",
-        icon=":material/person:",
         help="Organisation öffnen (Vorschau).",
     ):
         st.session_state[organisation.DIALOG_OPEN] = True
@@ -256,13 +255,14 @@ _SHELL_CSS = """
 .st-key-app_shell [data-testid="stButton"] button {
   height: 28px;
   min-height: 28px;
-  padding: 0 8px;
+  gap: 8px;
+  padding: 0 8px 0 5px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: #77777f;
   font-size: 11.5px;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .st-key-app_shell [data-testid="stButton"] button:hover {
@@ -271,20 +271,31 @@ _SHELL_CSS = """
   color: #17171b;
 }
 
-/* The design leads the account control with an avatar. The live app has no
-   user identity to show, so use a neutral person glyph rather than inventing
-   initials or a name. */
-.st-key-app_shell_account_open button [data-testid="stIconMaterial"] {
+/* Match the exported account avatar: a compact green circle with the MB
+   initials. The surrounding label remains truthful to this app's shared-access
+   model instead of copying the prototype's invented organisation name. */
+.st-key-app_shell_account_open button::before {
+  content: "MB";
   display: inline-flex;
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
+  width: 19px;
+  height: 19px;
+  flex: 0 0 19px;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   background: #1c4e4a;
   color: #fff;
-  font-size: 12px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.st-key-app_shell_account_open button::after {
+  content: "▾";
+  color: #a8a8b2;
+  font-size: 9px;
+  line-height: 1;
+  transform-origin: center;
 }
 
 /* Mobile keeps the account action and all four destinations reachable without
