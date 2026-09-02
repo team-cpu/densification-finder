@@ -17,6 +17,7 @@ import navigation
 import oereb as O
 import paths
 import searches as SR
+import ui_components
 import workflow as WF
 from ranking import rank_candidates
 
@@ -29,29 +30,18 @@ SQM_PER_UNIT = EC.SQM_PER_UNIT
 # The brief's two-step approach: rank broadly, then pay for ÖREB only on the
 # head of the list.
 SHORTLIST = 50
+RESULT_LIMITS = (5, 10, 20, 25, 50)
 
 # The committed result database was generated with this cascade boundary. A
 # control outside it would look interactive while returning exactly the same
 # rows, because parcels below it were never stored.
 MIN_STORED_DELTA = 130
 
-# Parcel area used to be a second such boundary — stored 300–5,000 m², offered
-# 300–5,000 m² — so the slider ran into a wall rather than into the end of the
-# data, and the largest lead in the canton sat behind it. The cascade now keeps
-# every area, and this control genuinely filters.
-#
-# The steps are uneven on purpose: 95% of candidates are smaller than 3,400 m²,
-# so a linear slider spends nearly all its travel on the remaining 5% and cannot
-# be set precisely where the parcels actually are.
-AREA_STEPS = (
-    0, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000,
-    5000, 7500, 10000, 15000, 25000, 50000, 100000, float("inf"),
-)
-NO_LIMIT = AREA_STEPS[-1]
-
-#: Lower end unchanged, so the familiar list is still what opens; the upper end
-#: is open, which is the whole point of the change.
-AREA_DEFAULT = (300, NO_LIMIT)
+# Parcel area used to be capped at 5,000 m², which hid the largest leads in the
+# canton. The design uses explicit from/to fields instead of a range slider, so
+# the upper value is optional: an empty field means there is no limit.
+AREA_MIN_DEFAULT = 300
+AREA_MAX_DEFAULT = None
 
 # The per-parcel link. Not a map: the binding cadastre extract, which lists every
 # public-law restriction on the parcel and is the natural next step once a
@@ -70,7 +60,7 @@ CANTONS = (
     "Zürich (noch nicht verfügbar)",
 )
 
-PARCEL_TYPES = ("Bebaut", "Unbebaut", "Alle")
+PARCEL_TYPES = ("Alle", "Bebaut", "Unbebaut")
 
 #: Every widget key the filter row owns. One list, not three: the reset
 #: button clears exactly these, a saved search captures exactly these, and
@@ -78,7 +68,8 @@ PARCEL_TYPES = ("Bebaut", "Unbebaut", "Alle")
 #: and a key missing from one of them is a filter that silently does not
 #: save, or does not reset.
 FILTER_KEYS = (
-    "screening_query", "screening_min_delta", "screening_area",
+    "screening_query", "screening_min_delta", "screening_area_min",
+    "screening_area_max",
     "screening_municipality", "screening_type", "screening_ziffer",
     "screening_hide_inventory", "screening_hide_design_plan",
     "screening_hide_transport", "screening_top_n", "screening_min_age",
@@ -92,7 +83,8 @@ _FILTER_LABELS = {
     "screening_municipality": "Gemeinde",
     "screening_canton": "Kanton",
     "screening_type": "Grundstückstyp",
-    "screening_area": "Parzellenfläche",
+    "screening_area_min": "Parzellenfläche von",
+    "screening_area_max": "Parzellenfläche bis",
     "screening_ziffer": "Ziffer",
     "screening_min_delta": "Mindestpotenzial",
     "screening_top_n": "Anzahl Resultate",
@@ -166,7 +158,12 @@ _SCREENING_CSS = """
   border: 1px solid #eaeaee;
   border-radius: 9px;
   background: #fff;
+  gap: 0;
   overflow: hidden;
+}
+
+.st-key-screening_filters > [data-testid="stVerticalBlock"] {
+  gap: 0;
 }
 
 .st-key-screening_filters [data-testid="stHorizontalBlock"] {
@@ -192,14 +189,30 @@ _SCREENING_CSS = """
   padding-inline: 16px;
 }
 
+.st-key-screening_filters [data-testid="stWidgetLabel"] p,
+.screening-area-label {
+  color: #8a8a94;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.st-key-screening_filters input,
+.st-key-screening_filters [data-baseweb="select"] > div {
+  min-height: 30px;
+  font-size: 12.5px;
+}
+
 .st-key-screening_filter_primary {
-  padding-top: 14px;
-  padding-bottom: 14px;
+  padding-top: 10px;
+  padding-bottom: 10px;
 }
 
 .st-key-screening_filter_numeric {
-  padding-top: 14px;
-  padding-bottom: 14px;
+  padding-top: 10px;
+  padding-bottom: 10px;
   border-top: 1px solid #f2f2f5;
 }
 
@@ -207,6 +220,95 @@ _SCREENING_CSS = """
   padding-top: 10px;
   padding-bottom: 12px;
   border-top: 1px solid #f2f2f5;
+}
+
+.st-key-screening_filter_flags [data-testid="stCheckbox"] p {
+  color: #4a4a54;
+  font-size: 11.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.st-key-screening_reset button {
+  min-height: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #77777f;
+  font-size: 11.5px;
+}
+
+.st-key-screening_area_range [data-testid="stHorizontalBlock"] {
+  gap: 6px;
+}
+
+.screening-area-label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.st-key-screening_result_toolbar {
+  margin: 20px 0 9px;
+  align-items: end;
+}
+
+.st-key-screening_result_toolbar > [data-testid="stElementContainer"] {
+  width: auto !important;
+}
+
+.st-key-screening_result_toolbar > [data-testid="stElementContainer"]:first-child {
+  flex: 1 1 auto !important;
+}
+
+.screening-result-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-height: 30px;
+}
+
+.screening-result-summary strong {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.screening-result-summary span,
+.screening-result-sort {
+  color: #9a9aa6;
+  font-size: 11.5px;
+}
+
+.screening-result-summary code {
+  color: #4a4a54;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11.5px;
+}
+
+.st-key-screening_result_limit {
+  min-width: 82px;
+}
+
+.st-key-screening_result_limit [data-testid="stWidgetLabel"] p {
+  color: #9a9aa6;
+  font-size: 10px;
+}
+
+/* The native frame remains in the element tree as a regression-test and CSV
+   oracle. The visible table is the local design-native component below. */
+.st-key-screening_native_table,
+.st-key-screening_native_actions {
+  display: none;
+}
+
+.st-key-screening_design_table,
+.st-key-screening_design_table [data-testid="stCustomComponentV1"],
+.st-key-screening_design_table iframe {
+  display: block;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
 }
 
 @media (max-width: 760px) {
@@ -235,6 +337,16 @@ _SCREENING_CSS = """
   .st-key-screening_filter_numeric,
   .st-key-screening_filter_flags {
     padding-inline: 12px;
+  }
+
+  .st-key-screening_result_toolbar {
+    flex-wrap: wrap;
+  }
+
+  .screening-result-summary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 }
 </style>
@@ -325,14 +437,93 @@ def parcel_key(row):
     return int(row["bfs"]), str(row["parcel"])
 
 
+def screening_table_rows(final, view):
+    """Serialize the ranked result frame for the design-native table.
+
+    The component receives display values and URLs only. Cadastral identity is
+    carried separately so Python can validate every action against ``final``
+    before changing workflow state or navigation.
+    """
+    rows = []
+    for index, row in final.iterrows():
+        shown = view.loc[index]
+        raw_status = str(shown["Status"] or "")
+        badges = []
+        if shown["Merkliste"] == "Gespeichert":
+            badges.append({"label": "Gemerkt", "tone": "saved"})
+        if raw_status == "frei":
+            badges.append({"label": "Frei", "tone": "clear"})
+        else:
+            badges.extend(
+                {"label": label, "tone": "warning"}
+                for label in raw_status.split(" · ")[:2]
+                if label
+            )
+
+        use = F.short_use(row.get("use_class"))
+        object_type = (
+            "Unbebaut" if int(row["buildings"]) == 0
+            else use or f"{int(row['buildings'])} Gebäude"
+        )
+        price = row.get("_land_price")
+        land_value = None if pd.isna(price) else float(price) * float(row["area"])
+        rows.append(
+            {
+                "bfs": int(row["bfs"]),
+                "parcel": str(row["parcel"]),
+                "address": str(shown["Adresse"]),
+                "municipality": str(row["municipality"]),
+                "type": object_type,
+                "year": F.short_year(row.get("built")) or "—",
+                "zone": str(shown["Zone"]),
+                "coeff": f"{float(row['az']):g}",
+                "area": F.swiss(float(row["area"])),
+                "potential": F.swiss(float(row["delta"])),
+                "units": f"{float(row['delta']) / SQM_PER_UNIT:.1f}",
+                "refPrice": "—" if pd.isna(price) else F.swiss(float(price)),
+                "landValue": "—" if land_value is None else F.swiss(land_value),
+                "priceSource": (
+                    f"{row.get('_land_price_scope', '—')} · "
+                    f"{row.get('_land_price_as_of', '—')}"
+                ),
+                "badges": badges,
+                "saved": shown["Merkliste"] == "Gespeichert",
+                "links": {
+                    "gis": shown["AGIS"],
+                    "oereb": shown["ÖREB"],
+                    "google": shown["Google Maps"],
+                    "streetView": shown["Street View"],
+                },
+            }
+        )
+    return rows
+
+
+def resolve_table_event(event, final):
+    """Return a validated ``(action, key)`` pair for a component event."""
+    if not isinstance(event, dict) or event.get("type") not in {
+        "analyse", "save", "hide",
+    }:
+        return None
+    try:
+        key = int(event["bfs"]), str(event["parcel"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    allowed = {
+        (int(row.bfs), str(row.parcel))
+        for row in final[["bfs", "parcel"]].itertuples(index=False)
+    }
+    return (event["type"], key) if key in allowed else None
+
+
 def _valid_search_values(parcels, filters):
     """Split a saved search's stored values into what the current data and
     control ranges still accept, and what has to be dropped.
 
     A saved search can outlive the data it was drawn from — a municipality
     disappears from the current run, the AZ range narrows on a fresh cascade —
-    and Streamlit's option-constrained widgets (multiselect, selectbox,
-    select_slider, a bounded number_input) raise `StreamlitAPIException`
+    and Streamlit's option-constrained widgets (multiselect, selectbox and a
+    bounded number_input) raise `StreamlitAPIException`
     outright when handed a `session_state` value outside their current
     domain, rather than clamping it themselves. So the check has to happen
     here, before any widget sees the value, not after.
@@ -344,6 +535,22 @@ def _valid_search_values(parcels, filters):
     municipalities = set(parcels["municipality"].dropna().unique())
     az = parcels["az"].dropna()
     az_min, az_max = (float(az.min()), float(az.max())) if not az.empty else (0.0, 0.0)
+
+    filters = dict(filters)
+    # Searches saved before the design-alignment release stored one slider
+    # tuple. Preserve those searches by expanding it into the two explicit
+    # from/to fields now shown in the interface.
+    legacy_area = filters.pop("screening_area", None)
+    if (
+        "screening_area_min" not in filters
+        and "screening_area_max" not in filters
+        and isinstance(legacy_area, (list, tuple))
+        and len(legacy_area) == 2
+    ):
+        filters["screening_area_min"] = legacy_area[0]
+        filters["screening_area_max"] = (
+            None if legacy_area[1] == float("inf") else legacy_area[1]
+        )
 
     values = {}
     skipped = []
@@ -364,23 +571,22 @@ def _valid_search_values(parcels, filters):
             ok = value in CANTONS
         elif key == "screening_type":
             ok = value in PARCEL_TYPES
-        elif key == "screening_area":
-            ok = (
-                isinstance(value, (list, tuple)) and len(value) == 2
-                and value[0] in AREA_STEPS and value[1] in AREA_STEPS
-            )
+        elif key == "screening_area_min":
+            ok = value is not None and float(value) >= 0
+        elif key == "screening_area_max":
+            ok = value is None or float(value) >= 0
         elif key == "screening_ziffer":
             ok = value is None or az_min <= float(value) <= az_max
         elif key == "screening_min_delta":
             ok = value is not None and MIN_STORED_DELTA <= value <= 5000
         elif key == "screening_top_n":
-            ok = value is not None and 5 <= value <= SHORTLIST
+            ok = value in RESULT_LIMITS
         elif key == "screening_min_age":
             ok = value is not None and 0 <= value <= 100
         else:
             ok = True  # free text and plain booleans have no domain to outlive
         if ok:
-            values[key] = tuple(value) if key == "screening_area" else value
+            values[key] = value
         else:
             skipped.append(_FILTER_LABELS.get(key, key))
     return values, skipped
@@ -401,6 +607,7 @@ def _apply_pending_search(parcels, state=None):
     # search layered on top of leftover state.
     for key in FILTER_KEYS:
         state.pop(key, None)
+    state.pop("screening_area", None)
     state.update(values)
     state[SKIPPED_SEARCH_VALUES] = skipped
 
@@ -412,9 +619,8 @@ def _initial_widget_value(key, state=None, **default):
     created. Passing `value=`/`index=` as well makes Streamlit log that the same
     widget received two defaults, even when both values agree. Value-based
     widgets can consume that state and receive it as their constructor default;
-    this also preserves the two-ended shape of `select_slider`, which collapses
-    to a scalar when `value=` is omitted. Selectboxes are index-based, so they
-    keep their session-state value and simply omit the competing index.
+    Selectboxes are index-based, so they keep their session-state value and
+    simply omit the competing index.
     """
     state = st.session_state if state is None else state
     if key not in state:
@@ -457,31 +663,25 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     # while appearing in the compact FILTER header from the design.
     filter_box = st.container(key="screening_filters")
     filter_header = filter_box.container(key="screening_filter_header")
-    label_col, query_col, reset_col = filter_header.columns([1, 4, 1])
+    label_col, reset_col = filter_header.columns([5, 1])
     primary_box = filter_box.container(key="screening_filter_primary")
     numeric_box = filter_box.container(key="screening_filter_numeric")
     flags_box = filter_box.container(key="screening_filter_flags")
     label_col.html('<span class="screening-filter-label">Filter</span>')
-    query = query_col.text_input(
-        "Parzellen-Nr. suchen",
-        key="screening_query",
-        placeholder="z. B. 1284 oder Seestrasse",
-        help="Sucht in Parzellennummer, Adresse und Gemeinde.",
-        label_visibility="collapsed",
-    )
     if reset_col.button("Zurücksetzen", key="screening_reset"):
         for key in FILTER_KEYS:
             st.session_state.pop(key, None)
+        st.session_state.pop("screening_area", None)
         st.rerun()
 
     # The prototype deliberately uses two readable filter rows instead of one
     # seven-column strip. Keep the widget creation order below unchanged — the
     # tests and saved-search state both rely on it — while assigning the
-    # columns to the same 3 + 4 visual grouping as the design.
+    # columns to the same 3 + 3 visual grouping as the design.
     primary = primary_box.columns(3)
-    numeric = numeric_box.columns([1, 1, 2, 1])
+    numeric = numeric_box.columns([1, 1, 2])
     c0, c4, c5 = primary
-    c1, c2, c3, c6 = numeric
+    c1, c2, c3 = numeric
     canton = c0.selectbox(
         "Kanton",
         CANTONS,
@@ -518,52 +718,57 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         ),
         **_initial_widget_value("screening_ziffer", value=None),
     )
-    area = c3.select_slider(
-        "Parzellenfläche (m²)",
-        options=AREA_STEPS,
-        format_func=lambda v: "ohne Limite" if v == NO_LIMIT else f"{v:,.0f}",
-        key="screening_area",
-        help=(
-            "Deckt die ganze Ergebnisdatenbank ab: Die Kaskade speichert jede "
-            f"Parzellenfläche (grösste gespeicherte: {parcels['area'].max():,.0f} m²). "
-            "«Ohne Limite» lässt das obere Ende offen — die frühere feste Obergrenze "
-            "von 5,000 m² hat die grössten Grundstücke gar nicht erst gezeigt."
-        ),
-        **_initial_widget_value("screening_area", value=AREA_DEFAULT),
-    )
+    c3.html('<span class="screening-area-label">Fläche m² (von–bis)</span>')
+    with c3.container(key="screening_area_range"):
+        area_from, area_to = st.columns(2)
+        area_min = area_from.number_input(
+            "Fläche von (m²)",
+            min_value=0,
+            step=50,
+            key="screening_area_min",
+            label_visibility="collapsed",
+            placeholder="von",
+            **_initial_widget_value(
+                "screening_area_min", value=AREA_MIN_DEFAULT
+            ),
+        )
+        area_max = area_to.number_input(
+            "Fläche bis (m²)",
+            min_value=0,
+            step=50,
+            key="screening_area_max",
+            label_visibility="collapsed",
+            placeholder="ohne Limite",
+            **_initial_widget_value(
+                "screening_area_max", value=AREA_MAX_DEFAULT
+            ),
+        )
+    area_upper = float("inf") if area_max is None else area_max
     municipalities = sorted(parcels["municipality"].dropna().unique())
     chosen = c4.multiselect(
-        "Gemeinde (leer = alle)", municipalities, key="screening_municipality"
+        "Gemeinde",
+        municipalities,
+        key="screening_municipality",
+        placeholder="Alle Gemeinden",
     )
     parcel_type = c5.selectbox(
-        "Grundstückstyp",
+        "Objekttyp",
         PARCEL_TYPES,
         key="screening_type",
+        format_func=lambda value: "Alle Objekttypen" if value == "Alle" else value,
         help=(
             "«Unbebaut» bedeutet: Im GWR ist kein stehendes Gebäude irgendeiner "
             "Nutzungsklasse mit dieser Parzelle verknüpft."
         ),
     )
-    top_n = c6.number_input(
-        "Anzahl Resultate",
-        min_value=5,
-        max_value=SHORTLIST,
-        step=5,
-        key="screening_top_n",
-        help=(
-            f"Maximal {SHORTLIST}: Nur diese Shortlist wird gegen den ÖREB-Kataster "
-            "geprüft."
-        ),
-        **_initial_widget_value("screening_top_n", value=20),
-    )
-
     #: Whether the cascade can be recomputed in this environment. False on the
     #: deployment, which carries the results but not the ~600 MB of source geodata.
     _full_run = _ingest.geodata_available()
 
-    c7, c8, c9, c10 = flags_box.columns([2, 2, 2, 1])
+    flag_area, query_area = flags_box.columns([3, 1], vertical_alignment="bottom")
+    c7, c8, c9 = flag_area.columns(3)
     hide_design_plan = c7.checkbox(
-        "Parzellen mit Gestaltungsplan ausblenden",
+        "Gestaltungsplan",
         key="screening_hide_design_plan",
         help="Wo ein rechtsgültiger Gestaltungsplan gilt, kann er eigene "
              "Nutzungsziffern festlegen — die Ausnützungsziffer der Grundzone ist "
@@ -571,14 +776,14 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         **_initial_widget_value("screening_hide_design_plan", value=False),
     )
     hide_inventory = c8.checkbox(
-        "Inventarisierte Gebäude ausblenden",
+        "Denkmalschutz / Inventar",
         key="screening_hide_inventory",
         help="Bauinventar und Kurzinventar verbieten einen Ersatzneubau nicht, "
              "erschweren ihn aber. Geschützte Gebäude sind ohnehin ausgeschlossen.",
         **_initial_widget_value("screening_hide_inventory", value=False),
     )
     hide_transport = c9.checkbox(
-        "Strassen-/Bahnparzellen ausblenden",
+        "Strassen-/Bahnparzellen",
         key="screening_hide_transport",
         help=(
             "Blendet Parzellen aus, deren Fläche gemäss amtlicher Vermessung zu "
@@ -588,28 +793,11 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         ),
         **_initial_widget_value("screening_hide_transport", value=True),
     )
-    # The brief lists the year-built cutoff among the filter inputs. Unlike the
-    # other six it is a pipeline parameter, not a display filter: the age rule runs
-    # inside the cascade, where a parcel whose buildings are all certainly newer
-    # never becomes a row at all. So it takes effect on the next recompute — and
-    # where no recompute is possible it takes effect never, which is why the control
-    # is disabled there rather than silently doing nothing.
-    min_age = c10.number_input(
-        "Mindestalter (Jahre)", min_value=0, max_value=100, step=1,
-        key="screening_min_age",
-        disabled=not _full_run,
-        help=(
-            "Parzellen, deren Gebäude alle sicher jünger sind, werden aussortiert. "
-            "Ohne exaktes Baujahr entscheidet die GWR-Bauperiode — eine Periode, "
-            "die die Grenze überspannt, bleibt Kandidat. Wirkt beim nächsten "
-            "«Neu berechnen», nicht auf die bereits angezeigte Liste."
-            if _full_run else
-            "Hier nicht änderbar: Das Alterskriterium wirkt in der Kaskade, und die "
-            "kann in dieser Umgebung nicht neu gerechnet werden (die Geodaten fehlen). "
-            "Die Liste ist mit 15 Jahren gerechnet; für einen anderen Wert lokal neu "
-            "rechnen und mitdeployen."
-        ),
-        **_initial_widget_value("screening_min_age", value=15),
+    query = query_area.text_input(
+        "Parzellen-Nr. suchen",
+        key="screening_query",
+        placeholder="z. B. 1284 oder Seestrasse",
+        help="Sucht in Parzellennummer, Adresse und Gemeinde.",
     )
 
     # ── filter and rank (cascade steps 1–4) ─────────────────────────────────────
@@ -637,7 +825,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             visible = visible[haystack.str.contains(text, regex=False)]
         out = visible[
             (visible["delta"] >= min_delta)
-            & (visible["area"].between(area[0], area[1]))
+            & (visible["area"].between(area_min, area_upper))
         ]
         if ziffer is not None:
             # Stored figures are rounded to three decimals. A half-unit tolerance
@@ -672,83 +860,6 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     known = shortlist["egrid"].isin(with_extract(cache))
     pending = shortlist.loc[~known & shortlist["egrid"].notna() & (shortlist["egrid"] != ""), "egrid"]
 
-    # Refreshing source data is an occasional maintenance action, not part of
-    # scanning every result set. Keeping it available in a collapsed section
-    # removes a full status row from the primary workflow without changing what
-    # the button does or hiding failures from AppTest/accessibility clients.
-    with st.expander("Daten aktualisieren", expanded=False):
-        run_col, note_col = st.columns([1, 4])
-        run = run_col.button(
-            "▶ Neu berechnen" if _full_run else "▶ ÖREB prüfen",
-            type="primary",
-            # The label and the help have to agree with what this environment can
-            # actually do. Deployed there is no geodata, so promising a recompute would
-            # be a lie the user only discovers by pressing the button.
-            help=(
-                f"Rechnet die Filterkaskade für alle {len(runs)} Gemeinden neu und fragt "
-                f"anschliessend den ÖREB-Kataster für die Shortlist ab. Rund zwei "
-                f"Minuten. Die Parzellengeometrien werden dabei nicht neu vom WFS "
-                f"geladen — dafür data/parcels_*.xml löschen."
-                if _full_run else
-                "Fragt den ÖREB-Kataster für die Shortlist ab. Die Kaskade kann hier "
-                "nicht neu gerechnet werden — dafür fehlen die Geodaten; das geschieht "
-                "lokal und wird mitdeployt."
-            ),
-        )
-        retry = int(shortlist["egrid"].isin(failed_egrids(cache)).sum())
-        if pending.empty:
-            note_col.success(
-                f"Shortlist vollständig ÖREB-geprüft ({len(shortlist)} Parzellen)."
-            )
-        else:
-            note_col.info(
-                f"{len(shortlist) - len(pending)} von {len(shortlist)} der Shortlist geprüft. "
-                + (f"{retry} Abfrage(n) sind fehlgeschlagen und werden beim nächsten Lauf "
-                   "erneut versucht. " if retry else "")
-                + "Ungeprüfte Parzellen werden angezeigt, aber noch nicht ausgeschlossen."
-            )
-
-    if run:
-        import ingest
-
-        # Deployed, the source geodata is not present, so only the ÖREB half can
-        # run. Asked up front rather than discovered: attempting it raised an
-        # IndexError from globbing an absent dataset, which would have reached the
-        # user as a traceback instead of an explanation.
-        full = ingest.geodata_available()
-        bar = st.progress(0.0, "Kaskade" if full else "ÖREB")
-        if full:
-            ingest.recompute(
-                progress=lambda f, t: bar.progress(f * 0.2, "Kaskade — " + t),
-                built_after=date.today().year - int(min_age),
-            )
-        else:
-            st.info(
-                "Geodaten in dieser Umgebung nicht vorhanden — die Kaskade wird "
-                "nicht neu gerechnet, nur der ÖREB-Kataster abgefragt. Die "
-                "Nutzungsplanung ändert sich jährlich, das GWR quartalsweise; "
-                "neu gerechnet wird lokal und das Resultat mitdeployt."
-            )
-
-        # The shortlist the ÖREB step should pay for only exists once the table has
-        # been rewritten, so the filters are applied a second time here rather than
-        # reusing the selection made from the pre-run data.
-        load.clear()
-        fresh, _ = load()
-        fresh_short = select(fresh).head(SHORTLIST)
-        todo = fresh_short.loc[
-            ~fresh_short["egrid"].isin(with_extract(read_oereb_cache()))
-            & fresh_short["egrid"].notna()
-            & (fresh_short["egrid"] != ""),
-            "egrid",
-        ]
-        check_oereb(
-            list(todo),
-            progress=lambda f, t: bar.progress(0.2 + f * 0.8, t),
-        )
-        bar.empty()
-        st.rerun()
-
     # Excluded: a hard restriction — in Aargau that means a Planungszone, a planning
     # freeze under which no permit is issued.
     #
@@ -766,6 +877,23 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         _notable=[oereb_of(e, "notable") for e in shortlist["egrid"]],
     )
     excluded = shortlist[shortlist["_hard"] != ""]
+
+    result_toolbar = st.container(key="screening_result_toolbar")
+    result_summary_col, result_sort_col, result_limit_col = result_toolbar.columns(
+        [8, 2, 0.7], vertical_alignment="bottom"
+    )
+    result_summary = result_summary_col.empty()
+    result_sort_col.html(
+        '<span class="screening-result-sort">Sortiert nach Potenzial ↓</span>'
+    )
+    with result_limit_col.container(key="screening_result_limit"):
+        top_n = st.selectbox(
+            "Anzeigen",
+            RESULT_LIMITS,
+            key="screening_top_n",
+            help=f"Maximal {SHORTLIST}: Nur diese Shortlist wird ÖREB-geprüft.",
+            **_initial_widget_value("screening_top_n", index=2),
+        )
     final = shortlist[shortlist["_hard"] == ""].head(int(top_n))
 
     # ── coverage, stated rather than implied ────────────────────────────────────
@@ -790,26 +918,6 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         " Davon " + ", ".join(f"{v:,} wegen {k}" for k, v in sorted(reasons.items())) + "."
         if reasons else ""
     )
-
-    with st.expander("Datenabdeckung und Methodik", expanded=False):
-        st.caption(
-            f"{len(runs)} von {MUNICIPALITIES_AG} Gemeinden ausgewertet · {assessed:,} Parzellen "
-            f"beurteilt · {no_az:,} nicht beurteilbar (keine Bauzone mit verwertbarer "
-            f"Nutzungsziffer).{reason_text} "
-            f"{missing} Gemeinden publizieren gar keine Nutzungsziffer und fehlen deshalb "
-            f"vollständig. {len(df):,} Treffer nach Filter → Shortlist {len(shortlist)} → "
-            f"{len(excluded)} durch ÖREB ausgeschlossen."
-        )
-        # Reported only when it is wrong, like the other exceptions in this
-        # interface. It belongs with data health, not between the result count
-        # and the result table where it previously looked like a row failure.
-        if paths.on_persistent_disk() is False:
-            st.warning(
-                "Kein persistenter Speicher eingebunden — ÖREB-Auszüge, Merkliste und "
-                "Kontaktstatus gehen bei jedem Deployment verloren. "
-                "(Railway: Volume auf /data mounten.)"
-            )
-
 
     if final.empty:
         st.info("Keine Parzelle erfüllt diese Kriterien.")
@@ -935,47 +1043,72 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     priced = final[final["_land_price"].notna()]
     land_value_total = float((priced["area"] * priced["_land_price"]).sum())
 
-    st.markdown(
-        f"**{len(view)}** Parzellen · "
-        f"Potenzial **{F.swiss(final['delta'].sum())} m²** · "
-        f"Landwert **CHF {F.swiss(land_value_total)}**"
+    result_summary.markdown(
+        '<div class="screening-result-summary">'
+        f'<strong>{len(view)} Parzellen</strong>'
+        '<span>Summe Potenzial '
+        f'<code>{F.swiss(final["delta"].sum())}</code> m² · '
+        'Summe Landwert '
+        f'<code>CHF {F.swiss(land_value_total)}</code></span>'
+        '</div>',
+        unsafe_allow_html=True,
     )
     # ── saved searches ───────────────────────────────────────────────────────────
     # Beside the export because both act on the filters just arrived at, not on
     # the rows: a screening run is a research position — "Wohnzone, 800 m²
     # potential, Bezirk Horgen" — and retyping twelve controls to get back to it
     # is exactly the friction saving one removes.
-    csv_col, search_name_col, search_save_col = header_actions.columns([2, 3, 2])
-    csv_col.download_button(
+    header_actions.download_button(
         "CSV exportieren",
         view.to_csv(index=False).encode("utf-8"),
         file_name="verdichtungspotenzial.csv",
         mime="text/csv",
         key="screening_csv",
     )
-    search_name = search_name_col.text_input(
-        "Name der Suche",
-        key="screening_search_name",
-        placeholder="z. B. Wohnzone Horgen",
-        label_visibility="collapsed",
-    )
-    if search_save_col.button("Suche speichern", width="stretch"):
-        try:
-            SR.save(
-                search_name,
-                {key: st.session_state.get(key) for key in FILTER_KEYS},
-                db,
+
+    # The prototype exposes one compact page action. Naming and managing saved
+    # searches happens inside it instead of adding a permanent third field to
+    # the page header.
+    with header_actions.popover("Suche speichern"):
+        search_name = st.text_input(
+            "Name der Suche",
+            key="screening_search_name",
+            placeholder="z. B. Wohnzone Aarau",
+        )
+        if st.button("Speichern", width="stretch"):
+            try:
+                SR.save(
+                    search_name,
+                    {key: st.session_state.get(key) for key in FILTER_KEYS},
+                    db,
+                )
+            except ValueError as error:
+                st.error(str(error))
+            else:
+                st.session_state.pop("screening_search_name", None)
+                st.toast(f"Suche „{search_name}“ gespeichert.")
+                st.rerun()
+
+        # Not cached, like `workflow.load`: a save or delete above must be
+        # visible in this same picker on the next run.
+        saved = SR.load(db)
+        if not saved.empty:
+            picked = st.selectbox(
+                "Gespeicherte Suche",
+                list(saved["name"]),
+                key="screening_search_pick",
             )
-        except ValueError as error:
-            # Left open on the error, not popped/rerun: the whole point of
-            # validating first is that a bad name doesn't lose the filters the
-            # user was about to save, the same reasoning acquisition.py's
-            # contact form uses for its own ValueError.
-            st.error(str(error))
-        else:
-            st.session_state.pop("screening_search_name", None)
-            st.toast(f"Suche „{search_name}“ gespeichert.")
-            st.rerun()
+            apply_col, delete_col = st.columns(2)
+            if apply_col.button("Anwenden", width="stretch"):
+                st.session_state[PENDING_SEARCH] = (
+                    saved.set_index("name").loc[picked, "filters"]
+                )
+                st.rerun()
+            if delete_col.button("Löschen", width="stretch"):
+                SR.delete(picked, db)
+                st.session_state.pop("screening_search_pick", None)
+                st.toast(f"Suche „{picked}“ gelöscht.")
+                st.rerun()
 
     # Reported once, right after the rerun that applied a search — not read
     # again on the next unrelated rerun, which is why `_apply_pending_search`
@@ -987,35 +1120,31 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             "übersprungen: " + ", ".join(skipped) + "."
         )
 
-    # Not cached, like `workflow.load`: a save or delete just above must be
-    # visible in this same picker on the very next run.
-    saved = SR.load(db)
-    if not saved.empty:
-        search_pick_col, search_apply_col, search_delete_col = st.columns([3, 1, 1])
-        picked = search_pick_col.selectbox(
-            "Gespeicherte Suche",
-            list(saved["name"]),
-            key="screening_search_pick",
-            label_visibility="collapsed",
+    # The supplied design is a dense action table, not Streamlit's generic
+    # dataframe toolbar. The local component mirrors that table and returns
+    # only a parcel intent; Python validates the key before doing anything.
+    with st.container(key="screening_design_table"):
+        table_event = ui_components.screening_table(
+            screening_table_rows(final, view), key="screening_results"
         )
-        if search_apply_col.button("Anwenden", width="stretch"):
-            # Parked rather than written straight to the filter keys: this
-            # button is rendered after every filter widget above, and writing
-            # e.g. `st.session_state.screening_min_delta` here raises
-            # StreamlitAPIException. `_apply_pending_search` reconciles it at
-            # the top of the next run instead.
-            st.session_state[PENDING_SEARCH] = (
-                saved.set_index("name").loc[picked, "filters"]
-            )
-            st.rerun()
-        if search_delete_col.button("Löschen", width="stretch"):
-            SR.delete(picked, db)
-            # The picker is keyed, so a stale selection pointing at a name
-            # that no longer exists would hit the same "value not in options"
-            # failure the search values above are guarded against.
-            st.session_state.pop("screening_search_pick", None)
-            st.toast(f"Suche „{picked}“ gelöscht.")
-            st.rerun()
+    table_event = ui_components.consume_event(
+        table_event, "screening_results"
+    )
+    resolved_event = resolve_table_event(table_event, final)
+    if resolved_event:
+        action, key = resolved_event
+        if action == "analyse":
+            detail.open_parcel(f"{key[0]}:{key[1]}")
+            navigation.go_to("Analyse")
+        elif action == "save":
+            current = workflow_by_key.get(key)
+            target = not bool(current is not None and current.saved)
+            WF.set_saved([key], target, db)
+            st.toast("Auf die Merkliste gesetzt." if target else "Von der Merkliste entfernt.")
+        else:
+            WF.set_hidden([key], True, db)
+            st.toast("Parzelle als nicht interessant ausgeblendet.")
+        st.rerun()
 
     # Multi-row selection supports saving and dismissing several leads at once. An
     # explicit action opens the single-parcel analysis because a row click can no
@@ -1029,7 +1158,8 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         f"{int(row['bfs'])}:{row['parcel']}" for _, row in final.iterrows()
     )
     hotlist_key = "hotlist_" + hashlib.sha256(table_identity.encode()).hexdigest()[:16]
-    event = st.dataframe(
+    native_table = st.container(key="screening_native_table")
+    event = native_table.dataframe(
         view,
         key=hotlist_key,
         on_select="rerun",
@@ -1107,7 +1237,10 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     selected = final.iloc[chosen_rows] if chosen_rows else final.iloc[0:0]
     selected_keys = [parcel_key(row) for _, row in selected.iterrows()]
 
-    selection_col, open_col, save_col, dismiss_col = st.columns([2, 1, 1, 1])
+    native_actions = st.container(key="screening_native_actions")
+    selection_col, open_col, save_col, dismiss_col = native_actions.columns(
+        [2, 1, 1, 1]
+    )
     selection_col.caption(
         f"{len(selected_keys)} Parzelle(n) ausgewählt. Mehrere Zeilen können "
         "gemeinsam gespeichert oder ausgeblendet werden."
@@ -1143,10 +1276,78 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         navigation.go_to("Analyse")
         st.rerun()
 
-    st.caption(
-        "Eine Zeile auswählen und «Einzelanalyse öffnen» anklicken für Grunddaten, "
-        "Potenzial und Residualwertrechnung mit eigenen Annahmen, als PDF exportierbar."
-    )
+    # Maintenance follows the result table so it cannot displace the primary
+    # scan-and-open workflow from the first viewport.
+    with st.expander("Daten aktualisieren", expanded=False):
+        run_col, age_col, note_col = st.columns([1, 1, 4])
+        run = run_col.button(
+            "▶ Neu berechnen" if _full_run else "▶ ÖREB prüfen",
+            type="primary",
+            help=(
+                f"Rechnet die Filterkaskade für alle {len(runs)} Gemeinden neu und "
+                "fragt anschliessend den ÖREB-Kataster für die Shortlist ab."
+                if _full_run else
+                "Fragt den ÖREB-Kataster für die Shortlist ab. Die Kaskade kann "
+                "hier ohne die lokalen Geodaten nicht neu gerechnet werden."
+            ),
+        )
+        min_age = age_col.number_input(
+            "Mindestalter (Jahre)",
+            min_value=0,
+            max_value=100,
+            step=1,
+            key="screening_min_age",
+            disabled=not _full_run,
+            help=(
+                "Wirkt beim nächsten «Neu berechnen», nicht auf die bereits "
+                "angezeigte Liste."
+                if _full_run else
+                "Die Liste wurde mit 15 Jahren erzeugt."
+            ),
+            **_initial_widget_value("screening_min_age", value=15),
+        )
+        retry = int(shortlist["egrid"].isin(failed_egrids(cache)).sum())
+        if pending.empty:
+            note_col.success(
+                f"Shortlist vollständig ÖREB-geprüft ({len(shortlist)} Parzellen)."
+            )
+        else:
+            note_col.info(
+                f"{len(shortlist) - len(pending)} von {len(shortlist)} geprüft. "
+                + (f"{retry} Abfrage(n) werden erneut versucht. " if retry else "")
+                + "Ungeprüfte Parzellen bleiben sichtbar."
+            )
+
+    if run:
+        import ingest
+
+        full = ingest.geodata_available()
+        bar = st.progress(0.0, "Kaskade" if full else "ÖREB")
+        if full:
+            ingest.recompute(
+                progress=lambda f, t: bar.progress(f * 0.2, "Kaskade — " + t),
+                built_after=date.today().year - int(min_age),
+            )
+        else:
+            st.info(
+                "Geodaten in dieser Umgebung nicht vorhanden — nur der "
+                "ÖREB-Kataster wird abgefragt."
+            )
+        load.clear()
+        fresh, _ = load()
+        fresh_short = select(fresh).head(SHORTLIST)
+        todo = fresh_short.loc[
+            ~fresh_short["egrid"].isin(with_extract(read_oereb_cache()))
+            & fresh_short["egrid"].notna()
+            & (fresh_short["egrid"] != ""),
+            "egrid",
+        ]
+        check_oereb(
+            list(todo),
+            progress=lambda f, t: bar.progress(0.2 + f * 0.8, t),
+        )
+        bar.empty()
+        st.rerun()
 
     if not excluded.empty:
         with st.expander(f"{len(excluded)} Parzellen durch ÖREB ausgeschlossen"):
@@ -1161,7 +1362,15 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
                 hide_index=True,
             )
 
-    st.caption(
+    methodology = st.expander("Datenabdeckung und Methodik", expanded=False)
+    methodology.caption(
+        f"{len(runs)} von {MUNICIPALITIES_AG} Gemeinden ausgewertet · "
+        f"{assessed:,} Parzellen beurteilt · {no_az:,} nicht beurteilbar."
+        f"{reason_text} {missing} Gemeinden ohne verwertbare Nutzungsziffer. "
+        f"{len(df):,} Treffer → Shortlist {len(shortlist)} → "
+        f"{len(excluded)} durch ÖREB ausgeschlossen."
+    )
+    methodology.caption(
         "Potenzial = Fläche innerhalb der Bauzone × AZ − (Grundfläche × Geschosse) "
         "aller Gebäude auf der Parzelle. Die bestehende Geschossfläche ist aus dem "
         "GWR geschätzt, nicht die anrechenbare Geschossfläche — die Zahl ist eine "
@@ -1184,3 +1393,9 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         "verfügbar. Belastbare Gemeinde-/Zonenwerte von Wüest Partner sind "
         "lizenzpflichtig und können in land_prices.csv ergänzt werden."
     )
+    if paths.on_persistent_disk() is False:
+        methodology.warning(
+            "Kein persistenter Speicher eingebunden — ÖREB-Auszüge, Merkliste und "
+            "Kontaktstatus gehen bei jedem Deployment verloren. "
+            "(Railway: Volume auf /data mounten.)"
+        )

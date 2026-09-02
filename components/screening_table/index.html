@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    @font-face{font-family:Instrument Sans;src:url('/app/static/fonts/InstrumentSans-400-normal-latin.woff2') format('woff2');font-weight:400}
+    @font-face{font-family:Instrument Sans;src:url('/app/static/fonts/InstrumentSans-500-normal-latin.woff2') format('woff2');font-weight:500}
+    @font-face{font-family:Instrument Sans;src:url('/app/static/fonts/InstrumentSans-600-normal-latin.woff2') format('woff2');font-weight:600}
+    @font-face{font-family:IBM Plex Mono;src:url('/app/static/fonts/IBMPlexMono-400-normal-latin.woff2') format('woff2');font-weight:400}
+    *{box-sizing:border-box}
+    html,body,#root{width:100%;max-width:100%;min-width:0;margin:0;padding:0;overflow-x:hidden;background:transparent;color:#17171b;font-family:'Instrument Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased}
+    .frame{border:1px solid #eaeaee;border-radius:9px;background:#fff;overflow:hidden}
+    .scroll{overflow-x:auto}
+    table{width:100%;min-width:1880px;border-collapse:collapse;table-layout:auto}
+    th{padding:9px 12px;border-bottom:1px solid #ebebef;background:#fafafb;color:#8a8a94;font-size:9.5px;font-weight:600;letter-spacing:.08em;text-align:left;text-transform:uppercase;white-space:nowrap}
+    th.num,td.num{text-align:right}
+    td{padding:10px 12px;border-bottom:1px solid #f2f2f5;color:#4a4a54;font-size:12.5px;vertical-align:middle;white-space:nowrap}
+    tbody tr:last-child td{border-bottom:0}
+    tbody tr:hover{background:#fcfcfd}
+    td.address{color:#17171b;font-weight:500}
+    td.mono{font-family:'IBM Plex Mono',monospace;font-size:12px;font-variant-numeric:tabular-nums}
+    td.strong{color:#17171b;font-weight:500}
+    .badges{display:flex;gap:5px;flex-wrap:wrap;min-width:125px}
+    .badge{display:inline-flex;align-items:center;padding:3px 7px;border-radius:20px;font-size:10.5px;font-weight:500;white-space:nowrap}
+    .badge-clear{background:#e9f2f0;color:#2d625c}.badge-warning{background:#fdf5e7;color:#8a5a12}.badge-muted{background:#f1f1f4;color:#696972}.badge-saved{background:#eef3f7;color:#476579}
+    .sources{display:flex;gap:9px;font-size:11.5px}.sources a{color:#1c4e4a;text-decoration:none}.sources a:hover{text-decoration:underline}
+    .actions{display:flex;gap:6px;justify-content:flex-end}
+    button{height:26px;padding:0 9px;border:1px solid #e2e2e8;border-radius:5px;background:#fff;color:#3a3a44;font:500 11.5px 'Instrument Sans',sans-serif;cursor:pointer;white-space:nowrap}
+    button:hover{border-color:#c9c9d2}button.primary{border-color:#1c4e4a;background:#1c4e4a;color:#fff}button.primary:hover{border-color:#143a37;background:#143a37}button.quiet{border-color:#ececf0;color:#8a8a94}button.quiet:hover{border-color:#d8d8de;color:#5f5f68}
+    .empty{padding:34px 16px;color:#9a9aa6;font-size:12.5px;text-align:center}
+    .mobile{display:none}
+    @media(max-width:760px){
+      .scroll{display:none}.frame{border:0;background:transparent;overflow:visible}.mobile{display:grid;gap:10px}
+      .parcel-card{width:100%;min-width:0;padding:12px;overflow:hidden;border:1px solid #eaeaee;border-radius:9px;background:#fff}.card-head{display:flex;min-width:0;justify-content:space-between;gap:10px}.card-head>div:first-child{min-width:0}.card-address,.card-place,.card-meta,.card-number{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.card-address{font-size:12.5px;font-weight:500}.card-place{margin-top:3px;color:#9a9aa6;font-size:11.5px}.card-values{display:grid;min-width:0;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px;padding:9px 0;border-top:1px solid #f2f2f5;border-bottom:1px solid #f2f2f5}.card-values>div{min-width:0}.card-label{color:#9a9aa6;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase}.card-number{margin-top:3px;font-family:'IBM Plex Mono',monospace;font-size:12px}.card-meta{margin-top:9px;color:#77777f;font-size:11.5px}.badges{margin-top:8px}.badge{max-width:100%;line-height:1.25;white-space:normal}.actions{width:100%;min-width:0;margin-top:10px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.actions button{width:100%;min-width:0}.actions .quiet{grid-column:1/-1}
+    }
+  </style>
+</head>
+<body><div id="root"></div>
+<script>
+  const root=document.getElementById('root');
+  const send=(type,payload={})=>parent.postMessage({isStreamlitMessage:true,type,...payload},'*');
+  const emit=(type,row)=>send('streamlit:setComponentValue',{value:{type,bfs:row.bfs,parcel:String(row.parcel),eventId:`${Date.now()}-${Math.random()}`}});
+  const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node};
+  const button=(label,cls,handler)=>{const node=el('button',cls,label);node.type='button';node.addEventListener('click',handler);return node};
+  const badge=(item)=>el('span',`badge badge-${item.tone||'muted'}`,item.label);
+  const source=(label,url)=>{const a=el('a','',label);a.href=url;a.target='_blank';a.rel='noopener noreferrer';return a};
+  function desktop(rows){
+    const scroll=el('div','scroll'),table=el('table'),head=el('thead'),hr=el('tr');
+    [['Adresse',''],['Gemeinde',''],['Parz.-Nr.',''],['Objekttyp',''],['Baujahr','num'],['Zone',''],['Ziffer','num'],['Fläche m²','num'],['Potenzial m²','num'],['WE','num'],['Ref. CHF/m²','num'],['Landwert CHF','num'],['Preisquelle',''],['Status',''],['Quellen',''],['Aktion','num']].forEach(([label,cls])=>hr.append(el('th',cls,label)));
+    head.append(hr);table.append(head);const body=el('tbody');
+    rows.forEach(row=>{
+      const tr=el('tr');
+      tr.append(el('td','address',row.address),el('td','',row.municipality),el('td','mono',row.parcel),el('td','',row.type),el('td','mono num',row.year),el('td','',row.zone),el('td','mono num',row.coeff),el('td','mono num',row.area),el('td','mono num strong',row.potential),el('td','mono num',row.units),el('td','mono num',row.refPrice),el('td','mono num strong',row.landValue),el('td','',row.priceSource));
+      const status=el('td'),badges=el('div','badges');(row.badges||[]).forEach(item=>badges.append(badge(item)));status.append(badges);tr.append(status);
+      const links=el('td'),sources=el('div','sources');[['GIS',row.links?.gis],['ÖREB',row.links?.oereb],['Google',row.links?.google],['SV',row.links?.streetView]].forEach(([label,url])=>{if(url)sources.append(source(label,url))});links.append(sources);tr.append(links);
+      const actionCell=el('td'),actions=el('div','actions');actions.append(button('Analyse','primary',()=>emit('analyse',row)),button(row.saved?'Entfernen':'Merken','',()=>emit('save',row)),button('Nicht interessant','quiet',()=>emit('hide',row)));actionCell.append(actions);tr.append(actionCell);body.append(tr);
+    });
+    table.append(body);scroll.append(table);return scroll;
+  }
+  function mobile(rows){
+    const list=el('div','mobile');
+    rows.forEach(row=>{
+      const card=el('article','parcel-card'),head=el('div','card-head'),identity=el('div');identity.append(el('div','card-address',row.address),el('div','card-place',`${row.municipality} · ${row.parcel}`));head.append(identity,el('div','mono',row.zone));card.append(head);
+      const values=el('div','card-values');[['Potenzial',`${row.potential} m²`],['Landwert CHF',row.landValue],['Fläche',`${row.area} m²`],['Wohnungen',row.units]].forEach(([label,value])=>{const box=el('div');box.append(el('div','card-label',label),el('div','card-number',value));values.append(box)});card.append(values);
+      card.append(el('div','card-meta',`${row.type} · Baujahr ${row.year} · Ziffer ${row.coeff}`));const badges=el('div','badges');(row.badges||[]).forEach(item=>badges.append(badge(item)));card.append(badges);
+      const actions=el('div','actions');actions.append(button('Analyse','primary',()=>emit('analyse',row)),button(row.saved?'Entfernen':'Merken','',()=>emit('save',row)),button('Nicht interessant','quiet',()=>emit('hide',row)));card.append(actions);list.append(card);
+    });return list;
+  }
+  function height(){requestAnimationFrame(()=>send('streamlit:setFrameHeight',{height:Math.ceil(document.documentElement.scrollHeight)}))}
+  function render(args){const rows=Array.isArray(args.rows)?args.rows:[];root.replaceChildren();if(!rows.length){root.append(el('div','empty','Keine Parzelle erfüllt diese Kriterien.'))}else{const frame=el('div','frame');frame.append(desktop(rows),mobile(rows));root.append(frame)}height()}
+  addEventListener('message',event=>{if(event.data?.type==='streamlit:render')render(event.data.args||{})});
+  addEventListener('resize',height);new ResizeObserver(height).observe(root);
+  send('streamlit:componentReady',{apiVersion:1});height();
+</script></body></html>

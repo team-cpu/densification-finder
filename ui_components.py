@@ -18,6 +18,9 @@ _ROOT = Path(__file__).with_name("components")
 _MERKLISTE = components.declare_component(
     "scope_merkliste", path=str(_ROOT / "merkliste")
 )
+_SCREENING_TABLE = components.declare_component(
+    "scope_screening_table", path=str(_ROOT / "screening_table")
+)
 _ACQUISITION_BOARD = components.declare_component(
     "scope_acquisition_board", path=str(_ROOT / "acquisition_board")
 )
@@ -26,6 +29,11 @@ _ACQUISITION_BOARD = components.declare_component(
 def merkliste_table(rows: list[dict], *, key: str):
     """Render the prototype's shortlist table and return its latest action."""
     return _MERKLISTE(rows=rows, key=key, default=None)
+
+
+def screening_table(rows: list[dict], *, key: str):
+    """Render the prototype's screening table and return its latest row action."""
+    return _SCREENING_TABLE(rows=rows, key=key, default=None)
 
 
 def acquisition_board(stages: list[dict], *, key: str):

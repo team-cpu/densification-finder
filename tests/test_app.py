@@ -66,12 +66,12 @@ class AppRegressionTest(unittest.TestCase):
         ).run()
         self.assertFalse(app.exception)
         self.assertEqual(app.number_input[0].min, 130)
-        # The filter regroup put Ziffer second and Anzahl Resultate sixth, so
-        # their number_input positions swapped from before the regroup.
-        self.assertEqual(app.number_input[2].max, 50)
-        area = app.select_slider[0]
-        self.assertEqual(area.value, (300, float("inf")))
-        self.assertEqual(area.options[-1], "ohne Limite")
+        area_min = next(n for n in app.number_input if n.label == "Fläche von (m²)")
+        area_max = next(n for n in app.number_input if n.label == "Fläche bis (m²)")
+        self.assertEqual(area_min.value, 300)
+        self.assertIsNone(area_max.value)
+        result_limit = next(s for s in app.selectbox if s.label == "Anzeigen")
+        self.assertEqual(result_limit.value, 20)
         self.assertEqual(app.number_input[1].label, "Ziffer")
         self.assertIsNone(app.number_input[1].value)
 
@@ -91,7 +91,7 @@ class AppRegressionTest(unittest.TestCase):
         self.assertIn("Merkliste", frame.columns)
         self.assertIn("Kontaktstatus", frame.columns)
 
-        app.number_input[2].set_value(50).run()
+        result_limit.select(50).run()
         self.assertFalse(app.exception)
         self.assertEqual(len(app.dataframe[0].value), 50)
 
@@ -107,13 +107,17 @@ class AppRegressionTest(unittest.TestCase):
         # so it is selectbox[0]; Grundstückstyp moved to selectbox[1].
         app.selectbox[1].select("Alle").run()
 
-        app.select_slider[0].set_value((5000, float("inf"))).run()
+        area_min = next(n for n in app.number_input if n.label == "Fläche von (m²)")
+        area_min.set_value(5000).run()
         self.assertFalse(app.exception)
         large = app.dataframe[0].value
         self.assertTrue(len(large) > 0)
         self.assertTrue((large["Fläche m²"] > 5000).all())
 
-        app.select_slider[0].set_value((0, 300)).run()
+        area_min = next(n for n in app.number_input if n.label == "Fläche von (m²)")
+        area_min.set_value(0).run()
+        area_max = next(n for n in app.number_input if n.label == "Fläche bis (m²)")
+        area_max.set_value(300).run()
         self.assertFalse(app.exception)
         small = app.dataframe[0].value
         self.assertTrue(len(small) > 0)
@@ -171,7 +175,7 @@ class AppRegressionTest(unittest.TestCase):
         transport_filter = next(
             checkbox
             for checkbox in app.checkbox
-            if checkbox.label == "Strassen-/Bahnparzellen ausblenden"
+            if checkbox.label == "Strassen-/Bahnparzellen"
         )
         transport_filter.uncheck().run()
         visible = app.dataframe[0].value
@@ -291,7 +295,7 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(app.number_input[0].value, 2000)
 
         field(app, "Name der Suche").set_value("Testsuche").run()
-        button("Suche speichern").click().run()
+        button("Speichern").click().run()
         self.assertFalse(app.exception)
         self.assertEqual(list(searches.load(self.database)["name"]), ["Testsuche"])
 

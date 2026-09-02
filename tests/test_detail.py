@@ -273,12 +273,9 @@ class DetailViewTest(unittest.TestCase):
         self.assertEqual(boxed, [], "the calculation is back inside a column")
         # …and it is still on the page at all.
         self.assertTrue(any('class="calc"' in m.value for m in app.markdown))
-        # The assumptions list, by contrast, stays inside the column — it
-        # explains the figures above it and closes the shorter side.
-        self.assertIn(
-            "Annahmen und Quellen",
-            [e.label for column in app.columns for e in column.expander],
-        )
+        # The assumptions list now belongs to the same full-width calculation
+        # card as the values it documents.
+        self.assertIn("Annahmen und Quellen", [e.label for e in app.expander])
 
     def test_the_page_does_not_wait_on_a_slow_oereblex(self):
         """The bug this change fixes: block E's fetch used to run on the render

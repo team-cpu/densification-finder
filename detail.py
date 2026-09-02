@@ -401,9 +401,15 @@ def forget(pid):
 #: background whichever theme is running.
 PAGE_CSS = """
 <style>
-  .st-key-detail_header { margin:10px 0 16px; }
-  .detail-page-kicker { margin-bottom:7px; color:#9a9aa6; font-size:10px;
-      font-weight:600; letter-spacing:.1em; text-transform:uppercase; }
+  [data-testid="stMainBlockContainer"]:has(.st-key-detail_header) {
+      max-width:1180px; }
+  .st-key-detail_breadcrumb { margin:4px 0 14px; align-items:center; gap:8px; }
+  .st-key-detail_breadcrumb [data-testid="stButton"] button { min-height:0;
+      height:auto; padding:0; border:0; background:transparent; color:#1c4e4a;
+      font-size:11.5px; }
+  .detail-breadcrumb-copy { color:#9a9aa6; font-size:11.5px; }
+  .detail-breadcrumb-copy strong { color:#4a4a54; font-weight:400; }
+  .st-key-detail_header { margin:0 0 20px; }
   .st-key-detail_header [data-testid="stHeadingWithActionElements"] h1 {
       margin:0; font-size:21px; line-height:1.25; font-weight:600;
       letter-spacing:-.015em; }
@@ -411,21 +417,34 @@ PAGE_CSS = """
   .st-key-detail_actions [data-testid="stHorizontalBlock"] { align-items:end; }
   .st-key-detail_actions button { white-space:nowrap; }
 
-  .st-key-result_bar { padding:.6rem 1rem .1rem; margin-bottom:.4rem;
-      border-radius:8px; border:1px solid rgba(128,128,128,.38);
-      background:rgba(127,127,127,.06);
-      -webkit-backdrop-filter:blur(30px) saturate(1.7) brightness(1.08);
-      backdrop-filter:blur(30px) saturate(1.7) brightness(1.08);
-      box-shadow:0 6px 20px rgba(0,0,0,.10); }
-  .st-key-result_bar [data-testid="stMetricValue"] { font-size:1.55rem; }
+  .st-key-result_bar { padding:20px 24px 14px; margin-bottom:24px;
+      border-radius:10px; border:1px solid #dde9e7; background:#fbfdfd; }
+  .st-key-result_bar [data-testid="stMetricLabel"] p { color:#8a8a94;
+      font-size:10px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; }
+  .st-key-result_bar [data-testid="stMetricValue"] { font-family:"IBM Plex Mono",
+      monospace; font-size:22px; font-weight:600; }
+  .st-key-result_bar [data-testid="stColumn"]:first-child [data-testid="stMetricValue"] {
+      font-size:38px; letter-spacing:-.02em; }
+  .st-key-result_bar [data-testid="stColumn"] + [data-testid="stColumn"] {
+      border-left:1px solid #eaeaee; padding-left:22px; }
 
-  .st-key-inputs_b, .st-key-inputs_c { padding:.7rem 1rem .1rem;
-      margin-bottom:.3rem; border-left:3px solid rgba(255,75,75,.55);
-      border-radius:0 8px 8px 0; background:rgba(127,127,127,.09); }
-
-  .st-key-facts_a { padding:.7rem 1rem .1rem; margin-bottom:.3rem;
-      border:1px solid rgba(128,128,128,.28); border-radius:8px;
-      background:rgba(127,127,127,.035); }
+  .st-key-facts_a, .st-key-inputs_b, .st-key-inputs_c {
+      padding:14px 16px 12px; margin-bottom:20px; border:1px solid #eaeaee;
+      border-radius:9px; background:#fff; }
+  .st-key-inputs_c { margin-top:0; padding:14px 16px 4px; }
+  .st-key-facts_a [data-testid="stHeadingWithActionElements"] h3,
+  .st-key-inputs_b [data-testid="stHeadingWithActionElements"] h3,
+  .st-key-inputs_c [data-testid="stHeadingWithActionElements"] h3 {
+      color:#8a8a94; font-size:10px; font-weight:600; letter-spacing:.1em;
+      text-transform:uppercase; }
+  .detail-edit-pill { display:inline-flex; align-items:center; padding:3px 9px;
+      border-radius:20px; background:#e8f0ef; color:#143a37; font-size:10.5px; }
+  .detail-edit-pill.readonly { background:#f4f4f6; color:#8a8a94; }
+  .st-key-inputs_b [data-testid="stNumberInput"] input,
+  .st-key-inputs_c [data-testid="stNumberInput"] input { font-family:"IBM Plex Mono",
+      monospace; font-size:13px; text-align:right; }
+  .st-key-inputs_b [data-testid="stMetricValue"] { font-family:"IBM Plex Mono",
+      monospace; font-size:26px; font-weight:600; }
 
   /* The data sheet has to stay inside its half. A markdown table sizes itself
      to its content, so from about 1400px down block A ran straight over block
@@ -449,6 +468,15 @@ PAGE_CSS = """
   [class*="st-key-facts_"] [data-testid="stMarkdownContainer"] {
       overflow-x:auto; }
 
+  .st-key-inputs_c .calc__scroll { margin:14px -16px 0; }
+  .st-key-inputs_c table.calc { width:100%; min-width:760px; }
+  .st-key-inputs_c table.calc th, .st-key-inputs_c table.calc td {
+      padding:9px 16px; border-bottom:1px solid #f4f4f7; }
+  .st-key-inputs_c table.calc thead th { background:#fafafb; }
+  .st-key-inputs_c table.calc tr.calc__result th,
+  .st-key-inputs_c table.calc tr.calc__result td { background:#fafafb;
+      border-top:1px solid #e4e4ea; }
+
   /* Below about a thousand pixels the halves are too narrow for
      "Denkmal-/Inventarstatus" to fit on any line, and a word that cannot fit
      takes the table over the seam with it. Hard breaking only there — on a
@@ -461,6 +489,9 @@ PAGE_CSS = """
     .st-key-detail_header [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
     .st-key-detail_header [data-testid="stColumn"] { min-width:100%; }
     .st-key-detail_actions [data-testid="stColumn"] { min-width:0; }
+    .st-key-result_bar [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
+    .st-key-result_bar [data-testid="stColumn"] { min-width:100%; border-left:0 !important;
+        padding-left:0 !important; }
   }
 </style>
 """
@@ -683,24 +714,27 @@ def page(parcels, cache, price_of, db=None):
     st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
     address = _text(row.get("address")) or f"Parzelle {row['parcel']}"
+    with st.container(key="detail_breadcrumb", horizontal=True):
+        if st.button("← Screening", key="detail_back"):
+            close()
+            navigation.go_back()
+            st.rerun()
+        st.html(
+            '<span class="detail-breadcrumb-copy">/ '
+            f'{escape(str(row["municipality"]))} / '
+            f'<strong>Parzelle {escape(str(row["parcel"]))}</strong></span>'
+        )
+
     with st.container(key="detail_header"):
-        heading, action_column = st.columns([5, 4], vertical_alignment="bottom")
+        heading, action_column = st.columns([5, 3], vertical_alignment="bottom")
         with heading:
-            st.html('<div class="detail-page-kicker">Analyse</div>')
             st.title(address)
             st.caption(
                 f"{row['municipality']} · Parzelle {row['parcel']} · "
                 f"{_text(row.get('zone')) or 'ohne Zone'}"
             )
         with action_column.container(key="detail_actions"):
-            back_action, saved_action, pdf_action = st.columns([1.1, 1.8, 1.2])
-            if back_action.button("← Zurück", width="stretch"):
-                close()
-                # Back to the list the reader came from. Analyse is now a page
-                # rather than a view that replaced the list, so dropping the parcel
-                # key alone would leave them here looking at an empty state.
-                navigation.go_back()
-                st.rerun()
+            saved_action, pdf_action = st.columns([1.6, 1.2])
             if _on_merkliste(db_path, *key):
                 if saved_action.button(
                     "✓ Merkliste — entfernen", width="stretch"
@@ -722,14 +756,15 @@ def page(parcels, cache, price_of, db=None):
     # exist before it can be computed, but it belongs above them on the page.
     result_bar = st.container(key="result_bar")
 
-    # 32px between the halves, not Streamlit's 64: the gutter was the one
-    # place the page had spare room, and block A is the column that wanted
-    # it. Measured — "medium" is 32px and gives each half 624px at 1440.
-    facts, work = st.columns(2, gap="medium")
+    facts, potential_panel = st.columns(2, gap="medium")
 
     # ── Block A ─────────────────────────────────────────────────────────────
-    facts.subheader("A · Grunddaten")
     with facts.container(key="facts_a"):
+        fact_title, fact_badge = st.columns([3, 1], vertical_alignment="center")
+        fact_title.subheader("A · Grunddaten")
+        fact_badge.html(
+            '<span class="detail-edit-pill readonly">Nicht editierbar</span>'
+        )
         st.caption("Aus den Registern übernommen — hier ist nichts veränderbar.")
         st.markdown(_facts(_base_block(row, cache, price_ref, extract)))
         st.markdown(_links(row))
@@ -739,9 +774,13 @@ def page(parcels, cache, price_of, db=None):
             st.markdown(_facts(zone_rows))
 
     # ── Block B ─────────────────────────────────────────────────────────────
-    work.subheader("B · Potenzial")
-    with work.container(key="inputs_b"):
-        b1, b2, b3 = st.columns(3)
+    with potential_panel.container(key="inputs_b"):
+        potential_title, potential_badge = st.columns(
+            [3, 1], vertical_alignment="center"
+        )
+        potential_title.subheader("B · Potenzial")
+        potential_badge.html('<span class="detail-edit-pill">Editierbar</span>')
+        b1, b2 = st.columns(2)
         potential = _number(
             b1, "Potenzial (m² GF)", pid, "gf", float(row["delta"]), step=10.0,
             help=(
@@ -756,25 +795,28 @@ def page(parcels, cache, price_of, db=None):
             help="Faustregel aus dem Auftrag, keine Planungsgrösse.",
         )
         possible = E.units(potential, unit_size)
-        b3.metric(
+        st.divider()
+        st.metric(
             "Mögliche Wohnungen",
             "—" if possible is None else f"{possible:.1f}",
             help="Potenzial ÷ Wohnungsgrösse. Rechnerisch, ohne Grundriss.",
         )
 
     # ── Block C ─────────────────────────────────────────────────────────────
-    work.subheader("C · Residualwertrechnung")
-    # Two controls to a row rather than four: in the narrower half of the split
-    # a four-wide row leaves each field about a stepper wide and wraps every
-    # label onto three lines.
-    with work.container(key="inputs_c"):
+    calculation_panel = st.container(key="inputs_c")
+    with calculation_panel:
+        calculation_title, calculation_badge = st.columns(
+            [4, 1], vertical_alignment="center"
+        )
+        calculation_title.subheader("C · Residualwertrechnung")
+        calculation_badge.html('<span class="detail-edit-pill">Editierbar</span>')
         st.caption(
             "Landwert = Verkaufserlös der neuen Flächen − Baukosten − Baunebenkosten "
             "− Abbruch − Finanzierung − Reserve. Der Verkaufspreis rechnet auf 80% "
             "der Geschossfläche, die Baukosten auf 100%. Mit der Maus über einen "
             "Schritt fahren zeigt die Formel dahinter."
         )
-        c1, c2 = st.columns(2)
+        c1, c2, c3, c4 = st.columns(4)
         sale_price = _number(
             c1, "Verkaufspreis (CHF/m²)", pid, "sale",
             E.BENCHMARKS["sale_price_chf_m2"].value, step=100.0,
@@ -790,8 +832,6 @@ def page(parcels, cache, price_of, db=None):
                 name="share",
             ),
         )
-
-        c3, c4 = st.columns(2)
         construction = _number(
             c3, "Baukosten (CHF/m²)", pid, "build",
             E.BENCHMARKS["construction_chf_m2"].value, step=50.0,
@@ -803,9 +843,24 @@ def page(parcels, cache, price_of, db=None):
             help=_benchmark_help("ancillary_pct", name="ancillary"),
         )
 
-        d1, d2 = st.columns(2, vertical_alignment="bottom")
+        d1, d2, d3, d4 = st.columns(4, vertical_alignment="bottom")
         has_building = bool(row["buildings"]) and row["existing"] > 0
-        demolish = _remember(pid, "demolish", d1.checkbox(
+        demolition = _number(
+            d1, "Abbruchkosten (CHF/m²)", pid, "demolition",
+            E.BENCHMARKS["demolition_chf_m2"].value, step=10.0,
+            help=_benchmark_help("demolition_chf_m2", name="demolition"),
+        )
+        financing = _number(
+            d2, "Finanzierung (%)", pid, "financing",
+            E.BENCHMARKS["financing_pct"].value, step=0.5, maximum=100.0, fmt="%.1f",
+            help=_benchmark_help("financing_pct", name="financing"),
+        )
+        reserve = _number(
+            d3, "Reserve / Unvorhergesehenes (%)", pid, "reserve",
+            E.BENCHMARKS["reserve_pct"].value, step=1.0, maximum=100.0,
+            help=_benchmark_help("reserve_pct", name="reserve"),
+        )
+        demolish = _remember(pid, "demolish", d4.checkbox(
             "Bestehendes Gebäude abbrechen",
             value=bool(_recall(pid, "demolish", has_building)),
             key=_widget_key(pid, "demolish"),
@@ -816,23 +871,6 @@ def page(parcels, cache, price_of, db=None):
                 "Auf dieser Parzelle steht kein Gebäude, das abgebrochen werden müsste."
             ),
         ))
-        demolition = _number(
-            d2, "Abbruchkosten (CHF/m²)", pid, "demolition",
-            E.BENCHMARKS["demolition_chf_m2"].value, step=10.0,
-            help=_benchmark_help("demolition_chf_m2", name="demolition"),
-        )
-
-        d3, d4 = st.columns(2)
-        financing = _number(
-            d3, "Finanzierung (%)", pid, "financing",
-            E.BENCHMARKS["financing_pct"].value, step=0.5, maximum=100.0, fmt="%.1f",
-            help=_benchmark_help("financing_pct", name="financing"),
-        )
-        reserve = _number(
-            d4, "Reserve / Unvorhergesehenes (%)", pid, "reserve",
-            E.BENCHMARKS["reserve_pct"].value, step=1.0, maximum=100.0,
-            help=_benchmark_help("reserve_pct", name="reserve"),
-        )
 
     steps = E.residual(
         potential_gf=potential,
@@ -859,16 +897,6 @@ def page(parcels, cache, price_of, db=None):
         ("reserve_pct", reserve, "Reserve / Unvorhergesehenes %"),
     ]
     notes = _assumption_notes(used)
-    # Where each figure above came from, kept with the figures rather than with
-    # the calculation — and it closes the right-hand column, which is the shorter
-    # of the two now that the table has left it.
-    with work.expander("Annahmen und Quellen"):
-        for note in notes:
-            st.markdown(f"- {note}")
-        if st.button("Annahmen zurücksetzen"):
-            forget(pid)
-            st.rerun()
-
     # ── The calculation ─────────────────────────────────────────────────────
     # Below both columns, on the full width, because it does not fit in half of
     # one: the longest line of it is about seventy characters of arithmetic, and
@@ -884,14 +912,22 @@ def page(parcels, cache, price_of, db=None):
     # assumption cannot be adjusted if only the result is visible. Hovering a
     # step name shows the expression behind it, symbols and all — read off the
     # rule that computed the number, so the two cannot drift apart.
-    st.markdown(_calculation_table(steps), unsafe_allow_html=True)
-    st.caption(DISCLAIMER)
+    calculation_panel.markdown(
+        _calculation_table(steps), unsafe_allow_html=True
+    )
+    calculation_panel.caption(DISCLAIMER)
+    with calculation_panel.expander("Annahmen und Quellen"):
+        for note in notes:
+            st.markdown(f"- {note}")
+        if st.button("Annahmen zurücksetzen"):
+            forget(pid)
+            st.rerun()
 
     # ── The result bar ──────────────────────────────────────────────────────
     # Written last, drawn first. The warning belongs here rather than beside the
     # table: it explains the number, and this is where the number is read.
     with result_bar:
-        r1, r2, r3 = st.columns(3)
+        r1, r2, r3 = st.columns([1.35, 1, 1])
         r1.metric("Residualer Landwert", f"CHF {E.chf(land)}")
         r2.metric(
             "pro m² Parzelle",
