@@ -401,8 +401,6 @@ def forget(pid):
 #: background whichever theme is running.
 PAGE_CSS = """
 <style>
-  [data-testid="stMainBlockContainer"]:has(.st-key-detail_header) {
-      max-width:1180px; }
   .st-key-detail_breadcrumb { margin:4px 0 14px; align-items:center; gap:8px; }
   .st-key-detail_breadcrumb [data-testid="stButton"] button { min-height:0;
       height:auto; padding:0; border:0; background:transparent; color:#1c4e4a;
