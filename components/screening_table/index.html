@@ -47,14 +47,14 @@
   const source=(label,url)=>{const a=el('a','',label);a.href=url;a.target='_blank';a.rel='noopener noreferrer';return a};
   function desktop(rows){
     const scroll=el('div','scroll'),table=el('table'),head=el('thead'),hr=el('tr');
-    [['Adresse',''],['Gemeinde',''],['Parz.-Nr.',''],['Objekttyp',''],['Baujahr','num'],['Zone',''],['Ziffer','num'],['Fläche m²','num'],['Potenzial m²','num'],['WE','num'],['Ref. CHF/m²','num'],['Landwert CHF','num'],['Preisquelle',''],['Status',''],['Quellen',''],['Aktion','num']].forEach(([label,cls])=>hr.append(el('th',cls,label)));
+    [['Adresse',''],['Gemeinde',''],['Parz.-Nr.',''],['Objekttyp',''],['Baujahr','num'],['Zone',''],['AZ','num'],['Fläche m²','num'],['Potenzial m²','num'],['WE','num'],['Ref. CHF/m²','num'],['Landwert CHF','num'],['Preisquelle',''],['Status',''],['Quellen',''],['Aktion','num']].forEach(([label,cls])=>hr.append(el('th',cls,label)));
     head.append(hr);table.append(head);const body=el('tbody');
     rows.forEach(row=>{
       const tr=el('tr');
       tr.append(el('td','address',row.address),el('td','',row.municipality),el('td','mono',row.parcel),el('td','',row.type),el('td','mono num',row.year),el('td','',row.zone),el('td','mono num',row.coeff),el('td','mono num',row.area),el('td','mono num strong',row.potential),el('td','mono num',row.units),el('td','mono num',row.refPrice),el('td','mono num strong',row.landValue),el('td','',row.priceSource));
       const status=el('td'),badges=el('div','badges');(row.badges||[]).forEach(item=>badges.append(badge(item)));status.append(badges);tr.append(status);
-      const links=el('td'),sources=el('div','sources');[['GIS',row.links?.gis],['ÖREB',row.links?.oereb],['Google',row.links?.google],['SV',row.links?.streetView]].forEach(([label,url])=>{if(url)sources.append(source(label,url))});links.append(sources);tr.append(links);
-      const actionCell=el('td'),actions=el('div','actions');actions.append(button('Analyse','primary',()=>emit('analyse',row)),button(row.saved?'Entfernen':'Merken','',()=>emit('save',row)),button('Nicht interessant','quiet',()=>emit('hide',row)));actionCell.append(actions);tr.append(actionCell);body.append(tr);
+      const links=el('td'),sources=el('div','sources');[['GIS',row.links?.gis],['Auszug',row.links?.oereb],['SV',row.links?.streetView]].forEach(([label,url])=>{if(url)sources.append(source(label,url))});links.append(sources);tr.append(links);
+      const actionCell=el('td'),actions=el('div','actions');actions.append(button('Analyse','primary',()=>emit('analyse',row)),button(row.saved?'Gemerkt':'Merken','',()=>emit('save',row)),button('Nicht interessant','quiet',()=>emit('hide',row)));actionCell.append(actions);tr.append(actionCell);body.append(tr);
     });
     table.append(body);scroll.append(table);return scroll;
   }
@@ -63,8 +63,8 @@
     rows.forEach(row=>{
       const card=el('article','parcel-card'),head=el('div','card-head'),identity=el('div');identity.append(el('div','card-address',row.address),el('div','card-place',`${row.municipality} · ${row.parcel}`));head.append(identity,el('div','mono',row.zone));card.append(head);
       const values=el('div','card-values');[['Potenzial',`${row.potential} m²`],['Landwert CHF',row.landValue],['Fläche',`${row.area} m²`],['Wohnungen',row.units]].forEach(([label,value])=>{const box=el('div');box.append(el('div','card-label',label),el('div','card-number',value));values.append(box)});card.append(values);
-      card.append(el('div','card-meta',`${row.type} · Baujahr ${row.year} · Ziffer ${row.coeff}`));const badges=el('div','badges');(row.badges||[]).forEach(item=>badges.append(badge(item)));card.append(badges);
-      const actions=el('div','actions');actions.append(button('Analyse','primary',()=>emit('analyse',row)),button(row.saved?'Entfernen':'Merken','',()=>emit('save',row)),button('Nicht interessant','quiet',()=>emit('hide',row)));card.append(actions);list.append(card);
+      card.append(el('div','card-meta',`${row.type} · Baujahr ${row.year} · AZ ${row.coeff}`));const badges=el('div','badges');(row.badges||[]).forEach(item=>badges.append(badge(item)));card.append(badges);
+      const actions=el('div','actions');actions.append(button('Analyse','primary',()=>emit('analyse',row)),button(row.saved?'Gemerkt':'Merken','',()=>emit('save',row)),button('Nicht interessant','quiet',()=>emit('hide',row)));card.append(actions);list.append(card);
     });return list;
   }
   function height(){requestAnimationFrame(()=>send('streamlit:setFrameHeight',{height:Math.ceil(document.documentElement.scrollHeight)}))}

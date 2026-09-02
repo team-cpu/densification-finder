@@ -65,6 +65,7 @@ class AppRegressionTest(unittest.TestCase):
             os.path.join(paths.HERE, "app.py"), default_timeout=30
         ).run()
         self.assertFalse(app.exception)
+        self.assertEqual(app.number_input[0].label, "Min. Potenzial m²")
         self.assertEqual(app.number_input[0].min, 130)
         area_min = next(n for n in app.number_input if n.label == "Fläche von (m²)")
         area_max = next(n for n in app.number_input if n.label == "Fläche bis (m²)")
@@ -72,7 +73,7 @@ class AppRegressionTest(unittest.TestCase):
         self.assertIsNone(area_max.value)
         result_limit = next(s for s in app.selectbox if s.label == "Anzeigen")
         self.assertEqual(result_limit.value, 20)
-        self.assertEqual(app.number_input[1].label, "Ziffer")
+        self.assertEqual(app.number_input[1].label, "Mind. AZ")
         self.assertIsNone(app.number_input[1].value)
 
         # The Kanton selector sits ahead of Grundstückstyp in the control row,

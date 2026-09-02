@@ -41,6 +41,10 @@ class ComponentAssetTest(unittest.TestCase):
 
         self.assertIn("Nicht interessant", html)
         self.assertIn("Analyse", html)
+        self.assertIn("['AZ','num']", html)
+        self.assertIn("['Auszug',row.links?.oereb]", html)
+        self.assertNotIn("['Google',row.links?.google]", html)
+        self.assertIn("row.saved?'Gemerkt':'Merken'", html)
         self.assertIn("streamlit:setComponentValue", html)
         self.assertNotIn("https://unpkg.com", html)
 

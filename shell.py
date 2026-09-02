@@ -156,19 +156,20 @@ _SHELL_CSS = """
 }
 
 /* Streamlit's default block container reserves 84px above the first element
-   and limits content to 80rem. The prototype starts after a compact 16px inset
-   and permits a 1560px canvas; keeping the default made the new shell look like
-   a floating card and compressed the seven-column filters unnecessarily. */
+   and limits content to 80rem. Scope is a data-dense work surface, so the
+   application canvas follows the browser width instead of stopping at 1560px
+   and leaving half of an ultrawide display empty. */
 [data-testid="stMainBlockContainer"] {
-  max-width: 1560px;
+  width: 100%;
+  max-width: none;
   padding: 16px 28px 90px;
 }
 
-/* The content row: capped and centered like the prototype's, with its own
-   padding and height rather than the bar's. */
+/* The shell uses the same full-width canvas as every page. Keeping a separate
+   cap here would make the navigation stop while the tables continue. */
 .st-key-app_shell_row {
-  max-width: 1560px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
   padding: 0 28px;
   height: 52px;
   min-height: 52px;
@@ -263,7 +264,7 @@ _SHELL_CSS = """
    letting five intrinsic-width Streamlit children turn into four tall rows.
    Brand + account share the first row; navigation gets the second; the data
    stamp is available on wider screens where it does not compete for space. */
-@media (max-width: 760px) {
+@media (max-width: 960px) {
   .st-key-app_shell {
     position: sticky;
     margin: -12px -14px 0;

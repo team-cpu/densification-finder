@@ -85,8 +85,8 @@ _FILTER_LABELS = {
     "screening_type": "Grundstückstyp",
     "screening_area_min": "Parzellenfläche von",
     "screening_area_max": "Parzellenfläche bis",
-    "screening_ziffer": "Ziffer",
-    "screening_min_delta": "Mindestpotenzial",
+    "screening_ziffer": "Mind. AZ",
+    "screening_min_delta": "Min. Potenzial m²",
     "screening_top_n": "Anzahl Resultate",
     "screening_min_age": "Mindestalter",
 }
@@ -132,17 +132,19 @@ _SCREENING_CSS = """
   margin: 7px 0 0;
   color: #77777f;
   font-size: 12.5px;
+  line-height: 1.35;
   text-wrap: pretty;
 }
 
 .st-key-screening_header {
-  margin: 10px 0 20px;
+  margin: 10px 0 10px;
 }
 
 .st-key-screening_header .screening-page-intro {
   margin: 0;
 }
 
+.st-key-screening_header_actions,
 .st-key-screening_header_actions [data-testid="stHorizontalBlock"] {
   justify-content: flex-end;
   align-items: end;
@@ -154,7 +156,7 @@ _SCREENING_CSS = """
 }
 
 .st-key-screening_filters {
-  margin-bottom: 16px;
+  margin-bottom: 0;
   border: 1px solid #eaeaee;
   border-radius: 9px;
   background: #fff;
@@ -190,7 +192,8 @@ _SCREENING_CSS = """
 }
 
 .st-key-screening_filters [data-testid="stWidgetLabel"] p,
-.screening-area-label {
+.screening-area-label,
+.screening-exclusion-label {
   color: #8a8a94;
   font-size: 10px;
   font-weight: 600;
@@ -206,19 +209,19 @@ _SCREENING_CSS = """
 }
 
 .st-key-screening_filter_primary {
-  padding-top: 10px;
-  padding-bottom: 10px;
+  padding-top: 7px;
+  padding-bottom: 7px;
 }
 
 .st-key-screening_filter_numeric {
-  padding-top: 10px;
-  padding-bottom: 10px;
+  padding-top: 7px;
+  padding-bottom: 7px;
   border-top: 1px solid #f2f2f5;
 }
 
 .st-key-screening_filter_flags {
-  padding-top: 10px;
-  padding-bottom: 12px;
+  padding-top: 7px;
+  padding-bottom: 9px;
   border-top: 1px solid #f2f2f5;
 }
 
@@ -238,10 +241,20 @@ _SCREENING_CSS = """
   background: transparent;
   color: #77777f;
   font-size: 11.5px;
+  white-space: nowrap;
 }
 
 .st-key-screening_area_range [data-testid="stHorizontalBlock"] {
   gap: 6px;
+}
+
+.screening-range-separator {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  color: #9a9aa6;
+  font-size: 12px;
 }
 
 .screening-area-label {
@@ -250,7 +263,7 @@ _SCREENING_CSS = """
 }
 
 .st-key-screening_result_toolbar {
-  margin: 20px 0 9px;
+  margin: 0 0 9px;
   align-items: end;
 }
 
@@ -287,12 +300,31 @@ _SCREENING_CSS = """
 }
 
 .st-key-screening_result_limit {
-  min-width: 82px;
+  min-width: 126px;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
 }
 
-.st-key-screening_result_limit [data-testid="stWidgetLabel"] p {
+.st-key-screening_result_limit > [data-testid="stElementContainer"] {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0;
+}
+
+.st-key-screening_result_limit > .st-key-screening_top_n {
+  flex: 0 0 62px !important;
+  width: 62px !important;
+}
+
+.screening-result-limit-label {
   color: #9a9aa6;
-  font-size: 10px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.st-key-screening_result_limit [data-baseweb="select"] {
+  min-width: 62px;
 }
 
 /* The native frame remains in the element tree as a regression-test and CSV
@@ -309,6 +341,25 @@ _SCREENING_CSS = """
   width: 100% !important;
   min-width: 0 !important;
   max-width: 100% !important;
+}
+
+@media (max-width: 960px) {
+  .st-key-screening_result_toolbar > [data-testid="stLayoutWrapper"]
+    > [data-testid="stHorizontalBlock"] {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .st-key-screening_result_toolbar > [data-testid="stLayoutWrapper"]
+    > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+    flex: 0 0 100% !important;
+    width: 100% !important;
+  }
+
+  .st-key-screening_result_toolbar > [data-testid="stLayoutWrapper"]
+    > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) {
+    margin-left: auto;
+  }
 }
 
 @media (max-width: 760px) {
@@ -479,7 +530,7 @@ def screening_table_rows(final, view):
                 "coeff": f"{float(row['az']):g}",
                 "area": F.swiss(float(row["area"])),
                 "potential": F.swiss(float(row["delta"])),
-                "units": f"{float(row['delta']) / SQM_PER_UNIT:.1f}",
+                "units": F.swiss(round(float(row["delta"]) / SQM_PER_UNIT)),
                 "refPrice": "—" if pd.isna(price) else F.swiss(float(price)),
                 "landValue": "—" if land_value is None else F.swiss(land_value),
                 "priceSource": (
@@ -663,7 +714,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     # while appearing in the compact FILTER header from the design.
     filter_box = st.container(key="screening_filters")
     filter_header = filter_box.container(key="screening_filter_header")
-    label_col, reset_col = filter_header.columns([5, 1])
+    label_col, reset_col = filter_header.columns([8, 1])
     primary_box = filter_box.container(key="screening_filter_primary")
     numeric_box = filter_box.container(key="screening_filter_numeric")
     flags_box = filter_box.container(key="screening_filter_flags")
@@ -679,7 +730,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     # tests and saved-search state both rely on it — while assigning the
     # columns to the same 3 + 3 visual grouping as the design.
     primary = primary_box.columns(3)
-    numeric = numeric_box.columns([1, 1, 2])
+    numeric = numeric_box.columns(3)
     c0, c4, c5 = primary
     c1, c2, c3 = numeric
     canton = c0.selectbox(
@@ -693,7 +744,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         st.warning("Für diesen Kanton liegen noch keine Daten vor.")
         return
     min_delta = c1.number_input(
-        "Mindestpotenzial (m² GF)",
+        "Min. Potenzial m²",
         min_value=MIN_STORED_DELTA,
         max_value=5000,
         step=10,
@@ -705,7 +756,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         **_initial_widget_value("screening_min_delta", value=MIN_STORED_DELTA),
     )
     ziffer = c2.number_input(
-        "Ziffer",
+        "Mind. AZ",
         min_value=float(parcels["az"].min()),
         max_value=float(parcels["az"].max()),
         step=0.1,
@@ -720,7 +771,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     )
     c3.html('<span class="screening-area-label">Fläche m² (von–bis)</span>')
     with c3.container(key="screening_area_range"):
-        area_from, area_to = st.columns(2)
+        area_from, area_separator, area_to = st.columns([1, 0.08, 1])
         area_min = area_from.number_input(
             "Fläche von (m²)",
             min_value=0,
@@ -732,13 +783,16 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
                 "screening_area_min", value=AREA_MIN_DEFAULT
             ),
         )
+        area_separator.html(
+            '<span class="screening-range-separator">–</span>'
+        )
         area_max = area_to.number_input(
             "Fläche bis (m²)",
             min_value=0,
             step=50,
             key="screening_area_max",
             label_visibility="collapsed",
-            placeholder="ohne Limite",
+            placeholder="bis",
             **_initial_widget_value(
                 "screening_area_max", value=AREA_MAX_DEFAULT
             ),
@@ -766,6 +820,9 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     _full_run = _ingest.geodata_available()
 
     flag_area, query_area = flags_box.columns([3, 1], vertical_alignment="bottom")
+    flag_area.html(
+        '<span class="screening-exclusion-label">Ausschliessen</span>'
+    )
     c7, c8, c9 = flag_area.columns(3)
     hide_design_plan = c7.checkbox(
         "Gestaltungsplan",
@@ -796,7 +853,8 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     query = query_area.text_input(
         "Parzellen-Nr. suchen",
         key="screening_query",
-        placeholder="z. B. 1284 oder Seestrasse",
+        placeholder="z. B. 1284",
+        icon=":material/search:",
         help="Sucht in Parzellennummer, Adresse und Gemeinde.",
     )
 
@@ -880,17 +938,25 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
 
     result_toolbar = st.container(key="screening_result_toolbar")
     result_summary_col, result_sort_col, result_limit_col = result_toolbar.columns(
-        [8, 2, 0.7], vertical_alignment="bottom"
+        [8, 2, 1.2], vertical_alignment="bottom"
     )
     result_summary = result_summary_col.empty()
     result_sort_col.html(
         '<span class="screening-result-sort">Sortiert nach Potenzial ↓</span>'
     )
-    with result_limit_col.container(key="screening_result_limit"):
+    with result_limit_col.container(
+        key="screening_result_limit",
+        horizontal=True,
+        horizontal_alignment="right",
+        vertical_alignment="center",
+        gap="small",
+    ):
+        st.html('<span class="screening-result-limit-label">Anzeigen</span>')
         top_n = st.selectbox(
             "Anzeigen",
             RESULT_LIMITS,
             key="screening_top_n",
+            label_visibility="collapsed",
             help=f"Maximal {SHORTLIST}: Nur diese Shortlist wird ÖREB-geprüft.",
             **_initial_widget_value("screening_top_n", index=2),
         )
