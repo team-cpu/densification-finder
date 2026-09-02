@@ -81,13 +81,16 @@ _BRAND_HTML = f"""\
 #: `flex:1` to the wrong element (see `_SHELL_CSS`).
 _SPACER_HTML = '<div class="normiq-shell-spacer"></div>'
 
-#: Placeholder identity for the account chip. Account and team screens are a
-#: later task (see the module docstring in the task brief); this exists only
-#: so the shell has something to show where the chip will eventually open a
-#: real menu.
-_ACCOUNT_NAME = "M. Brunner"
-_ACCOUNT_TEAM = "Hochbau AG"
-_ACCOUNT_INITIALS = "MB"
+#: What the chip says, and why it does not say a name. The prototype shows a
+#: signed-in person — "M. Brunner · Hochbau AG" — because it mocks up a
+#: multi-user product. This application has no such thing: `gate()` is one
+#: shared password, and its docstring records that as a decision rather than an
+#: omission ("deliberately not a login: the brief describes a single-user
+#: internal tool"). Carrying the prototype's person across would put a name on
+#: screen that belongs to nobody and implies an account system that does not
+#: exist. The slot is kept so the shell matches the design; what fills it is
+#: true.
+_ACCOUNT_LABEL = "Gemeinsamer Zugang"
 
 
 def _account_html(data_as_of: str) -> str:
@@ -103,15 +106,15 @@ def _account_html(data_as_of: str) -> str:
   <span style="font-size:12px;color:#8a8a94;white-space:nowrap">
     Datenstand {data_as_of}
   </span>
-  <div title="Konto- und Teamverwaltung sind noch nicht verfügbar."
+  <div title="Dieses Werkzeug hat keine Benutzerkonten — der Zugang ist ein gemeinsames Passwort."
        style="display:flex;align-items:center;gap:8px;cursor:default">
-    <span style="width:26px;height:26px;border-radius:999px;background:#1c4e4a;
-                 color:#ffffff;display:inline-flex;align-items:center;
-                 justify-content:center;font-size:11px;font-weight:600;flex:none">
-      {_ACCOUNT_INITIALS}
-    </span>
-    <span style="font-size:12.5px;font-weight:500;white-space:nowrap">
-      {_ACCOUNT_NAME} · {_ACCOUNT_TEAM}
+    <span aria-hidden="true"
+          style="width:26px;height:26px;border-radius:999px;background:#f1f1f4;
+                 border:1px solid #e2e2e8;color:#8a8a94;display:inline-flex;
+                 align-items:center;justify-content:center;font-size:12px;
+                 font-weight:600;flex:none">·</span>
+    <span style="font-size:12.5px;font-weight:500;color:#8a8a94;white-space:nowrap">
+      {_ACCOUNT_LABEL}
     </span>
   </div>
 </div>

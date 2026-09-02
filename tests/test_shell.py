@@ -140,5 +140,19 @@ class ShellHeaderRegressionTest(unittest.TestCase):
         )
 
 
+    def test_the_header_names_no_person(self):
+        """The prototype's chip shows "M. Brunner · Hochbau AG" because it
+        mocks up a multi-user product. This application has one shared
+        password and no accounts, so a name there would belong to nobody and
+        would imply a login that does not exist."""
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        ).run()
+
+        rendered = " ".join(node.proto.body for node in app.get("html"))
+        self.assertIn("Gemeinsamer Zugang", rendered)
+        for invented in ("Brunner", "Hochbau"):
+            self.assertNotIn(invented, rendered)
+
 if __name__ == "__main__":
     unittest.main()
