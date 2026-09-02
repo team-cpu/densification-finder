@@ -149,7 +149,13 @@ class ShellHeaderRegressionTest(unittest.TestCase):
             os.path.join(paths.HERE, "app.py"), default_timeout=60
         ).run()
 
+        # The chip used to be inert `st.html` markup; it is now a real
+        # `st.button` that opens `organisation.py`'s preview dialog (see
+        # `shell._account_chip`), so its label lives in `app.button`, not
+        # `app.get("html")`, and both have to be searched for an invented
+        # name to keep meaning what this test's docstring says it means.
         rendered = " ".join(node.proto.body for node in app.get("html"))
+        rendered += " " + " ".join(b.label or "" for b in app.button)
         self.assertIn("Gemeinsamer Zugang", rendered)
         for invented in ("Brunner", "Hochbau"):
             self.assertNotIn(invented, rendered)

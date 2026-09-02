@@ -42,6 +42,7 @@ import pandas as pd
 import streamlit as st
 
 import navigation
+import organisation
 
 #: The prototype's own mark, reproduced verbatim from its `<svg>` source —
 #: redrawing it by eye would drift from the original on every ellipse angle.
@@ -90,35 +91,44 @@ _SPACER_HTML = '<div class="normiq-shell-spacer"></div>'
 #: screen that belongs to nobody and implies an account system that does not
 #: exist. The slot is kept so the shell matches the design; what fills it is
 #: true.
+#:
+#: The chip used to end here, as inert markup with a `title` explaining that
+#: the menu behind it did not exist. `organisation.py` gives it somewhere
+#: genuine to go — an explicitly-labelled preview, not a working feature — so
+#: the chip is now a real `st.button` (`_account_chip`, below) rather than a
+#: non-interactive `div`.
 _ACCOUNT_LABEL = "Gemeinsamer Zugang"
 
 
-def _account_html(data_as_of: str) -> str:
-    """The right-hand block: the data-as-of stamp and the account chip.
-
-    The chip is plain `div`/`span` markup with no `onclick`, `<a>`, or
-    `<button>` — and a `title` that says so — because the menu behind it does
-    not exist yet; a chip that merely *looked* clickable would be worse than
-    one that visibly is not.
-    """
+def _data_as_of_html(data_as_of: str) -> str:
+    """The data-as-of stamp, split out from the account chip now that the
+    chip is a real `st.button` and can no longer share one `st.html` blob
+    with it."""
     return f"""\
-<div style="display:flex;align-items:center;gap:14px">
-  <span style="font-size:12px;color:#8a8a94;white-space:nowrap">
-    Datenstand {data_as_of}
-  </span>
-  <div title="Dieses Werkzeug hat keine Benutzerkonten — der Zugang ist ein gemeinsames Passwort."
-       style="display:flex;align-items:center;gap:8px;cursor:default">
-    <span aria-hidden="true"
-          style="width:26px;height:26px;border-radius:999px;background:#f1f1f4;
-                 border:1px solid #e2e2e8;color:#8a8a94;display:inline-flex;
-                 align-items:center;justify-content:center;font-size:12px;
-                 font-weight:600;flex:none">·</span>
-    <span style="font-size:12.5px;font-weight:500;color:#8a8a94;white-space:nowrap">
-      {_ACCOUNT_LABEL}
-    </span>
-  </div>
-</div>
+<span style="font-size:12px;color:#8a8a94;white-space:nowrap;
+             display:flex;align-items:center;height:100%">
+  Datenstand {data_as_of}
+</span>
 """
+
+
+def _account_chip() -> None:
+    """The account area, now genuinely clickable: opens `organisation.py`'s
+    preview dialog.
+
+    A plain `st.button` rather than more HTML — the previous inert chip was
+    hand-styled markup because there was nothing behind it to wire a real
+    widget to; now that there is, using the actual widget is what makes it
+    keyboard-reachable and lets Streamlit manage its own click/rerun cycle
+    instead of this module re-implementing one over `st.html`.
+    """
+    if st.button(
+        _ACCOUNT_LABEL,
+        key="app_shell_account_open",
+        help="Organisation öffnen (Vorschau).",
+    ):
+        st.session_state[organisation.DIALOG_OPEN] = True
+        st.rerun()
 
 
 #: Emitted once per render via `st.html`, scoped under `.st-key-app_shell` so
@@ -192,6 +202,27 @@ _SHELL_CSS = """
   background-color: #ffffff;
   box-shadow: 0 1px 2px rgba(0, 0, 0, .08), 0 0 0 1px rgba(0, 0, 0, .04);
 }
+
+/* The account chip: a plain `st.button` (`data-testid="stButton"`, distinct
+   from the `stButtonGroup` the pill track above uses, so this cannot bleed
+   onto the nav) restyled to read as the same rounded, muted chip the
+   prototype and the old inert markup both showed — clickable now, not just
+   chip-shaped. */
+.st-key-app_shell [data-testid="stButton"] button {
+  background: #f1f1f4;
+  border: 1px solid #e2e2e8;
+  border-radius: 999px;
+  color: #4a4a52;
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 4px 14px;
+}
+
+.st-key-app_shell [data-testid="stButton"] button:hover {
+  background: #e9e9ee;
+  border-color: #d5d5dc;
+  color: #1c4e4a;
+}
 </style>
 """
 
@@ -231,6 +262,15 @@ def header(data_as_of: str) -> str:
     it, and the nav inside it. `navigation.render()` is still what actually
     draws the control and owns `st.session_state[navigation.PAGE]` — this
     only wraps it in the shell's markup and CSS.
+
+    `organisation.open_if_requested` is called after the row rather than
+    from inside it, alongside the chip that can set `organisation.DIALOG_OPEN`
+    — a `st.dialog` renders as a portal regardless of where in the tree it is
+    called from, so nesting it inside the flex row would buy nothing and
+    only muddy which element the row's CSS is meant to reach. Same shape as
+    `acquisition._render_open_contact_dialog`, which sits after the board
+    for the same reason — see `organisation.DIALOG_OPEN`'s docstring for why
+    it has to run on a later script run than the click that requested it.
     """
     with st.container(key="app_shell"):
         st.html(_SHELL_CSS)
@@ -240,5 +280,7 @@ def header(data_as_of: str) -> str:
             st.html(_BRAND_HTML)
             page = navigation.render()
             st.html(_SPACER_HTML)
-            st.html(_account_html(data_as_of))
+            st.html(_data_as_of_html(data_as_of))
+            _account_chip()
+        organisation.open_if_requested(data_as_of)
     return page
