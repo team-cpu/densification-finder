@@ -16,6 +16,21 @@ to the AGIS geoportal, where ownership is looked up by hand with an eGovernment
 login. A manually entered owner/contact name and the parcel's contact status can
 then be stored in the CRM list.
 
+## The four pages
+
+**Screening** is the ranked hotlist and its filters. **Merkliste** totals what
+has been kept and lists it. **Analyse** is one parcel on its own. **Akquisition**
+is the board of owner conversations. One control switches between them, and only
+the selected page runs — Analyse recomputes residual values, reads the cadastre
+cache and can build a PDF, so a navigation that drew all four on every keystroke
+would make the cheapest page pay for the most expensive one.
+
+A screening run can be kept: **Suche speichern** stores the twelve filter values
+under a name in `saved_searches`, beside the lead decisions and equally safe
+from a recompute. Picking one back up puts the filters where they were, and
+quietly skips any stored value the data no longer offers — a municipality that
+has since left the results, say — rather than failing to restore anything.
+
 ## Lead workflow
 
 The hotlist supports multi-row selection. Selected parcels can be saved to
@@ -115,8 +130,15 @@ Python 3.11 with shapely, pandas and streamlit — no PostGIS.
 
 ## Single-parcel analysis
 
-Selecting a row in the hotlist opens that parcel on its own — the same script,
-one session-state key, no second page. It carries five blocks:
+Selecting a row in the hotlist opens that parcel on the **Analyse** page. This
+used to be a conditional view rather than a page — one session-state key
+decided whether the script drew the list or a single parcel — and for as long
+as there were only two things to look at, that was the simpler arrangement. The
+workflow has since grown a shortlist and an acquisition board, and stacking
+them under the result table made one page a scroll rather than a structure. The
+parcel key now decides what Analyse *shows*, not whether the list is drawn at
+all, and the back link returns to whichever page the parcel was opened from.
+Analyse carries five blocks:
 
 The two halves of the screen are read against each other, so they sit side by
 side in equal columns: the registers on the left, the assumptions on the right,
