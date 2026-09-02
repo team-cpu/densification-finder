@@ -243,9 +243,13 @@ def _regulation_news_poll():
     instead, and this fragment is never invoked again — a fragment `page`
     does not draw on a given run keeps no schedule of its own.
     """
-    status, _ = R.news_state()
+    status, result = R.news_state()
     if status != "done":
-        st.caption("Wird geladen …")
+        # Only when there is nothing to show. During a twelve-hour refresh the
+        # previous list is on screen above this, and announcing a request the
+        # reader did not make under a list they can already read is noise.
+        if result is None:
+            st.caption("Wird geladen …")
         return
     st.rerun()
 
@@ -886,10 +890,17 @@ def page(parcels, cache, price_of):
     # the only thing in this view that depends on a third-party server, and
     # this function has no business making the other four blocks wait on it.
     st.subheader("E · Neueste Änderungen")
-    if R.ensure_news_started():
-        news_status, news_result = "in_flight", None
-    else:
-        news_status, news_result = R.news_state()
+    # Started first, then read — never "started, therefore nothing yet". A
+    # twelve-hour re-arm also returns True while the previous list is still
+    # held, and collapsing those two cases threw that list away for exactly
+    # the render that triggered the refresh.
+    started = R.ensure_news_started()
+    news_status, news_result = R.news_state()
+    if started:
+        # The status, not the result, is forced: the worker can finish between
+        # these two lines when `load` is fast or stubbed, and the placeholder
+        # would then appear or not depending on thread scheduling.
+        news_status = "in_flight"
     # Rendered from whatever result exists, not from the status: once a
     # twelve-hour refetch re-arms, the previous list is still the best
     # answer available, and swapping it for a placeholder every half day
@@ -902,13 +913,19 @@ def page(parcels, cache, price_of):
     # and two reads could answer differently if the fetch finishes in between
     # them — including "in flight" vs. "done" now that this runs in the
     # background rather than being handed in as one fixed value.
+    #: Whether there is anything to draw yet, which is not the same question
+    #: as whether a fetch is running. Every branch below keys off this rather
+    #: than off the status: during a twelve-hour refresh a fetch *is* running
+    #: and the previous list is still the best answer there is.
+    have_news = news_result is not None
     own, own_note = (
-        (None, "") if news_status != "done" or news_error
+        (None, "") if not have_news or news_error
         else R.for_municipality(edicts, _text(row["municipality"]), int(row["bfs"]))
     )
     with st.container(key="facts_e"):
-        if news_status != "done":
-            # Fills itself in on its own schedule — see `_regulation_news_poll`.
+        if not have_news:
+            # Nothing to show yet — fills itself in on its own schedule, see
+            # `_regulation_news_poll`.
             _regulation_news_poll()
         elif news_error:
             # Never a blank panel: an empty change list reads as "nothing has
@@ -943,6 +960,12 @@ def page(parcels, cache, price_of):
                 "Revisionen im Mitwirkungsverfahren stehen dort nicht und sind "
                 "nur über das Amtsblatt-Abonnement zu sehen."
             )
+            if news_status != "done":
+                # A refresh is running behind the list above. The fragment
+                # draws nothing while a result exists; it is here so the
+                # replacement arrives on its own rather than waiting for the
+                # reader to click something unrelated.
+                _regulation_news_poll()
 
     # ── Export ──────────────────────────────────────────────────────────────
     blocks = [

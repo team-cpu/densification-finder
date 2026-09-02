@@ -4,6 +4,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 
@@ -148,6 +149,44 @@ class DetailViewTest(unittest.TestCase):
         # Block B is pre-filled from the pipeline, not typed in again.
         potential = next(n for n in app.number_input if n.label == "Potenzial (m² GF)")
         self.assertAlmostEqual(potential.value, self.delta, places=6)
+
+
+    def test_a_stale_refresh_keeps_the_list_it_already_had(self):
+        """`news_state` holding on to the previous result is not enough by
+        itself. The render that *starts* the refetch decides what to show from
+        its own return value, and an earlier version hardcoded "nothing" there
+        — so block E blanked for a frame every twelve hours, which is exactly
+        what keeping the old result was written to prevent. Asserting at the
+        module level missed it; this asserts on the page."""
+        app = self.open_detail()
+        wait_for_news()
+        app.run()
+        self.assertIn(
+            "Im Kanton zuletzt in Kraft getreten",
+            " ".join(m.value for m in app.markdown),
+        )
+
+        # Age the cache past its TTL and make the replacement fetch hang, so
+        # the render under test is the one that re-arms.
+        regulations._FETCHED_AT -= regulations.NEWS_TTL_SECONDS + 1
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def slow(timeout=30):
+            started.set()
+            release.wait(5)
+            return (regulations.parse(EDICTS_FIXTURE), "")
+
+        regulations.load = slow
+        app.run()
+
+        self.assertFalse(app.exception)
+        self.assertTrue(started.wait(5), "the refetch never started")
+        self.assertIn(
+            "Im Kanton zuletzt in Kraft getreten",
+            " ".join(m.value for m in app.markdown),
+        )
+        self.assertNotIn("Wird geladen", " ".join(c.value for c in app.caption))
 
     def test_the_references_are_folded_away_and_the_sources_stay_folded(self):
         """Philipp asked for block D to open on demand like «Annahmen und
