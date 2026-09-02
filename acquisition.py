@@ -2,8 +2,8 @@
 
 Kept out of `app.py` because the decisions behind the board are worth testing
 on their own: which leads are due, which column a lead belongs in, and in what
-order the cards sit. Those are the functions below, and none of them touches
-Streamlit.
+order the cards sit. Those rules remain plain dataframe functions; rendering
+and validated component-event handling sit alongside them below.
 
 The board replaces a saved list grouped by municipality. A lead's municipality
 is still on its card; what the user works through day to day is the stage.
@@ -18,6 +18,7 @@ import streamlit as st
 import detail
 import formatting as F
 import navigation
+import ui_components as UI
 import workflow as WF
 
 #: How many rows the due-follow-up preview shows. The design caps it: the
@@ -33,79 +34,6 @@ DUE_PREVIEW = 4
 #: Session state survives that rerun, so the dialog keeps reopening itself on
 #: every rerun until something explicitly pops this key.
 CONTACT_OPEN = "acquisition_contact_open"
-
-#: Scoped to the board's own keyed container (`st-key-acq_board`) so it does
-#: not touch the unrelated `st.columns` layouts elsewhere in `app.py`. Five
-#: fixed-width columns held their shape at any viewport, which shredded
-#: addresses and stage labels into unreadable fragments around 683px.
-#:
-#: The wrap is gated behind a viewport query rather than applied always. A
-#: floor width is measured against Streamlit's content area, which is narrower
-#: than the window, so an ungated `min-width` broke the desktop case it was
-#: supposed to leave alone: at a 1440px window five 260px columns plus their
-#: gaps no longer fit the content area and the fifth stage wrapped to a
-#: full-width row of its own. Above the breakpoint the board keeps Streamlit's
-#: own five-column behaviour and sets no floor at all.
-#:
-#: 1150px is measured, not guessed. Five columns stay readable down to about
-#: 1150px (185px each); at 1120px the stage labels begin to truncate. The
-#: breakpoint sits at the top of that band so the board wraps just before the
-#: labels break rather than just after.
-_BOARD_CSS = """
-<style>
-.st-key-acq_board { margin-top: 18px; }
-.st-key-acq_board > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] {
-  align-items: flex-start;
-}
-[class*="st-key-acq_stage_"] {
-  padding: 9px;
-  border: 1px solid #eaeaee;
-  border-radius: 9px;
-  background: #f7f7f9;
-}
-.acq-stage-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-  color: #4a4a52;
-  font-size: 11.5px;
-  font-weight: 600;
-}
-.acq-stage-count {
-  min-width: 20px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: #e9e9ed;
-  color: #77777f;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 10px;
-  text-align: center;
-}
-[class*="st-key-acq_card_"] {
-  margin-bottom: 8px;
-  padding: 10px !important;
-  border-color: #e4e4e9 !important;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(23,23,27,.03);
-}
-[class*="st-key-acq_card_"] [data-testid="stCaptionContainer"] {
-  font-size: 11px;
-}
-@media (max-width: 1150px) {
-  .st-key-acq_board [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
-  .st-key-acq_board [data-testid="stColumn"] { min-width: 260px; }
-  .st-key-acq_board [class*="st-key-acq_card_"] [data-testid="stHorizontalBlock"] {
-    flex-wrap: nowrap;
-  }
-  .st-key-acq_board [class*="st-key-acq_card_"] [data-testid="stColumn"] {
-    min-width: 0;
-  }
-}
-</style>
-"""
-
 
 def leads(parcels: pd.DataFrame, decisions: pd.DataFrame, field: str) -> pd.DataFrame:
     """Saved or hidden decisions joined back to the parcel facts they name.
@@ -260,21 +188,26 @@ def render(parcels, decisions, db, today, price_of):
     and two lookups that disagreed about the most specific matching row would
     put one number in the table and another on the card.
     """
-    st.html(_ACQUISITION_INTRO)
-
     shortlist = leads(parcels, decisions, "saved")
+    with st.container(key="acq_header"):
+        header_copy, header_action = st.columns([5, 2], vertical_alignment="bottom")
+        header_copy.html(_ACQUISITION_INTRO)
+        if not shortlist.empty:
+            header_action.download_button(
+                "Kontaktliste exportieren",
+                contact_list(shortlist).to_csv(index=False).encode("utf-8"),
+                file_name="akquisition-kontakte.csv",
+                mime="text/csv",
+                key="acq_contacts_csv",
+                type="primary",
+                width="stretch",
+            )
+
     if shortlist.empty:
         st.info("Noch keine Parzellen gespeichert.")
     else:
         _render_overdue(shortlist, today)
-        _render_board(shortlist, db, price_of)
-        st.download_button(
-            "Kontaktliste exportieren",
-            contact_list(shortlist).to_csv(index=False).encode("utf-8"),
-            file_name="akquisition-kontakte.csv",
-            mime="text/csv",
-            key="acq_contacts_csv",
-        )
+        _render_board(shortlist, db, price_of, today)
 
     _render_hidden(parcels, decisions, db)
 
@@ -291,7 +224,8 @@ _OVERDUE_TINT = "background-color:#fdf5e7;color:#8a5a12;padding:1px 6px;border-r
 
 _ACQUISITION_INTRO = """
 <style>
-.acquisition-page-intro { margin: 10px 0 20px; }
+.st-key-acq_header { margin: 10px 0 20px; }
+.acquisition-page-intro { margin: 0; }
 .acquisition-page-kicker {
   margin-bottom: 7px;
   color: #9a9aa6;
@@ -314,15 +248,16 @@ _ACQUISITION_INTRO = """
   text-wrap: pretty;
 }
 @media (max-width: 760px) {
-  .acquisition-page-intro { margin: 8px 0 16px; }
   .acquisition-page-intro h1 { font-size: 19px; }
+  .st-key-acq_header [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+  .st-key-acq_header [data-testid="stColumn"] { min-width: 100%; }
 }
 </style>
 <div class="acquisition-page-intro">
   <div class="acquisition-page-kicker">Akquisition</div>
   <h1>Eigentümer-Dialog</h1>
   <p>Kontaktstand je Parzelle und Eigentümerschaft. Das Wiedervorlagedatum
-     steuert die Fälligkeit, die Stufe wird auf der Karte geändert.
+     steuert die Fälligkeit, Karten werden per Drag &amp; Drop verschoben.
      Eigentümerangaben werden weiterhin von Hand im AGIS nachgeschlagen.</p>
 </div>
 """
@@ -486,28 +421,90 @@ def _render_due_row(row, is_overdue):
             _analyse_button(row, f"due_open_{slug}")
 
 
-def _render_board(shortlist, db, price_of):
-    stages = by_stage(shortlist)
-    with st.container(key="acq_board"):
-        # Once per render, not once per card — a `<style>` tag is idempotent
-        # on the page, so 25 identical copies would cost 25x the HTML for the
-        # same effect a single one already has.
-        st.html(_BOARD_CSS)
-        columns = st.columns(len(WF.CONTACT_STATUS_LABELS))
-        for column, (stage, label) in zip(columns, WF.CONTACT_STATUS_LABELS.items()):
-            frame = stages[stage]
-            with column:
-                with st.container(key=f"acq_stage_{stage}"):
-                    st.markdown(
-                        '<div class="acq-stage-heading"><span>'
-                        + escape(label)
-                        + '</span><span class="acq-stage-count">'
-                        + str(len(frame))
-                        + "</span></div>",
-                        unsafe_allow_html=True,
-                    )
-                    for _, row in frame.iterrows():
-                        _render_card(row, db, price_of)
+def board_data(shortlist, price_of, today) -> list[dict]:
+    """JSON-safe five-column board data for the local drag-and-drop component."""
+    output = []
+    grouped = by_stage(shortlist)
+    for stage, label in WF.CONTACT_STATUS_LABELS.items():
+        cards = []
+        for _, row in grouped[stage].iterrows():
+            reference = price_of(row)
+            land_value = (
+                row["area"] * reference.price_chf_m2
+                if reference is not None and pd.notna(row["area"])
+                else None
+            )
+            contact_line = " · ".join(
+                value
+                for value in (
+                    str(row["contact_person"]).strip(),
+                    str(row["phone"]).strip(),
+                )
+                if value
+            ) or "Kontakt nicht erfasst"
+            due = _or_dash(row["due_date"])
+            cards.append(
+                {
+                    "bfs": int(row["bfs"]),
+                    "parcel": str(row["parcel"]),
+                    "address": _or_dash(row["address"]),
+                    "municipality": str(row["municipality"]),
+                    "potential": _swiss(float(row["delta"])),
+                    "landValue": (
+                        "—" if land_value is None else f"CHF {_swiss(land_value)}"
+                    ),
+                    "owner": str(row["owner_name"]).strip()
+                    or "Eigentümer nicht erfasst",
+                    "contactLine": contact_line,
+                    "lastContact": _or_dash(row["last_contact"]),
+                    "due": due,
+                    "overdue": bool(
+                        due != "—" and due <= today and stage != "declined"
+                    ),
+                    "next": str(row["next_step"]).strip(),
+                    "statusCode": stage,
+                    "status": label,
+                }
+            )
+        output.append({"code": stage, "label": label, "cards": cards})
+    return output
+
+
+def handle_board_event(event, shortlist, db, state=None) -> bool:
+    """Validate and apply a drag or Analyse action from the board component."""
+    if not isinstance(event, dict):
+        return False
+    try:
+        bfs, parcel = int(event.get("bfs")), str(event.get("parcel"))
+    except (TypeError, ValueError):
+        return False
+    hit = shortlist[
+        (shortlist["bfs"] == bfs) & (shortlist["parcel"].astype(str) == parcel)
+    ]
+    if hit.empty:
+        return False
+    key = (bfs, parcel)
+    if event.get("type") == "move":
+        stage = event.get("stage")
+        if stage not in WF.CONTACT_STATUS_LABELS:
+            return False
+        WF.update([key], contact_status=stage, db=db)
+        return True
+    if event.get("type") == "analyse":
+        target = st.session_state if state is None else state
+        target[detail.SELECTED] = f"{bfs}:{parcel}"
+        navigation.go_to("Analyse", target)
+        return True
+    return False
+
+
+def _render_board(shortlist, db, price_of, today):
+    event = UI.acquisition_board(
+        board_data(shortlist, price_of, today), key="acq_design_board"
+    )
+    event = UI.consume_event(event, "acquisition_board")
+    if event is not None and handle_board_event(event, shortlist, db):
+        st.rerun()
 
     _render_open_contact_dialog(shortlist, db)
 
@@ -534,9 +531,9 @@ def _render_open_contact_dialog(shortlist, db):
 def _lead_by_pid(shortlist, pid):
     """The shortlist row named by a `bfs:parcel` pid, or `None`.
 
-    Matches on the same two-part key `_render_card` builds, not on the
+    Matches on the same two-part key the board component emits, not on the
     shortlist's pandas index — that index is not part of the pid and is free
-    to change (a stage move or a hidden lead reorders `by_stage`'s frames).
+    to change when a stage move reorders `by_stage`'s frames.
     """
     bfs_part, _, parcel_part = str(pid).partition(":")
     try:
@@ -549,59 +546,12 @@ def _lead_by_pid(shortlist, pid):
     return None if match.empty else match.iloc[0]
 
 
-def _render_card(row, db, price_of):
-    key = int(row["bfs"]), str(row["parcel"])
-    slug = f"{key[0]}_{key[1]}"
-    reference = price_of(row)
-    land_value = (
-        row["area"] * reference.price_chf_m2
-        if reference is not None and pd.notna(row["area"])
-        else None
-    )
-    stored = (
-        row["contact_status"]
-        if row["contact_status"] in WF.CONTACT_STATUS_LABELS
-        else WF.DEFAULT_CONTACT_STATUS
-    )
-
-    with st.container(key=f"acq_card_{slug}", border=True):
-        st.markdown(f"**{_or_dash(row['address'])}**")
-        st.caption(f"{row['municipality']} · {row['parcel']}")
-        st.text(f"Potenzial  {_swiss(row['delta'])} m²")
-        st.text(
-            "Landwert   —"
-            if land_value is None
-            else f"Landwert   CHF {_swiss(land_value)}"
-        )
-        st.caption(str(row["owner_name"]).strip() or "Eigentümer nicht erfasst")
-        st.caption(f"{_or_dash(row['last_contact'])} → {_or_dash(row['due_date'])}")
-        if str(row["next_step"]).strip():
-            st.caption(row["next_step"])
-
-        stage = st.selectbox(
-            "Stufe",
-            list(WF.CONTACT_STATUS_LABELS),
-            index=list(WF.CONTACT_STATUS_LABELS).index(stored),
-            format_func=lambda code: WF.CONTACT_STATUS_LABELS[code],
-            key=f"stage_{slug}",
-            label_visibility="collapsed",
-        )
-        if stage != stored:
-            WF.update([key], contact_status=stage, db=db)
-            st.rerun()
-
-        analyse_action, owner_action = st.columns(2)
-        with analyse_action:
-            _analyse_button(row, f"open_{slug}")
-        with owner_action:
-            _eigentuemer_button(key, f"contact_{slug}")
-
-
 def _analyse_button(row, widget_key):
-    """Shared by the card and the follow-up list so a lead opens the same
-    parcel no matter which surface it was opened from — the caller picks the
-    widget key because a due lead is drawn twice (once here, once on its own
-    card) and the two copies would collide on a shared `open_{slug}`."""
+    """Open a parcel from the native follow-up preview.
+
+    Board cards route the equivalent action through `handle_board_event`;
+    both paths write the same selected-parcel and pending-page state.
+    """
     if st.button("Analyse", key=widget_key, width="stretch"):
         detail.open_parcel(detail.parcel_id(row))
         navigation.go_to("Analyse")
@@ -609,10 +559,12 @@ def _analyse_button(row, widget_key):
 
 
 def _eigentuemer_button(key, widget_key):
-    """Opens `_contact_dialog` for `key`, shared by the card and the
-    follow-up list — a lead's contact data lives at one `bfs`/`parcel` pair,
-    so both surfaces route through the same `CONTACT_OPEN` write rather than
-    each carrying its own copy of how a dialog gets opened."""
+    """Open `_contact_dialog` for a row in the native follow-up preview.
+
+    The custom shortlist writes the same `CONTACT_OPEN` value through its
+    validated event handler, so every entry point resolves the identical
+    `bfs`/`parcel` record.
+    """
     if st.button("Eigentümer", key=widget_key, width="stretch"):
         st.session_state[CONTACT_OPEN] = f"{key[0]}:{key[1]}"
         st.rerun()

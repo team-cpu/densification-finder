@@ -13,6 +13,7 @@ import streamlit as st
 import acquisition as ACQ
 import detail
 import navigation
+import ui_components as UI
 import workflow as WF
 
 #: Stages that count as a live conversation. Neither an untouched lead nor a
@@ -34,21 +35,6 @@ _PAGE_CSS = """
   justify-content: flex-end;
 }
 .st-key-merkliste_header_actions button { white-space: nowrap; }
-.st-key-merkliste_table {
-  margin-top: 14px;
-  padding: 0;
-  border: 1px solid #eaeaee;
-  border-radius: 9px;
-  background: #fff;
-  overflow: hidden;
-}
-.st-key-merkliste_row_actions {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border: 1px solid #eaeaee;
-  border-radius: 9px;
-  background: #fff;
-}
 @media (max-width: 760px) {
   .st-key-merkliste_header [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
   .st-key-merkliste_header [data-testid="stColumn"] { min-width: 100%; }
@@ -121,6 +107,61 @@ def summary(leads: pd.DataFrame, land_value) -> dict:
     }
 
 
+def table_rows(ordered: pd.DataFrame, land_value) -> list[dict]:
+    """JSON-safe rows for the design-native shortlist component."""
+    rows = []
+    for _, row in ordered.iterrows():
+        value = land_value(row)
+        rows.append(
+            {
+                "bfs": int(row["bfs"]),
+                "parcel": str(row["parcel"]),
+                "address": ACQ._or_dash(row["address"]),
+                "municipality": str(row["municipality"]),
+                "potential": ACQ._swiss(float(row["delta"])),
+                "landValue": "—" if value is None else ACQ._swiss(float(value)),
+                "statusCode": str(row["contact_status"]),
+                "status": WF.CONTACT_STATUS_LABELS.get(
+                    row["contact_status"],
+                    WF.CONTACT_STATUS_LABELS[WF.DEFAULT_CONTACT_STATUS],
+                ),
+                "lastContact": ACQ._or_dash(row["last_contact"]),
+                "owner": ACQ._or_dash(row["owner_name"]),
+                "note": str(row["note"]).strip(),
+            }
+        )
+    return rows
+
+
+def handle_table_event(event: dict, leads: pd.DataFrame, state=None) -> bool:
+    """Validate and apply one row action returned by the component.
+
+    A component can post arbitrary JSON, so the parcel must still exist in the
+    shortlist before an action may name it. The frontend only expresses intent;
+    Python remains the authority for navigation and contact-dialog state.
+    """
+    if not isinstance(event, dict):
+        return False
+    try:
+        bfs, parcel = int(event.get("bfs")), str(event.get("parcel"))
+    except (TypeError, ValueError):
+        return False
+    hit = leads[
+        (leads["bfs"] == bfs) & (leads["parcel"].astype(str) == parcel)
+    ]
+    if hit.empty:
+        return False
+    target = st.session_state if state is None else state
+    if event.get("type") == "owner":
+        target[ACQ.CONTACT_OPEN] = f"{bfs}:{parcel}"
+        return True
+    if event.get("type") == "analyse":
+        target[detail.SELECTED] = f"{bfs}:{parcel}"
+        navigation.go_to("Analyse", target)
+        return True
+    return False
+
+
 def page(parcels, decisions, db, price_of):
     """Summary tiles, the shortlist, and the way on to the board."""
     st.html(_PAGE_CSS)
@@ -176,89 +217,11 @@ def page(parcels, decisions, db, price_of):
         tiles[3].metric("Im Dialog", ACQ._swiss(totals["in_dialog"]))
 
     ordered = leads.sort_values(["municipality", "parcel"], kind="stable")
-    table = pd.DataFrame(
-        {
-            "_bfs": ordered["bfs"].astype(int),
-            "_parcel": ordered["parcel"].astype(str),
-            "Adresse": ordered["address"].map(ACQ._or_dash),
-            "Gemeinde": ordered["municipality"],
-            "Potenzial m²": ordered["delta"].round(0),
-            "Landwert CHF": [land_value(row) for _, row in ordered.iterrows()],
-            "Kontaktstand": ordered["contact_status"].map(
-                lambda code: WF.CONTACT_STATUS_LABELS.get(
-                    code, WF.CONTACT_STATUS_LABELS[WF.DEFAULT_CONTACT_STATUS]
-                )
-            ),
-            "Letzter Kontakt": ordered["last_contact"].map(ACQ._or_dash),
-            "Eigentümerschaft / Notiz": [
-                " · ".join(x for x in (str(row["owner_name"]).strip(),
-                                       str(row["note"]).strip()) if x) or "—"
-                for _, row in ordered.iterrows()
-            ],
-            "Entfernen": False,
-        }
+    event = UI.merkliste_table(
+        table_rows(ordered, land_value), key="merkliste_design_table"
     )
-
-    with st.container(key="merkliste_table"):
-        with st.form("merkliste_form"):
-            edited = st.data_editor(
-                table,
-                key="merkliste_editor",
-                width="stretch",
-                hide_index=True,
-                column_order=(
-                    "Adresse", "Gemeinde", "Potenzial m²", "Landwert CHF",
-                    "Kontaktstand", "Letzter Kontakt", "Eigentümerschaft / Notiz",
-                    "Entfernen",
-                ),
-                disabled=(
-                    "_bfs", "_parcel", "Adresse", "Gemeinde", "Potenzial m²",
-                    "Landwert CHF", "Letzter Kontakt", "Eigentümerschaft / Notiz",
-                ),
-                column_config={
-                    "Potenzial m²": st.column_config.NumberColumn(format="%.0f"),
-                    "Landwert CHF": st.column_config.NumberColumn(format="%.0f"),
-                    "Kontaktstand": st.column_config.SelectboxColumn(
-                        options=list(WF.CONTACT_STATUS_LABELS.values()),
-                        required=True,
-                        width="medium",
-                    ),
-                    "Entfernen": st.column_config.CheckboxColumn(width="small"),
-                },
-            )
-            store = st.form_submit_button("Änderungen speichern")
-
-    if store:
-        codes = {label: code for code, label in WF.CONTACT_STATUS_LABELS.items()}
-        for _, row in edited.iterrows():
-            key = int(row["_bfs"]), str(row["_parcel"])
-            if bool(row["Entfernen"]):
-                WF.set_saved([key], False, db)
-            else:
-                WF.update([key], contact_status=codes[row["Kontaktstand"]], db=db)
-        st.toast("Merkliste gespeichert.")
+    event = UI.consume_event(event, "merkliste")
+    if event is not None and handle_table_event(event, leads):
         st.rerun()
-
-    with st.container(key="merkliste_row_actions"):
-        picker, owner_action, analyse_action = st.columns(
-            [4, 1, 1], vertical_alignment="bottom"
-        )
-        chosen = picker.selectbox(
-            "Parzellenaktion",
-            list(ordered.index),
-            format_func=lambda i: (
-                f"{ACQ._or_dash(ordered.loc[i, 'address'])} · "
-                f"{ordered.loc[i, 'municipality']} · {ordered.loc[i, 'parcel']}"
-            ),
-            key="merkliste_analyse_pick",
-        )
-        selected_row = ordered.loc[chosen]
-        selected_key = int(selected_row["bfs"]), str(selected_row["parcel"])
-        with owner_action:
-            ACQ._eigentuemer_button(selected_key, "merkliste_owner_open")
-        if analyse_action.button("Analyse", width="stretch"):
-            detail.open_parcel(detail.parcel_id(selected_row))
-            navigation.go_to("Analyse")
-            st.rerun()
 
     ACQ._render_open_contact_dialog(leads, db)

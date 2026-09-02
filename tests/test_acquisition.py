@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -208,6 +209,63 @@ class ByStageTest(unittest.TestCase):
         stages = acquisition.by_stage(leads)
 
         self.assertEqual(list(stages["not_contacted"]["parcel"]), ["1"])
+
+
+class BoardEventTest(unittest.TestCase):
+    def setUp(self):
+        self.leads = pd.DataFrame({"bfs": [4001], "parcel": ["1"]})
+
+    def test_move_event_writes_the_dropped_stage(self):
+        with patch.object(acquisition.WF, "update") as update:
+            handled = acquisition.handle_board_event(
+                {
+                    "type": "move",
+                    "bfs": 4001,
+                    "parcel": "1",
+                    "stage": "in_discussion",
+                },
+                self.leads,
+                "/tmp/test.sqlite",
+            )
+
+        self.assertTrue(handled)
+        update.assert_called_once_with(
+            [(4001, "1")],
+            contact_status="in_discussion",
+            db="/tmp/test.sqlite",
+        )
+
+    def test_move_event_rejects_an_unknown_stage(self):
+        with patch.object(acquisition.WF, "update") as update:
+            handled = acquisition.handle_board_event(
+                {
+                    "type": "move",
+                    "bfs": 4001,
+                    "parcel": "1",
+                    "stage": "invented",
+                },
+                self.leads,
+                "/tmp/test.sqlite",
+            )
+
+        self.assertFalse(handled)
+        update.assert_not_called()
+
+    def test_event_rejects_a_parcel_outside_the_board(self):
+        with patch.object(acquisition.WF, "update") as update:
+            handled = acquisition.handle_board_event(
+                {
+                    "type": "move",
+                    "bfs": 9999,
+                    "parcel": "9",
+                    "stage": "contacted",
+                },
+                self.leads,
+                "/tmp/test.sqlite",
+            )
+
+        self.assertFalse(handled)
+        update.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ import unittest
 import pandas as pd
 
 import merkliste
+import navigation
 
 
 def shortlist_frame(rows):
@@ -71,6 +72,56 @@ class SummaryTest(unittest.TestCase):
         )
 
         self.assertEqual(summary["land_value"], 5000.0)
+
+
+class ComponentRowsTest(unittest.TestCase):
+    def test_table_rows_carry_real_workflow_state(self):
+        rows = pd.DataFrame(
+            [
+                {
+                    "bfs": 4001,
+                    "parcel": "1",
+                    "address": "Teststrasse 1",
+                    "municipality": "Aarau",
+                    "delta": 750.0,
+                    "contact_status": "in_discussion",
+                    "last_contact": "2026-09-01",
+                    "owner_name": "Muster AG",
+                    "note": "Rückruf",
+                }
+            ]
+        )
+
+        payload = merkliste.table_rows(rows, lambda row: 1_250_000.0)
+
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["statusCode"], "in_discussion")
+        self.assertEqual(payload[0]["status"], "Im Gespräch")
+        self.assertEqual(payload[0]["owner"], "Muster AG")
+        self.assertEqual(payload[0]["landValue"], "1’250’000")
+
+    def test_row_events_cannot_name_a_parcel_outside_the_shortlist(self):
+        leads = pd.DataFrame({"bfs": [4001], "parcel": ["1"]})
+        state = {navigation.PAGE: "Merkliste"}
+
+        handled = merkliste.handle_table_event(
+            {"type": "analyse", "bfs": 9999, "parcel": "2"}, leads, state
+        )
+
+        self.assertFalse(handled)
+        self.assertNotIn(navigation.PENDING, state)
+
+    def test_analyse_row_event_navigates_to_that_parcel(self):
+        leads = pd.DataFrame({"bfs": [4001], "parcel": ["1"]})
+        state = {navigation.PAGE: "Merkliste"}
+
+        handled = merkliste.handle_table_event(
+            {"type": "analyse", "bfs": 4001, "parcel": "1"}, leads, state
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(state["selected_parcel_id"], "4001:1")
+        self.assertEqual(state[navigation.PENDING], "Analyse")
 
 
 if __name__ == "__main__":

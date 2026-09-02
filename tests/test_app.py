@@ -10,6 +10,7 @@ from streamlit.testing.v1 import AppTest
 
 import acquisition
 import ingest
+import merkliste
 import navigation
 import paths
 import searches
@@ -53,6 +54,11 @@ class AppRegressionTest(unittest.TestCase):
         return AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=timeout
         ).run()
+
+    def saved_leads(self):
+        with sqlite3.connect(self.database) as connection:
+            parcels = pd.read_sql_query("SELECT * FROM parcel_results", connection)
+        return acquisition.leads(parcels, workflow.load(self.database), "saved")
 
     def test_controls_mixed_results_and_economic_indicator(self):
         app = AppTest.from_file(
@@ -424,18 +430,17 @@ class AppRegressionTest(unittest.TestCase):
         key = [(bfs, parcel)]
         workflow.set_saved(key, True, self.database)
         workflow.update(key, contact_status="contacted", db=self.database)
-        slug = f"{bfs}_{parcel}"
-
-        app = AppTest.from_file(
-            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        moved = acquisition.handle_board_event(
+            {
+                "type": "move",
+                "bfs": bfs,
+                "parcel": parcel,
+                "stage": "in_discussion",
+            },
+            self.saved_leads(),
+            self.database,
         )
-        # The board is its own page now, not stacked under Screening.
-        app.session_state[navigation.PAGE] = "Akquisition"
-        app.run()
-        self.assertFalse(app.exception)
-
-        app.selectbox(key=f"stage_{slug}").select("in_discussion").run()
-        self.assertFalse(app.exception)
+        self.assertTrue(moved)
 
         with sqlite3.connect(self.database) as connection:
             stored = connection.execute(
@@ -457,18 +462,14 @@ class AppRegressionTest(unittest.TestCase):
         bfs, parcel = int(first["bfs"]), str(first["parcel"])
         key = [(bfs, parcel)]
         workflow.set_saved(key, True, self.database)
-        slug = f"{bfs}_{parcel}"
-
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=60
         )
         # The board is its own page now, not stacked under Screening.
         app.session_state[navigation.PAGE] = "Akquisition"
+        app.session_state[acquisition.CONTACT_OPEN] = f"{bfs}:{parcel}"
         app.run()
 
-        # The dialog only exists once `Kontakt` opens it — the card itself
-        # carries no form widgets any more.
-        app.button(key=f"contact_{slug}").click().run()
         self.assertFalse(app.exception)
 
         field(app, "Kontaktperson").set_value("Frau Meier")
@@ -515,16 +516,14 @@ class AppRegressionTest(unittest.TestCase):
             contact_person="Herr Muster",
             db=self.database,
         )
-        slug = f"{bfs}_{parcel}"
-
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=60
         )
         # The board is its own page now, not stacked under Screening.
         app.session_state[navigation.PAGE] = "Akquisition"
+        app.session_state[acquisition.CONTACT_OPEN] = f"{bfs}:{parcel}"
         app.run()
 
-        app.button(key=f"contact_{slug}").click().run()
         self.assertFalse(app.exception)
 
         field(app, "Wiedervorlage").set_value("02.09.2026")
@@ -564,16 +563,14 @@ class AppRegressionTest(unittest.TestCase):
         bfs, parcel = int(first["bfs"]), str(first["parcel"])
         key = [(bfs, parcel)]
         workflow.set_saved(key, True, self.database)
-        slug = f"{bfs}_{parcel}"
-
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=60
         )
         # The board is its own page now, not stacked under Screening.
         app.session_state[navigation.PAGE] = "Akquisition"
+        app.session_state[acquisition.CONTACT_OPEN] = f"{bfs}:{parcel}"
         app.run()
 
-        app.button(key=f"contact_{slug}").click().run()
         self.assertFalse(app.exception)
 
         app.button(key="acq_contact_remove").click().run()
@@ -618,14 +615,16 @@ class AppRegressionTest(unittest.TestCase):
         self.assertNotIn(acquisition.CONTACT_OPEN, app.session_state)
         self.assertEqual(len(app.text_input), 0)
         self.assertEqual(len(app.text_area), 0)
-        # The zero counts above are only meaningful if the leads actually
-        # rendered — an empty shortlist would pass them for the wrong reason.
+        # Cards and stage controls now live in one iframe component rather than
+        # producing three Streamlit widgets per lead. Five leads must therefore
+        # still render one board component and zero native stage selectboxes.
         stage_selectboxes = [
             widget
             for widget in app.selectbox
             if str(widget.key or "").startswith("stage_")
         ]
-        self.assertEqual(len(stage_selectboxes), len(keys))
+        self.assertEqual(len(stage_selectboxes), 0)
+        self.assertEqual(len(app.get("component_instance")), 1)
 
     def test_the_contact_list_exports_every_saved_lead(self):
         """Owner details are typed in by hand from the AGIS extract. The export
@@ -695,20 +694,16 @@ class AppRegressionTest(unittest.TestCase):
         bfs, parcel = int(first["bfs"]), str(first["parcel"])
         key = [(bfs, parcel)]
         workflow.set_saved(key, True, self.database)
-        slug = f"{bfs}_{parcel}"
-
-        app = AppTest.from_file(
-            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        state = {navigation.PAGE: "Akquisition"}
+        opened = acquisition.handle_board_event(
+            {"type": "analyse", "bfs": bfs, "parcel": parcel},
+            self.saved_leads(),
+            self.database,
+            state,
         )
-        # The board is its own page now, not stacked under Screening.
-        app.session_state[navigation.PAGE] = "Akquisition"
-        app.run()
-
-        app.button(key=f"open_{slug}").click().run()
-        self.assertFalse(app.exception)
-        self.assertEqual(
-            app.session_state["selected_parcel_id"], f"{bfs}:{parcel}"
-        )
+        self.assertTrue(opened)
+        self.assertEqual(state["selected_parcel_id"], f"{bfs}:{parcel}")
+        self.assertEqual(state[navigation.PENDING], "Analyse")
 
     def test_the_merkliste_totals_the_shortlist_it_lists(self):
         """The board groups the same leads by stage; this page's whole job is
@@ -729,12 +724,11 @@ class AppRegressionTest(unittest.TestCase):
 
         self.assertFalse(app.exception)
 
-        table = next(
-            frame.value
-            for frame in app.dataframe
-            if "Kontaktstand" in getattr(frame.value, "columns", [])
+        shortlist = self.saved_leads().sort_values(
+            ["municipality", "parcel"], kind="stable"
         )
-        self.assertEqual(len(table), 2)
+        component_rows = merkliste.table_rows(shortlist, lambda row: 0.0)
+        self.assertEqual(len(component_rows), 2)
 
         # `app.metric[i].value` is the formatted body text (`MetricProto.body`,
         # e.g. "2"), not a number — read via the label so this does not depend
@@ -798,7 +792,17 @@ class AppRegressionTest(unittest.TestCase):
         )
         app.session_state[navigation.PAGE] = "Akquisition"
         app.run()
-        app.button(key=f"open_{bfs}_{parcel}").click().run()
+        state = {navigation.PAGE: "Akquisition"}
+        opened = acquisition.handle_board_event(
+            {"type": "analyse", "bfs": bfs, "parcel": parcel},
+            self.saved_leads(),
+            self.database,
+            state,
+        )
+        self.assertTrue(opened)
+        for name, value in state.items():
+            app.session_state[name] = value
+        app.run()
 
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state["acq_page"], "Analyse")

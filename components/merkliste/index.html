@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    @font-face{font-family:Instrument Sans;src:url('/app/static/fonts/InstrumentSans-400-normal-latin.woff2') format('woff2');font-weight:400}
+    @font-face{font-family:Instrument Sans;src:url('/app/static/fonts/InstrumentSans-500-normal-latin.woff2') format('woff2');font-weight:500}
+    @font-face{font-family:IBM Plex Mono;src:url('/app/static/fonts/IBMPlexMono-400-normal-latin.woff2') format('woff2');font-weight:400}
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;background:transparent;color:#17171b;font-family:'Instrument Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased}
+    .frame{border:1px solid #eaeaee;border-radius:9px;background:#fff;overflow:hidden}
+    .scroll{overflow-x:auto}
+    table{width:100%;min-width:1160px;border-collapse:collapse;table-layout:fixed}
+    th{padding:9px;border-bottom:1px solid #ebebef;background:#fafafb;color:#8a8a94;font-size:9px;font-weight:600;letter-spacing:.06em;text-align:left;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    th:nth-child(1){width:19.5%}th:nth-child(2){width:8.5%}th:nth-child(3){width:8%}th:nth-child(4){width:9.5%}th:nth-child(5){width:18%}th:nth-child(6){width:9.5%}th:nth-child(7){width:13.5%}th:nth-child(8){width:13.5%}
+    th.num,td.num{text-align:right}
+    td{padding:10px 9px;border-bottom:1px solid #f2f2f5;color:#4a4a54;font-size:12.5px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis}
+    tbody tr:last-child td{border-bottom:0}
+    td.address{color:#17171b;font-weight:500;white-space:nowrap}
+    td.num,td.date{font-family:'IBM Plex Mono',monospace;font-size:12px;font-variant-numeric:tabular-nums}
+    td.value{color:#17171b;font-weight:500}
+    td.date{color:#77777f}
+    .stage{display:inline-flex;align-items:center;padding:3px 8px;border-radius:20px;font-size:10.5px;font-weight:500;white-space:nowrap}
+    .stage-not_contacted{background:#f1f1f4;color:#696972}.stage-contacted{background:#eef3f7;color:#476579}.stage-in_discussion{background:#e9f2f0;color:#2d625c}.stage-meeting_scheduled{background:#f1edfa;color:#65528a}.stage-declined{background:#f7eeee;color:#8b5555}
+    .owner{color:#3a3a44;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.note{margin-top:2px;color:#9a9aa6;font-size:11.5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .actions{display:flex;gap:6px;justify-content:flex-end;white-space:nowrap}
+    button{height:26px;padding:0 6px;border:1px solid #e2e2e8;border-radius:5px;background:#fff;color:#3a3a44;font:500 11.5px 'Instrument Sans',sans-serif;cursor:pointer}
+    button:hover{border-color:#c9c9d2}button.primary{border-color:#1c4e4a;background:#1c4e4a;color:#fff}button.primary:hover{border-color:#143a37;background:#143a37}
+    .empty{padding:24px 16px;color:#9a9aa6;font-size:12px;text-align:center}
+    .mobile{display:none}
+    @media(max-width:760px){
+      .scroll{display:none}.frame{border:0;background:transparent;overflow:visible}.mobile{display:grid;gap:10px}
+      .parcel-card{padding:12px;border:1px solid #eaeaee;border-radius:9px;background:#fff}.card-head{display:flex;justify-content:space-between;gap:10px}.card-address{font-size:12.5px;font-weight:500}.card-place{margin-top:3px;color:#9a9aa6;font-size:11.5px}.card-values{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;padding:9px 0;border-top:1px solid #f2f2f5;border-bottom:1px solid #f2f2f5}.card-label{color:#9a9aa6;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase}.card-number{margin-top:3px;font-family:'IBM Plex Mono',monospace;font-size:12px}.card-owner{margin-top:9px}.actions{margin-top:10px}.actions button{flex:1}
+    }
+  </style>
+</head>
+<body><div id="root"></div>
+<script>
+  const root=document.getElementById('root');
+  const send=(type,payload={})=>parent.postMessage({isStreamlitMessage:true,type,...payload},'*');
+  const emit=(type,row)=>send('streamlit:setComponentValue',{value:{type,bfs:row.bfs,parcel:String(row.parcel),eventId:`${Date.now()}-${Math.random()}`}});
+  const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node};
+  const actionButton=(label,primary,handler)=>{const b=el('button',primary?'primary':'',label);b.type='button';b.addEventListener('click',handler);return b};
+  function desktop(rows){
+    const scroll=el('div','scroll'),table=el('table'),head=el('thead'),hr=el('tr');
+    [['Adresse',''],['Gemeinde',''],['Potenzial m²','num'],['Landwert CHF','num'],['Kontaktstand',''],['Letzter Kontakt',''],['Eigentümerschaft / Notiz',''],['','']].forEach(([text,cls])=>hr.append(el('th',cls,text)));
+    head.append(hr);table.append(head);const body=el('tbody');
+    rows.forEach(row=>{const tr=el('tr');tr.append(el('td','address',row.address));tr.append(el('td','',row.municipality));tr.append(el('td','num',row.potential));tr.append(el('td','num value',row.landValue));const status=el('td');status.append(el('span',`stage stage-${row.statusCode}`,row.status));tr.append(status);tr.append(el('td','date',row.lastContact));const owner=el('td'),ownerName=el('div','owner',row.owner),note=el('div','note',row.note);owner.append(ownerName,note);tr.append(owner);const actionsCell=el('td'),actions=el('div','actions');actions.append(actionButton('Eigentümer',false,()=>emit('owner',row)),actionButton('Analyse',true,()=>emit('analyse',row)));actionsCell.append(actions);tr.append(actionsCell);body.append(tr)});
+    table.append(body);scroll.append(table);return scroll;
+  }
+  function mobile(rows){const list=el('div','mobile');rows.forEach(row=>{const card=el('article','parcel-card'),head=el('div','card-head'),identity=el('div');identity.append(el('div','card-address',row.address),el('div','card-place',`${row.municipality} · ${row.parcel}`));head.append(identity,el('span',`stage stage-${row.statusCode}`,row.status));card.append(head);const values=el('div','card-values');[['Potenzial',row.potential+' m²'],['Landwert CHF',row.landValue]].forEach(([label,value])=>{const box=el('div');box.append(el('div','card-label',label),el('div','card-number',value));values.append(box)});card.append(values);const owner=el('div','card-owner');owner.append(el('div','owner',row.owner),el('div','note',row.note));card.append(owner);const actions=el('div','actions');actions.append(actionButton('Eigentümer',false,()=>emit('owner',row)),actionButton('Analyse',true,()=>emit('analyse',row)));card.append(actions);list.append(card)});return list}
+  function height(){requestAnimationFrame(()=>send('streamlit:setFrameHeight',{height:Math.ceil(document.documentElement.scrollHeight)}))}
+  function render(args){const rows=Array.isArray(args.rows)?args.rows:[];root.replaceChildren();if(!rows.length){root.append(el('div','empty','Noch keine Parzellen gemerkt.'))}else{const frame=el('div','frame');frame.append(desktop(rows),mobile(rows));root.append(frame)}height()}
+  addEventListener('message',event=>{if(event.data?.type==='streamlit:render')render(event.data.args||{})});
+  addEventListener('resize',height);new ResizeObserver(height).observe(root);
+  send('streamlit:componentReady',{apiVersion:1});height();
+</script></body></html>
