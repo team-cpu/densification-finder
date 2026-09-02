@@ -101,7 +101,7 @@ class ShellHeaderRegressionTest(unittest.TestCase):
             self.assertFalse(app.exception, f"{page} raised on render")
             bodies = self._html_bodies(app)
             self.assertTrue(
-                any("Areal" in body for body in bodies),
+                any("Scope" in body for body in bodies),
                 f"wordmark missing on {page}",
             )
 
@@ -118,6 +118,13 @@ class ShellHeaderRegressionTest(unittest.TestCase):
         self.assertTrue(
             any(".st-key-app_shell" in body for body in bodies),
             "the shell's scoped <style> block did not render",
+        )
+        css = next(body for body in bodies if ".st-key-app_shell" in body)
+        self.assertIn("flex-wrap: nowrap !important", css)
+        self.assertIn("@media (max-width: 760px)", css)
+        self.assertTrue(
+            any("normiq-shell-logo" in body for body in bodies),
+            "the sanitiser-safe logo element did not render",
         )
 
     def test_the_data_as_of_banner_uses_the_real_run_date(self):

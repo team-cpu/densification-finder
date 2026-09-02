@@ -113,6 +113,75 @@ PENDING_SEARCH = "screening_apply_search"
 SKIPPED_SEARCH_VALUES = "screening_skipped_search_values"
 
 
+_SCREENING_CSS = """
+<style>
+.screening-page-intro {
+  margin: 10px 0 20px;
+}
+
+.screening-page-kicker {
+  margin-bottom: 7px;
+  color: #9a9aa6;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.screening-page-intro h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -.015em;
+}
+
+.screening-page-intro p {
+  max-width: 70ch;
+  margin: 7px 0 0;
+  color: #77777f;
+  font-size: 12.5px;
+  text-wrap: pretty;
+}
+
+.st-key-screening_filters {
+  margin-bottom: 16px;
+  padding: 14px 16px 16px;
+  border: 1px solid #eaeaee;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.st-key-screening_filters [data-testid="stHorizontalBlock"] {
+  align-items: end;
+}
+
+@media (max-width: 760px) {
+  .screening-page-intro {
+    margin: 8px 0 16px;
+  }
+
+  .screening-page-intro h1 {
+    font-size: 19px;
+    line-height: 1.25;
+  }
+
+  .st-key-screening_filters {
+    padding: 12px;
+  }
+}
+</style>
+"""
+
+_SCREENING_INTRO = """
+<div class="screening-page-intro">
+  <div class="screening-page-kicker">Screening</div>
+  <h1>Parzellen mit ungenutzter Ausnutzungsreserve</h1>
+  <p>Abgeleitet aus Grundbuch, kommunalen Bau- und Zonenordnungen sowie
+     amtlicher Vermessung. Ausnutzungsreserve = zulässige aBGF − bestehende aBGF.</p>
+</div>
+"""
+
+
 def read_oereb_cache():
     """Not cached by Streamlit: it changes as a run progresses, and a stale read
     would show the button's own results as still missing."""
@@ -268,10 +337,33 @@ def _apply_pending_search(parcels, state=None):
     state[SKIPPED_SEARCH_VALUES] = skipped
 
 
+def _initial_widget_value(key, state=None, **default):
+    """Feed restored state in as the widget default without defining it twice.
+
+    Restoring a saved search writes the filter values before the widgets are
+    created. Passing `value=`/`index=` as well makes Streamlit log that the same
+    widget received two defaults, even when both values agree. Value-based
+    widgets can consume that state and receive it as their constructor default;
+    this also preserves the two-ended shape of `select_slider`, which collapses
+    to a scalar when `value=` is omitted. Selectboxes are index-based, so they
+    keep their session-state value and simply omit the competing index.
+    """
+    state = st.session_state if state is None else state
+    if key not in state:
+        return default
+    if "index" in default:
+        return {}
+    parameter = next(iter(default))
+    return {parameter: state.pop(key)}
+
+
 def page(parcels, decisions, db, price_of, land_price_references, runs):
     """The screening list: filters, ranking, the ÖREB check and the table."""
     # Before any filter widget below is created — see PENDING_SEARCH.
     _apply_pending_search(parcels)
+
+    st.html(_SCREENING_CSS)
+    st.html(_SCREENING_INTRO)
 
     workflow_by_key = {
         (int(row.bfs), str(row.parcel)): row
@@ -285,7 +377,8 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     # The search and the reset sit above the filter grid rather than inside it:
     # neither narrows the result set the way the filters below do — one widens
     # what's easy to find, the other clears everything at once.
-    query_col, reset_col = st.columns([5, 1])
+    filter_box = st.container(key="screening_filters")
+    query_col, reset_col = filter_box.columns([5, 1])
     query = query_col.text_input(
         "Parzellen-Nr. suchen",
         key="screening_query",
@@ -297,34 +390,40 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             st.session_state.pop(key, None)
         st.rerun()
 
-    c0, c1, c2, c3, c4, c5, c6 = st.columns(7)
+    # The prototype deliberately uses two readable filter rows instead of one
+    # seven-column strip. Keep the widget creation order below unchanged — the
+    # tests and saved-search state both rely on it — while assigning the
+    # columns to the same 3 + 4 visual grouping as the design.
+    primary = filter_box.columns(3)
+    numeric = filter_box.columns([1, 1, 2, 1])
+    c0, c4, c5 = primary
+    c1, c2, c3, c6 = numeric
     canton = c0.selectbox(
         "Kanton",
         CANTONS,
-        index=0,
         key="screening_canton",
         help="Die Ergebnisdatenbank deckt zurzeit nur den Kanton Aargau ab.",
+        **_initial_widget_value("screening_canton", index=0),
     )
     if canton != "Aargau":
         st.warning("Für diesen Kanton liegen noch keine Daten vor.")
         return
     min_delta = c1.number_input(
         "Mindestpotenzial (m² GF)",
-        MIN_STORED_DELTA,
-        5000,
-        MIN_STORED_DELTA,
-        10,
+        min_value=MIN_STORED_DELTA,
+        max_value=5000,
+        step=10,
         key="screening_min_delta",
         help=(
             f"Die Ergebnisdatenbank enthält nur Parzellen ab {MIN_STORED_DELTA} m² "
             "Potenzial. Für eine tiefere Grenze muss die Kaskade neu gerechnet werden."
         ),
+        **_initial_widget_value("screening_min_delta", value=MIN_STORED_DELTA),
     )
     ziffer = c2.number_input(
         "Ziffer",
         min_value=float(parcels["az"].min()),
         max_value=float(parcels["az"].max()),
-        value=None,
         step=0.1,
         format="%g",
         placeholder="z. B. 0.8",
@@ -333,11 +432,11 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             "Exakter Filter für die flächengewichtete Nutzungsziffer. Leer lassen "
             "für alle Werte; Dezimalwerte können direkt eingetippt werden."
         ),
+        **_initial_widget_value("screening_ziffer", value=None),
     )
     area = c3.select_slider(
         "Parzellenfläche (m²)",
         options=AREA_STEPS,
-        value=AREA_DEFAULT,
         format_func=lambda v: "ohne Limite" if v == NO_LIMIT else f"{v:,.0f}",
         key="screening_area",
         help=(
@@ -346,6 +445,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             "«Ohne Limite» lässt das obere Ende offen — die frühere feste Obergrenze "
             "von 5,000 m² hat die grössten Grundstücke gar nicht erst gezeigt."
         ),
+        **_initial_widget_value("screening_area", value=AREA_DEFAULT),
     )
     municipalities = sorted(parcels["municipality"].dropna().unique())
     chosen = c4.multiselect(
@@ -362,38 +462,39 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     )
     top_n = c6.number_input(
         "Anzahl Resultate",
-        5,
-        SHORTLIST,
-        20,
-        5,
+        min_value=5,
+        max_value=SHORTLIST,
+        step=5,
         key="screening_top_n",
         help=(
             f"Maximal {SHORTLIST}: Nur diese Shortlist wird gegen den ÖREB-Kataster "
             "geprüft."
         ),
+        **_initial_widget_value("screening_top_n", value=20),
     )
 
     #: Whether the cascade can be recomputed in this environment. False on the
     #: deployment, which carries the results but not the ~600 MB of source geodata.
     _full_run = _ingest.geodata_available()
 
-    c7, c8, c9, c10 = st.columns([2, 2, 2, 1])
+    c7, c8, c9, c10 = filter_box.columns([2, 2, 2, 1])
     hide_design_plan = c7.checkbox(
-        "Parzellen mit Gestaltungsplan ausblenden", value=False,
+        "Parzellen mit Gestaltungsplan ausblenden",
         key="screening_hide_design_plan",
         help="Wo ein rechtsgültiger Gestaltungsplan gilt, kann er eigene "
              "Nutzungsziffern festlegen — die Ausnützungsziffer der Grundzone ist "
              "dort nicht zwingend massgebend.",
+        **_initial_widget_value("screening_hide_design_plan", value=False),
     )
     hide_inventory = c8.checkbox(
-        "Inventarisierte Gebäude ausblenden", value=False,
+        "Inventarisierte Gebäude ausblenden",
         key="screening_hide_inventory",
         help="Bauinventar und Kurzinventar verbieten einen Ersatzneubau nicht, "
              "erschweren ihn aber. Geschützte Gebäude sind ohnehin ausgeschlossen.",
+        **_initial_widget_value("screening_hide_inventory", value=False),
     )
     hide_transport = c9.checkbox(
         "Strassen-/Bahnparzellen ausblenden",
-        value=True,
         key="screening_hide_transport",
         help=(
             "Blendet Parzellen aus, deren Fläche gemäss amtlicher Vermessung zu "
@@ -401,6 +502,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             "Verkehrsinsel oder Bahn besteht. Einfahrten auf normalen Grundstücken "
             "bleiben dadurch sichtbar. Wirkt nach einer lokalen Neuberechnung."
         ),
+        **_initial_widget_value("screening_hide_transport", value=True),
     )
     # The brief lists the year-built cutoff among the filter inputs. Unlike the
     # other six it is a pipeline parameter, not a display filter: the age rule runs
@@ -409,7 +511,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     # where no recompute is possible it takes effect never, which is why the control
     # is disabled there rather than silently doing nothing.
     min_age = c10.number_input(
-        "Mindestalter (Jahre)", 0, 100, 15, 1,
+        "Mindestalter (Jahre)", min_value=0, max_value=100, step=1,
         key="screening_min_age",
         disabled=not _full_run,
         help=(
@@ -423,6 +525,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             "Die Liste ist mit 15 Jahren gerechnet; für einen anderen Wert lokal neu "
             "rechnen und mitdeployen."
         ),
+        **_initial_widget_value("screening_min_age", value=15),
     )
 
     # ── filter and rank (cascade steps 1–4) ─────────────────────────────────────

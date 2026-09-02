@@ -214,13 +214,7 @@ def render(parcels, decisions, db, today, price_of):
     and two lookups that disagreed about the most specific matching row would
     put one number in the table and another on the card.
     """
-    st.divider()
-    st.subheader("Akquisition — Eigentümerdialog")
-    st.caption(
-        "Kontaktstand je Parzelle und Eigentümerschaft. Das Wiedervorlagedatum "
-        "steuert die Fälligkeit, die Stufe wird auf der Karte geändert. "
-        "Eigentümerangaben werden weiterhin von Hand im AGIS nachgeschlagen."
-    )
+    st.html(_ACQUISITION_INTRO)
 
     shortlist = leads(parcels, decisions, "saved")
     if shortlist.empty:
@@ -250,6 +244,92 @@ _DUE_ROW_WIDTHS = [1.1, 2, 2, 1.9, 1.3, 2.2, 1, 1]
 #: from merely scheduled apart now that a plain `st.write` can't be styled.
 _OVERDUE_TINT = "background-color:#fdf5e7;color:#8a5a12;padding:1px 6px;border-radius:3px"
 
+_ACQUISITION_INTRO = """
+<style>
+.acquisition-page-intro { margin: 10px 0 20px; }
+.acquisition-page-kicker {
+  margin-bottom: 7px;
+  color: #9a9aa6;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.acquisition-page-intro h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -.015em;
+}
+.acquisition-page-intro p {
+  max-width: 70ch;
+  margin: 7px 0 0;
+  color: #77777f;
+  font-size: 12.5px;
+  text-wrap: pretty;
+}
+@media (max-width: 760px) {
+  .acquisition-page-intro { margin: 8px 0 16px; }
+  .acquisition-page-intro h1 { font-size: 19px; }
+}
+</style>
+<div class="acquisition-page-intro">
+  <div class="acquisition-page-kicker">Akquisition</div>
+  <h1>Eigentümer-Dialog</h1>
+  <p>Kontaktstand je Parzelle und Eigentümerschaft. Das Wiedervorlagedatum
+     steuert die Fälligkeit, die Stufe wird auf der Karte geändert.
+     Eigentümerangaben werden weiterhin von Hand im AGIS nachgeschlagen.</p>
+</div>
+"""
+
+_DUE_CSS = """
+<style>
+.acq-mobile-label { display: none; }
+
+@media (max-width: 760px) {
+  .st-key-acq_due_header { display: none; }
+
+  [class*="st-key-acq_due_row_"] {
+    padding: 12px;
+    margin-bottom: 10px;
+    border: 1px solid #eaeaee;
+    border-radius: 9px;
+    background: #fff;
+  }
+
+  [class*="st-key-acq_due_row_"] [data-testid="stHorizontalBlock"] {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px 12px;
+  }
+
+  [class*="st-key-acq_due_row_"] [data-testid="stColumn"] {
+    width: auto !important;
+    min-width: 0;
+  }
+
+  [class*="st-key-acq_due_row_"] [data-testid="stColumn"]:nth-child(2),
+  [class*="st-key-acq_due_row_"] [data-testid="stColumn"]:nth-child(6) {
+    grid-column: 1 / -1;
+  }
+
+  .acq-mobile-label {
+    display: block;
+    margin-bottom: 2px;
+    color: #9a9aa6;
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+  }
+
+  [class*="st-key-acq_due_row_"] [data-testid="stButton"] button {
+    white-space: nowrap;
+  }
+}
+</style>
+"""
+
 
 def _render_overdue(shortlist, today):
     """Hidden entirely when nothing is due, rather than shown as an empty frame
@@ -268,59 +348,73 @@ def _render_overdue(shortlist, today):
     if rows.empty:
         return
     overdue_count = len(overdue(shortlist, today))
-    st.markdown(f"**Fällige Wiedervorlagen** · {overdue_count} offen")
+    with st.container(key="acq_due"):
+        st.html(_DUE_CSS)
+        st.markdown(f"**Fällige Wiedervorlagen** · {overdue_count} offen")
 
-    headers = st.columns(_DUE_ROW_WIDTHS)
-    for column, label in zip(
-        headers,
-        (
-            "Wiedervorlage", "Adresse", "Gemeinde · Parzelle",
-            "Eigentümerschaft", "Stufe", "Nächster Schritt", "", "",
-        ),
-    ):
-        if label:
-            column.caption(label)
+        with st.container(key="acq_due_header"):
+            headers = st.columns(_DUE_ROW_WIDTHS)
+            for column, label in zip(
+                headers,
+                (
+                    "Wiedervorlage", "Adresse", "Gemeinde · Parzelle",
+                    "Eigentümerschaft", "Stufe", "Nächster Schritt", "", "",
+                ),
+            ):
+                if label:
+                    column.caption(label)
 
-    # `due_items` orders overdue leads first, so the first `overdue_count`
-    # positions are exactly the overdue ones — a position check against that
-    # count, rather than re-deriving "is this row late" from its own due
-    # date, says so directly instead of duplicating `overdue`'s own rule.
-    for position, (_, row) in enumerate(rows.iterrows()):
-        _render_due_row(row, position < overdue_count)
+        # `due_items` orders overdue leads first, so the first `overdue_count`
+        # positions are exactly the overdue ones — a position check against that
+        # count, rather than re-deriving "is this row late" from its own due
+        # date, says so directly instead of duplicating `overdue`'s own rule.
+        for position, (_, row) in enumerate(rows.iterrows()):
+            _render_due_row(row, position < overdue_count)
 
 
 def _render_due_row(row, is_overdue):
     key = int(row["bfs"]), str(row["parcel"])
-    columns = st.columns(_DUE_ROW_WIDTHS, vertical_alignment="center")
-
-    if is_overdue:
-        # Escaped even though `workflow._date` only ever stores a strict
-        # YYYY-MM-DD: this is the one field on the row interpolated into markup
-        # rather than written through `st.write`, and the database is a file on
-        # a volume that can be edited by hand. Relying on a validator three
-        # modules away to keep this safe would make a change over there a hole
-        # over here, silently.
-        columns[0].markdown(
-            f'<span style="{_OVERDUE_TINT}">{escape(str(row["due_date"]))}</span>',
-            unsafe_allow_html=True,
-        )
-    else:
-        columns[0].write(row["due_date"])
-    columns[1].write(_or_dash(row["address"]))
-    columns[2].write(f"{row['municipality']} · {row['parcel']}")
-    columns[3].write(_or_dash(row["owner_name"]))
-    stage = (
-        row["contact_status"]
-        if row["contact_status"] in WF.CONTACT_STATUS_LABELS
-        else WF.DEFAULT_CONTACT_STATUS
-    )
-    columns[4].write(WF.CONTACT_STATUS_LABELS[stage])
-    columns[5].write(_or_dash(row["next_step"]))
     slug = f"{key[0]}_{key[1]}"
-    with columns[6]:
-        _analyse_button(row, f"due_open_{slug}")
-    with columns[7]:
-        _eigentuemer_button(key, f"due_contact_{slug}")
+    with st.container(key=f"acq_due_row_{slug}"):
+        columns = st.columns(_DUE_ROW_WIDTHS, vertical_alignment="center")
+
+        for column, label in zip(
+            columns,
+            (
+                "Wiedervorlage", "Adresse", "Gemeinde · Parzelle",
+                "Eigentümerschaft", "Stufe", "Nächster Schritt", "", "",
+            ),
+        ):
+            if label:
+                column.html(f'<span class="acq-mobile-label">{label}</span>')
+
+        if is_overdue:
+            # Escaped even though `workflow._date` only ever stores a strict
+            # YYYY-MM-DD: this is the one field on the row interpolated into markup
+            # rather than written through `st.write`, and the database is a file on
+            # a volume that can be edited by hand. Relying on a validator three
+            # modules away to keep this safe would make a change over there a hole
+            # over here, silently.
+            columns[0].markdown(
+                f'<span style="{_OVERDUE_TINT}">{escape(str(row["due_date"]))}</span>',
+                unsafe_allow_html=True,
+            )
+        else:
+            columns[0].write(row["due_date"])
+        columns[1].write(_or_dash(row["address"]))
+        columns[2].write(f"{row['municipality']} · {row['parcel']}")
+        columns[3].write(_or_dash(row["owner_name"]))
+        stage = (
+            row["contact_status"]
+            if row["contact_status"] in WF.CONTACT_STATUS_LABELS
+            else WF.DEFAULT_CONTACT_STATUS
+        )
+        columns[4].write(WF.CONTACT_STATUS_LABELS[stage])
+        columns[5].write(_or_dash(row["next_step"]))
+        with columns[6]:
+            _eigentuemer_button(key, f"due_contact_{slug}")
+        with columns[7]:
+            _analyse_button(row, f"due_open_{slug}")
 
 
 def _render_board(shortlist, db, price_of):

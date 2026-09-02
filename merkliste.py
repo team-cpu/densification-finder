@@ -21,6 +21,51 @@ import workflow as WF
 IN_DIALOG = ("contacted", "in_discussion", "meeting_scheduled")
 
 
+_METRICS_CSS = """
+<style>
+.st-key-merkliste_metrics [data-testid="stHorizontalBlock"] {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid #eaeaee;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.st-key-merkliste_metrics [data-testid="stColumn"] {
+  width: auto !important;
+  min-width: 0;
+  padding: 13px 16px;
+  border-right: 1px solid #f0f0f3;
+}
+
+.st-key-merkliste_metrics [data-testid="stColumn"]:last-child {
+  border-right: 0;
+}
+
+@media (max-width: 760px) {
+  .st-key-merkliste_metrics [data-testid="stHorizontalBlock"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .st-key-merkliste_metrics [data-testid="stColumn"] {
+    padding: 11px 12px;
+    border-bottom: 1px solid #f0f0f3;
+  }
+
+  .st-key-merkliste_metrics [data-testid="stColumn"]:nth-child(2) {
+    border-right: 0;
+  }
+
+  .st-key-merkliste_metrics [data-testid="stColumn"]:nth-child(n+3) {
+    border-bottom: 0;
+  }
+}
+</style>
+"""
+
+
 def summary(leads: pd.DataFrame, land_value) -> dict:
     """The four tiles, computed from the rows the table will show.
 
@@ -42,7 +87,12 @@ def summary(leads: pd.DataFrame, land_value) -> dict:
 
 def page(parcels, decisions, db, price_of):
     """Summary tiles, the shortlist, and the way on to the board."""
-    st.subheader("Merkliste")
+    st.html(
+        '<div style="margin:10px 0 7px;color:#9a9aa6;font-size:10px;'
+        'font-weight:600;letter-spacing:.1em;text-transform:uppercase">'
+        'Merkliste</div>'
+    )
+    st.subheader("Gemerkte Parzellen")
     st.caption(
         "Gemerkte Parzellen. Kontaktstand und Wiedervorlagen werden in der "
         "Akquisition geführt; hier steht, was insgesamt auf der Liste liegt."
@@ -66,11 +116,13 @@ def page(parcels, decisions, db, price_of):
         return row["area"] * reference.price_chf_m2
 
     totals = summary(leads, land_value)
-    tiles = st.columns(4)
-    tiles[0].metric("Parzellen", ACQ._swiss(totals["parcels"]))
-    tiles[1].metric("Summe Potenzial m²", ACQ._swiss(totals["potential"]))
-    tiles[2].metric("Summe Landwert CHF", ACQ._swiss(totals["land_value"]))
-    tiles[3].metric("Im Dialog", ACQ._swiss(totals["in_dialog"]))
+    with st.container(key="merkliste_metrics"):
+        st.html(_METRICS_CSS)
+        tiles = st.columns(4)
+        tiles[0].metric("Parzellen", ACQ._swiss(totals["parcels"]))
+        tiles[1].metric("Summe Potenzial m²", ACQ._swiss(totals["potential"]))
+        tiles[2].metric("Summe Landwert CHF", ACQ._swiss(totals["land_value"]))
+        tiles[3].metric("Im Dialog", ACQ._swiss(totals["in_dialog"]))
 
     ordered = leads.sort_values(["municipality", "parcel"], kind="stable")
     table = pd.DataFrame(

@@ -757,7 +757,7 @@ class AppRegressionTest(unittest.TestCase):
 
         self.assertFalse(app.exception)
         headings = " ".join(h.value for h in app.subheader)
-        self.assertIn("Merkliste", headings)
+        self.assertIn("Gemerkte Parzellen", headings)
         columns = [
             list(frame.value.columns)
             for frame in app.dataframe

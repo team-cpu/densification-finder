@@ -44,32 +44,19 @@ import streamlit as st
 import navigation
 import organisation
 
-#: The prototype's own mark, reproduced verbatim from its `<svg>` source —
-#: redrawing it by eye would drift from the original on every ellipse angle.
-_LOGO_SVG = """\
-<svg width="20" height="20" viewBox="0 0 40 40" style="flex:none" aria-hidden="true">
-  <rect width="40" height="40" rx="9" fill="#1c4e4a"></rect>
-  <g fill="#ffffff">
-    <ellipse cx="20" cy="8.6" rx="5.4" ry="2.9"></ellipse>
-    <ellipse cx="28.1" cy="11.9" rx="5.4" ry="2.9" transform="rotate(45 28.1 11.9)"></ellipse>
-    <ellipse cx="31.4" cy="20" rx="5.4" ry="2.9" transform="rotate(90 31.4 20)"></ellipse>
-    <ellipse cx="28.1" cy="28.1" rx="5.4" ry="2.9" transform="rotate(135 28.1 28.1)"></ellipse>
-    <ellipse cx="20" cy="31.4" rx="5.4" ry="2.9"></ellipse>
-    <ellipse cx="11.9" cy="28.1" rx="5.4" ry="2.9" transform="rotate(45 11.9 28.1)"></ellipse>
-    <ellipse cx="8.6" cy="20" rx="5.4" ry="2.9" transform="rotate(90 8.6 20)"></ellipse>
-    <ellipse cx="11.9" cy="11.9" rx="5.4" ry="2.9" transform="rotate(135 11.9 11.9)"></ellipse>
-  </g>
-</svg>
-"""
+#: The prototype's own mark lives at `static/scope-mark.svg`. `st.html`
+#: sanitises inline SVG, and the app CSP does not paint SVG data URLs used as a
+#: CSS background. Serving the exact exported asset through Streamlit's static
+#: route keeps the artwork local and actually visible.
 
 #: Wordmark + canton. `#8a8a94` (muted) and the `#eaeaee` divider have no
 #: existing theme token to fall back on, so they are written here rather than
 #: sourced from `.streamlit/config.toml`; ink and page background are not
 #: repeated because every other span already inherits them from the theme.
 _BRAND_HTML = f"""\
-<div style="display:flex;align-items:center;gap:9px">
-  {_LOGO_SVG}
-  <span style="font-size:13.5px;font-weight:600;letter-spacing:-0.01em">Areal</span>
+<div class="normiq-shell-brand" style="display:flex;align-items:center;gap:9px">
+  <img class="normiq-shell-logo" src="app/static/scope-mark.svg" alt="" />
+  <span style="font-size:13.5px;font-weight:600;letter-spacing:-0.01em">Scope</span>
   <span style="font-size:12px;color:#8a8a94;padding-left:9px;border-left:1px solid #eaeaee">
     Kanton Aargau
   </span>
@@ -105,7 +92,7 @@ def _data_as_of_html(data_as_of: str) -> str:
     chip is a real `st.button` and can no longer share one `st.html` blob
     with it."""
     return f"""\
-<span style="font-size:12px;color:#8a8a94;white-space:nowrap;
+<span class="normiq-shell-data" style="font-size:12px;color:#8a8a94;white-space:nowrap;
              display:flex;align-items:center;height:100%">
   Datenstand {data_as_of}
 </span>
@@ -146,10 +133,25 @@ _SHELL_CSS = """
   position: sticky;
   top: 0;
   z-index: 20;
+  /* Escape the main block's page gutter so the divider and translucent
+     background span the viewport, while the row below restores the design's
+     28px content inset. */
+  margin: -16px -28px 0;
+  width: calc(100% + 56px);
+  max-width: none;
   background: rgba(251, 251, 252, .92);
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid #eaeaee;
+}
+
+/* Streamlit's default block container reserves 84px above the first element
+   and limits content to 80rem. The prototype starts after a compact 16px inset
+   and permits a 1560px canvas; keeping the default made the new shell look like
+   a floating card and compressed the seven-column filters unnecessarily. */
+[data-testid="stMainBlockContainer"] {
+  max-width: 1560px;
+  padding: 16px 28px 90px;
 }
 
 /* The content row: capped and centered like the prototype's, with its own
@@ -159,6 +161,29 @@ _SHELL_CSS = """
   margin: 0 auto;
   padding: 0 28px;
   height: 52px;
+  min-height: 52px;
+  flex-wrap: nowrap !important;
+  align-items: center;
+}
+
+/* Streamlit marks `st.html` children as width="100%" even inside a horizontal
+   container. Left alone, brand, spacer and date each claim a full row and the
+   52px shell becomes a 124px two-line block. The shell has explicit flex roles,
+   so its children must size to content unless a marker below says otherwise. */
+.st-key-app_shell_row > [data-testid="stElementContainer"] {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0;
+}
+
+.normiq-shell-logo {
+  display: block;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
 }
 
 /* Streamlit gives every element its own stacking margin for vertical
@@ -173,7 +198,7 @@ _SHELL_CSS = """
 /* The spacer between the nav and the account block, selected by the marker
    class `_SPACER_HTML` carries rather than by position. */
 .st-key-app_shell [data-testid="stElementContainer"]:has(.normiq-shell-spacer) {
-  flex: 1 1 auto;
+  flex: 1 1 auto !important;
 }
 
 /* The pill track. Selectors confirmed against the installed frontend bundle
@@ -222,6 +247,66 @@ _SHELL_CSS = """
   background: #e9e9ee;
   border-color: #d5d5dc;
   color: #1c4e4a;
+}
+
+/* Mobile keeps the account action and all four destinations reachable without
+   letting five intrinsic-width Streamlit children turn into four tall rows.
+   Brand + account share the first row; navigation gets the second; the data
+   stamp is available on wider screens where it does not compete for space. */
+@media (max-width: 760px) {
+  .st-key-app_shell {
+    position: sticky;
+    margin: -12px -14px 0;
+    width: calc(100% + 28px);
+  }
+
+  .st-key-app_shell_row {
+    height: auto;
+    min-height: 78px;
+    padding: 10px 14px;
+    gap: 8px !important;
+    flex-wrap: wrap !important;
+  }
+
+  .st-key-app_shell_row > [data-testid="stElementContainer"]:has(.normiq-shell-brand) {
+    order: 1;
+    flex: 0 0 auto !important;
+  }
+
+  .st-key-app_shell_row > .st-key-app_shell_account_open {
+    order: 2;
+  }
+
+  .st-key-app_shell_row > .st-key-acq_page {
+    order: 3;
+    flex: 0 0 100% !important;
+    width: 100% !important;
+  }
+
+  .st-key-app_shell_row > [data-testid="stElementContainer"]:has(.normiq-shell-spacer),
+  .st-key-app_shell_row > [data-testid="stElementContainer"]:has(.normiq-shell-data) {
+    display: none;
+  }
+
+  .st-key-app_shell [data-testid="stButtonGroup"] {
+    width: 100%;
+  }
+
+  .st-key-app_shell [data-testid="stButtonGroup"] [role="radiogroup"] {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    width: 100%;
+    max-width: none;
+  }
+
+  .st-key-app_shell button[data-variant="segmented_control"] {
+    width: 100%;
+    padding-inline: 6px;
+  }
+
+  [data-testid="stMainBlockContainer"] {
+    padding: 12px 14px 60px;
+  }
 }
 </style>
 """
