@@ -400,15 +400,17 @@ class AppRegressionTest(unittest.TestCase):
         text = " ".join(element.value for element in app.markdown)
         self.assertIn("Im Gespräch", text)
         # Due in 2020 and today is not: the overdue list must have drawn.
-        overdue = [
-            frame.value
-            for frame in app.dataframe
-            if "Wiedervorlage" in getattr(frame.value, "columns", [])
+        # The follow-up list is a row of widgets now, not a dataframe with a
+        # `Wiedervorlage` column, so its presence is read off the row's own
+        # `Eigentümer` button and next-step text instead.
+        self.assertIn("Fällige Wiedervorlagen", text)
+        due_buttons = [
+            widget
+            for widget in app.button
+            if str(widget.key or "").startswith("due_contact_")
         ]
-        self.assertEqual(len(overdue), 1)
-        self.assertEqual(
-            list(overdue[0]["Nächster Schritt"]), ["Zweitgespräch vereinbaren"]
-        )
+        self.assertEqual(len(due_buttons), 1)
+        self.assertIn("Zweitgespräch vereinbaren", text)
 
     def test_moving_a_card_to_another_stage_persists_it(self):
         """A stage change that only moves the widget and never reaches
@@ -811,6 +813,109 @@ class AppRegressionTest(unittest.TestCase):
         self.assertNotIn(
             "Keine Parzelle", " ".join(element.value for element in app.info)
         )
+
+    def test_the_due_lists_eigentuemer_button_opens_that_rows_own_lead(self):
+        """A button wired to the first lead in the shortlist, rather than the
+        one on its own row, would still pass with a single overdue lead on
+        the list — this needs two, both overdue, so clicking the second row
+        and getting the first row's owner back is a visible failure."""
+        rows = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 2",
+            sqlite3.connect(self.database),
+        )
+        keys = [(int(r.bfs), str(r.parcel)) for r in rows.itertuples()]
+        workflow.set_saved(keys, True, self.database)
+        workflow.update(
+            [keys[0]], due_date="2020-01-01", owner_name="Erste Eigentümerin",
+            db=self.database,
+        )
+        workflow.update(
+            [keys[1]], due_date="2020-02-02", owner_name="Zweite Eigentümerin",
+            db=self.database,
+        )
+        bfs, parcel = keys[1]
+        slug = f"{bfs}_{parcel}"
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        )
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
+
+        app.button(key=f"due_contact_{slug}").click().run()
+        self.assertFalse(app.exception)
+
+        self.assertEqual(
+            app.session_state[acquisition.CONTACT_OPEN], f"{bfs}:{parcel}"
+        )
+        self.assertEqual(
+            field(app, "Eigentümerschaft").value, "Zweite Eigentümerin"
+        )
+
+    def test_the_due_lists_analyse_button_opens_that_rows_parcel(self):
+        """Mirrors `test_opening_a_lead_from_the_board_lands_on_analyse` for
+        the follow-up list's own copy of the button — the list is a second
+        place a lead can be opened from, with its own widget key, so it needs
+        its own proof that key actually opens the right parcel."""
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
+            sqlite3.connect(self.database),
+        ).iloc[0]
+        bfs, parcel = int(first["bfs"]), str(first["parcel"])
+        workflow.set_saved([(bfs, parcel)], True, self.database)
+        workflow.update([(bfs, parcel)], due_date="2020-01-01", db=self.database)
+        slug = f"{bfs}_{parcel}"
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        )
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
+
+        app.button(key=f"due_open_{slug}").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state["acq_page"], "Analyse")
+        self.assertEqual(
+            app.session_state["selected_parcel_id"], f"{bfs}:{parcel}"
+        )
+
+    def test_the_due_list_tints_only_overdue_rows_and_counts_only_them(self):
+        """The badge and the tint are the two things telling "late" from
+        "merely scheduled" apart on this list; both used to come from one
+        `Styler` call over a dataframe, so this proves neither guarantee was
+        lost now that the rows are drawn as separate widgets."""
+        rows = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 2",
+            sqlite3.connect(self.database),
+        )
+        keys = [(int(r.bfs), str(r.parcel)) for r in rows.itertuples()]
+        workflow.set_saved(keys, True, self.database)
+        # One overdue, one not — due_items shows both, but only the first
+        # counts toward the badge and should carry the tint.
+        workflow.update([keys[0]], due_date="2020-01-01", db=self.database)
+        workflow.update([keys[1]], due_date="2099-01-01", db=self.database)
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=60
+        )
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
+        self.assertFalse(app.exception)
+
+        text = " ".join(element.value for element in app.markdown)
+        self.assertIn("Fällige Wiedervorlagen** · 1 offen", text)
+
+        due_buttons = [
+            widget
+            for widget in app.button
+            if str(widget.key or "").startswith("due_contact_")
+        ]
+        self.assertEqual(len(due_buttons), 2)
+
+        tinted = [m for m in app.markdown if "#fdf5e7" in m.value]
+        self.assertEqual(len(tinted), 1)
+        self.assertIn("2020-01-01", tinted[0].value)
+        self.assertNotIn("2099-01-01", tinted[0].value)
 
 
 if __name__ == "__main__":

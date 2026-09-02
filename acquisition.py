@@ -25,11 +25,11 @@ DUE_PREVIEW = 4
 #: Which lead's contact dialog is open, as `bfs:parcel`, or absent for none.
 #:
 #: A dialog cannot be driven from `if st.button(...): open_dialog()` — the
-#: button that reads `True` when the user clicks "Kontakt" reads `False` again
-#: on the rerun that `Speichern` itself triggers inside the dialog, so the
-#: dialog body (and the save it contains) never runs a second time. Session
-#: state survives that rerun, so the dialog keeps reopening itself on every
-#: rerun until something explicitly pops this key.
+#: button that reads `True` when the user clicks "Eigentümer" reads `False`
+#: again on the rerun that `Speichern` itself triggers inside the dialog, so
+#: the dialog body (and the save it contains) never runs a second time.
+#: Session state survives that rerun, so the dialog keeps reopening itself on
+#: every rerun until something explicitly pops this key.
 CONTACT_OPEN = "acquisition_contact_open"
 
 #: Scoped to the board's own keyed container (`st-key-acq_board`) so it does
@@ -237,6 +237,18 @@ def render(parcels, decisions, db, today, price_of):
     _render_hidden(parcels, decisions, db)
 
 
+#: Column proportions for a follow-up row: due date, address, municipality ·
+#: parcel, owner, stage, next step, then the two action buttons. Kept next to
+#: `_render_due_row` rather than inlined so the header row built from the
+#: same widths cannot silently drift out of alignment with the rows below it.
+_DUE_ROW_WIDTHS = [1.1, 2, 2, 1.9, 1.3, 2.2, 1, 1]
+
+#: Matches the overdue tint the dataframe `Styler` used to apply to the
+#: `Wiedervorlage` cell — carried over verbatim so the list still tells late
+#: from merely scheduled apart now that a plain `st.write` can't be styled.
+_OVERDUE_TINT = "background-color:#fdf5e7;color:#8a5a12;padding:1px 6px;border-radius:3px"
+
+
 def _render_overdue(shortlist, today):
     """Hidden entirely when nothing is due, rather than shown as an empty frame
     — an empty table reads as a broken query, not as a clear desk.
@@ -245,41 +257,62 @@ def _render_overdue(shortlist, today):
     coming, capped), but the badge counts `overdue` alone — the badge answers
     "how many need chasing right now", and counting the look-ahead rows too
     would make it lie the moment the preview shows anything upcoming.
+
+    Drawn as widgets, one row per lead, rather than a read-only `st.dataframe`
+    — the whole point of this section is acting on a lead first thing in the
+    morning without first hunting for its card among five stage columns.
     """
     rows = due_items(shortlist, today)
     if rows.empty:
         return
     overdue_count = len(overdue(shortlist, today))
     st.markdown(f"**Fällige Wiedervorlagen** · {overdue_count} offen")
-    frame = pd.DataFrame(
-        {
-            "Wiedervorlage": rows["due_date"],
-            "Adresse": rows["address"].map(_or_dash),
-            "Gemeinde": rows["municipality"],
-            "Parzelle": rows["parcel"],
-            "Eigentümerschaft": rows["owner_name"].map(_or_dash),
-            "Stufe": rows["contact_status"].map(
-                lambda code: WF.CONTACT_STATUS_LABELS.get(
-                    code, WF.CONTACT_STATUS_LABELS[WF.DEFAULT_CONTACT_STATUS]
-                )
-            ),
-            "Nächster Schritt": rows["next_step"].map(_or_dash),
-        }
-    # `due_items` puts overdue rows first but keeps `shortlist`'s original
-    # (non-contiguous) index; the tint below picks rows by position, so it
-    # needs a plain 0..n-1 index or it would tint the wrong cells whenever the
-    # original index skipped or reordered.
-    ).reset_index(drop=True)
+
+    headers = st.columns(_DUE_ROW_WIDTHS)
+    for column, label in zip(
+        headers,
+        (
+            "Wiedervorlage", "Adresse", "Gemeinde · Parzelle",
+            "Eigentümerschaft", "Stufe", "Nächster Schritt", "", "",
+        ),
+    ):
+        if label:
+            column.caption(label)
+
     # `due_items` orders overdue leads first, so the first `overdue_count`
-    # positions in `frame` are exactly the overdue ones — a subset built from
-    # that row range, rather than an `axis=1` scan of every row, says so
-    # directly instead of re-deriving it from `Wiedervorlage <= today`.
-    overdue_rows = frame.index[:overdue_count]
-    styled = frame.style.map(
-        lambda _: "background-color:#fdf5e7;color:#8a5a12",
-        subset=(overdue_rows, "Wiedervorlage"),
+    # positions are exactly the overdue ones — a position check against that
+    # count, rather than re-deriving "is this row late" from its own due
+    # date, says so directly instead of duplicating `overdue`'s own rule.
+    for position, (_, row) in enumerate(rows.iterrows()):
+        _render_due_row(row, position < overdue_count)
+
+
+def _render_due_row(row, is_overdue):
+    key = int(row["bfs"]), str(row["parcel"])
+    columns = st.columns(_DUE_ROW_WIDTHS, vertical_alignment="center")
+
+    if is_overdue:
+        columns[0].markdown(
+            f'<span style="{_OVERDUE_TINT}">{row["due_date"]}</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        columns[0].write(row["due_date"])
+    columns[1].write(_or_dash(row["address"]))
+    columns[2].write(f"{row['municipality']} · {row['parcel']}")
+    columns[3].write(_or_dash(row["owner_name"]))
+    stage = (
+        row["contact_status"]
+        if row["contact_status"] in WF.CONTACT_STATUS_LABELS
+        else WF.DEFAULT_CONTACT_STATUS
     )
-    st.dataframe(styled, hide_index=True, width="stretch")
+    columns[4].write(WF.CONTACT_STATUS_LABELS[stage])
+    columns[5].write(_or_dash(row["next_step"]))
+    slug = f"{key[0]}_{key[1]}"
+    with columns[6]:
+        _analyse_button(row, f"due_open_{slug}")
+    with columns[7]:
+        _eigentuemer_button(key, f"due_contact_{slug}")
 
 
 def _render_board(shortlist, db, price_of):
@@ -378,14 +411,29 @@ def _render_card(row, db, price_of):
             WF.update([key], contact_status=stage, db=db)
             st.rerun()
 
-        if st.button("Analyse", key=f"open_{slug}", width="stretch"):
-            detail.open_parcel(detail.parcel_id(row))
-            navigation.go_to("Analyse")
-            st.rerun()
+        _analyse_button(row, f"open_{slug}")
+        _eigentuemer_button(key, f"contact_{slug}")
 
-        if st.button("Kontakt", key=f"contact_{slug}", width="stretch"):
-            st.session_state[CONTACT_OPEN] = f"{key[0]}:{key[1]}"
-            st.rerun()
+
+def _analyse_button(row, widget_key):
+    """Shared by the card and the follow-up list so a lead opens the same
+    parcel no matter which surface it was opened from — the caller picks the
+    widget key because a due lead is drawn twice (once here, once on its own
+    card) and the two copies would collide on a shared `open_{slug}`."""
+    if st.button("Analyse", key=widget_key, width="stretch"):
+        detail.open_parcel(detail.parcel_id(row))
+        navigation.go_to("Analyse")
+        st.rerun()
+
+
+def _eigentuemer_button(key, widget_key):
+    """Opens `_contact_dialog` for `key`, shared by the card and the
+    follow-up list — a lead's contact data lives at one `bfs`/`parcel` pair,
+    so both surfaces route through the same `CONTACT_OPEN` write rather than
+    each carrying its own copy of how a dialog gets opened."""
+    if st.button("Eigentümer", key=widget_key, width="stretch"):
+        st.session_state[CONTACT_OPEN] = f"{key[0]}:{key[1]}"
+        st.rerun()
 
 
 @st.dialog("Kontaktdetails")
