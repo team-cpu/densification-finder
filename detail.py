@@ -30,6 +30,8 @@ import formatting as F
 import links as L
 import navigation
 import report
+import paths
+import workflow as WF
 
 #: Which parcel the app is showing, or absent for the list view. The whole
 #: navigation is this one key: the brief asks for a conditional view rather
@@ -65,6 +67,21 @@ def find(parcels, pid):
     except ValueError:
         return None
     return None if hit.empty else hit.iloc[0]
+
+
+def _on_merkliste(db, bfs, parcel):
+    """Whether this parcel already has a `saved` row in `parcel_workflow`.
+
+    Queried fresh rather than folded into `parcels`: that table is the
+    pipeline's own output, replaced whole on a recompute, and a save made a
+    second ago from this same page has to show up on this same page without a
+    trip back through Screening or Merkliste first.
+    """
+    saved = WF.load(db)
+    if saved.empty:
+        return False
+    hit = saved[(saved["bfs"] == int(bfs)) & (saved["parcel"] == str(parcel))]
+    return bool(hit["saved"].astype(bool).any())
 
 
 def _facts(rows):
@@ -595,7 +612,7 @@ DISCLAIMER = (
 )
 
 
-def page(parcels, cache, price_of):
+def page(parcels, cache, price_of, db=None):
     """Render the detail view for the selected parcel.
 
     `price_of` is a callable returning the land-price reference for a row, so
@@ -604,6 +621,13 @@ def page(parcels, cache, price_of):
     the background (see `regulations.ensure_news_started`) rather than passed
     in, because the whole point of that block is that it must not make this
     function wait on it.
+
+    `db` is the workflow database for the Merkliste action below and defaults
+    to `paths.DB`, resolved inside this function rather than at import.
+    `screening.py` learned this the hard way: a module-level `DB = paths.DB`
+    freezes at first import and ignores every database a caller — a test, a
+    per-request override — points `paths.DB` at afterwards. `app.py`'s router
+    does not pass `db` yet; once it does, the default here just falls away.
 
     Two columns, because the two halves of this screen are read against each
     other: what the registers say about the parcel is fixed and stands on the
@@ -635,6 +659,26 @@ def page(parcels, cache, price_of):
             "vermutlich wurde inzwischen neu gerechnet."
         )
         st.stop()
+
+    # Merkliste, in the row's middle column — the other thing done to the page
+    # as a whole, next to leaving it and exporting it. Reading a parcel's
+    # analysis and deciding it is worth pursuing used to mean navigating back
+    # to Screening, finding the row again, and ticking it there; this is that
+    # decision made where it is actually made. The label carries the current
+    # state rather than always reading "Auf Merkliste" — a button that offers
+    # to add something already added is a lie the user finds out about by
+    # clicking it.
+    key = (int(row["bfs"]), row["parcel"])
+    db_path = db if db is not None else paths.DB
+    if _on_merkliste(db_path, *key):
+        if top[1].button("✓ Auf der Merkliste — entfernen", width="stretch"):
+            WF.set_saved([key], False, db_path)
+            st.toast("Von der Merkliste entfernt.")
+            st.rerun()
+    elif top[1].button("Auf Merkliste", width="stretch", type="primary"):
+        WF.set_saved([key], True, db_path)
+        st.toast("Auf die Merkliste gesetzt.")
+        st.rerun()
 
     st.markdown(PAGE_CSS, unsafe_allow_html=True)
 

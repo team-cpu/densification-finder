@@ -17,6 +17,7 @@ import navigation
 import paths
 import regulations
 import report
+import workflow
 
 
 #: A trimmed OEREBlex payload. The tests must not reach the network: a suite
@@ -510,6 +511,58 @@ class DetailViewTest(unittest.TestCase):
         self.assertFalse(app.exception)
         price = next(n for n in app.number_input if n.label == "Verkaufspreis (CHF/m²)")
         self.assertEqual(price.value, E.BENCHMARKS["sale_price_chf_m2"].value)
+
+    def test_auf_merkliste_saves_the_open_parcel(self):
+        """The button this test protects: reading a parcel's analysis and
+        deciding it is worth pursuing used to mean navigating back to
+        Screening, finding the row again, and ticking it there. Asserted
+        against the workflow table, not the widget — a widget assertion would
+        pass even if the click wrote nothing at all."""
+        app = self.open_detail()
+        next(b for b in app.button if b.label == "Auf Merkliste").click().run()
+        self.assertFalse(app.exception)
+        saved = workflow.load(self.database)
+        hit = saved[(saved["bfs"] == self.bfs) & (saved["parcel"] == self.parcel)]
+        self.assertEqual(len(hit), 1)
+        self.assertTrue(bool(hit.iloc[0]["saved"]))
+
+    def test_an_already_saved_parcel_shows_the_removal_state(self):
+        """A button that still offers to add something already added is a lie
+        the user finds out about by clicking it — the label has to change,
+        not merely the state underneath it."""
+        workflow.set_saved([(self.bfs, self.parcel)], True, self.database)
+        app = self.open_detail()
+        labels = [b.label for b in app.button]
+        self.assertNotIn("Auf Merkliste", labels)
+        self.assertTrue(
+            any("entfernen" in label.lower() for label in labels),
+            f"no removal control among {labels!r}",
+        )
+
+    def test_clicking_the_removal_state_takes_it_off_the_shortlist(self):
+        workflow.set_saved([(self.bfs, self.parcel)], True, self.database)
+        app = self.open_detail()
+        removal = next(b for b in app.button if "entfernen" in b.label.lower())
+        removal.click().run()
+        self.assertFalse(app.exception)
+        saved = workflow.load(self.database)
+        hit = saved[(saved["bfs"] == self.bfs) & (saved["parcel"] == self.parcel)]
+        self.assertEqual(len(hit), 1)
+        self.assertFalse(bool(hit.iloc[0]["saved"]))
+
+    def test_the_merkliste_action_does_not_disturb_the_rest_of_the_page(self):
+        """Toggling the shortlist is a side action taken from the page, not a
+        navigation away from it — the parcel has to still be open and every
+        block still on screen after the rerun the click causes."""
+        app = self.open_detail()
+        next(b for b in app.button if b.label == "Auf Merkliste").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state[detail.SELECTED], self.pid)
+        self.assertEqual(
+            [s.value for s in app.subheader],
+            ["A · Grunddaten", "B · Potenzial", "C · Residualwertrechnung",
+             "E · Neueste Änderungen"],
+        )
 
     def test_a_selection_that_no_longer_exists_says_so(self):
         """A recompute can drop a parcel out of the table while it is open."""
