@@ -152,7 +152,7 @@ class AppRegressionTest(unittest.TestCase):
         self.assertGreater(len(frame), 0)
         self.assertTrue(frame["Ziffer"].round(3).eq(0.8).all())
 
-    def test_confirmed_transport_parcel_is_hidden_by_default_and_recoverable(self):
+    def test_confirmed_transport_filter_is_opt_in_and_hides_matching_parcels(self):
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=30
         ).run()
@@ -171,20 +171,20 @@ class AppRegressionTest(unittest.TestCase):
             (visible["Gemeinde"] == first["Gemeinde"])
             & (visible["Parzelle"].astype(str) == str(first["Parzelle"]))
         )
-        self.assertFalse(match.any())
+        self.assertTrue(match.any())
 
         transport_filter = next(
             checkbox
             for checkbox in app.checkbox
             if checkbox.label == "Strassen-/Bahnparzellen"
         )
-        transport_filter.uncheck().run()
+        transport_filter.check().run()
         visible = app.dataframe[0].value
         match = (
             (visible["Gemeinde"] == first["Gemeinde"])
             & (visible["Parzelle"].astype(str) == str(first["Parzelle"]))
         )
-        self.assertTrue(match.any())
+        self.assertFalse(match.any())
 
     def test_saved_contact_state_is_shown_and_hidden_leads_leave_the_hotlist(self):
         app = AppTest.from_file(

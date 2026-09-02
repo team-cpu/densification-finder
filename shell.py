@@ -49,17 +49,13 @@ import organisation
 #: CSS background. Serving the exact exported asset through Streamlit's static
 #: route keeps the artwork local and actually visible.
 
-#: Wordmark + canton. `#8a8a94` (muted) and the `#eaeaee` divider have no
-#: existing theme token to fall back on, so they are written here rather than
-#: sourced from `.streamlit/config.toml`; ink and page background are not
-#: repeated because every other span already inherits them from the theme.
-_BRAND_HTML = f"""\
+#: The exported Scope header contains only the mark and wordmark. The canton
+#: belongs to the filter panel below; repeating it here made the live header
+#: visibly wider than the supplied design.
+_BRAND_HTML = """\
 <div class="normiq-shell-brand" style="display:flex;align-items:center;gap:9px">
   <img class="normiq-shell-logo" src="app/static/scope-mark.svg" alt="" />
   <span style="font-size:13.5px;font-weight:600;letter-spacing:-0.01em">Scope</span>
-  <span style="font-size:12px;color:#8a8a94;padding-left:9px;border-left:1px solid #eaeaee">
-    Kanton Aargau
-  </span>
 </div>
 """
 
@@ -92,9 +88,9 @@ def _data_as_of_html(data_as_of: str) -> str:
     chip is a real `st.button` and can no longer share one `st.html` blob
     with it."""
     return f"""\
-<span class="normiq-shell-data" style="font-size:12px;color:#8a8a94;white-space:nowrap;
+<span class="normiq-shell-data" style="font-size:11.5px;color:#77777f;white-space:nowrap;
              display:flex;align-items:center;height:100%">
-  Datenstand {data_as_of}
+  Datenstand <span style="font-family:'IBM Plex Mono',monospace">{data_as_of}</span>
 </span>
 """
 
@@ -112,6 +108,7 @@ def _account_chip() -> None:
     if st.button(
         _ACCOUNT_LABEL,
         key="app_shell_account_open",
+        icon=":material/person:",
         help="Organisation öffnen (Vorschau).",
     ):
         st.session_state[organisation.DIALOG_OPEN] = True
@@ -227,6 +224,13 @@ _SHELL_CSS = """
 }
 
 .st-key-app_shell button[data-variant="segmented_control"] {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 11px;
+  border: 0 !important;
+  border-radius: 5px;
+  background: transparent;
+  color: #8a8a94;
   font-size: 12px;
   font-weight: 500;
 }
@@ -236,28 +240,51 @@ _SHELL_CSS = """
    pills read as flat/inactive vs. raised/active, not as unaccented/accented. */
 .st-key-app_shell button[data-variant="segmented_control"][data-selected]:not([data-disabled]) {
   background-color: #ffffff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .08), 0 0 0 1px rgba(0, 0, 0, .04);
+  color: #17171b;
+  box-shadow: 0 0 0 1px #e4e4ea;
 }
 
-/* The account chip: a plain `st.button` (`data-testid="stButton"`, distinct
-   from the `stButtonGroup` the pill track above uses, so this cannot bleed
-   onto the nav) restyled to read as the same rounded, muted chip the
-   prototype and the old inert markup both showed — clickable now, not just
-   chip-shaped. */
+/* The account action is intentionally flat in the export. It gains a quiet
+   background only on hover; the large pill used previously was not present
+   in the supplied design. */
+.st-key-app_shell_row > .st-key-app_shell_account_open {
+  margin-left: -10px;
+  padding-left: 18px;
+  border-left: 1px solid #e6e6ea;
+}
+
 .st-key-app_shell [data-testid="stButton"] button {
-  background: #f1f1f4;
-  border: 1px solid #e2e2e8;
-  border-radius: 999px;
-  color: #4a4a52;
-  font-size: 12.5px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #77777f;
+  font-size: 11.5px;
   font-weight: 500;
-  padding: 4px 14px;
 }
 
 .st-key-app_shell [data-testid="stButton"] button:hover {
-  background: #e9e9ee;
-  border-color: #d5d5dc;
-  color: #1c4e4a;
+  border: 0;
+  background: #f1f1f4;
+  color: #17171b;
+}
+
+/* The design leads the account control with an avatar. The live app has no
+   user identity to show, so use a neutral person glyph rather than inventing
+   initials or a name. */
+.st-key-app_shell_account_open button [data-testid="stIconMaterial"] {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #1c4e4a;
+  color: #fff;
+  font-size: 12px;
 }
 
 /* Mobile keeps the account action and all four destinations reachable without
@@ -286,6 +313,9 @@ _SHELL_CSS = """
 
   .st-key-app_shell_row > .st-key-app_shell_account_open {
     order: 2;
+    margin-left: 0;
+    padding-left: 0;
+    border-left: 0;
   }
 
   .st-key-app_shell_row > .st-key-acq_page {

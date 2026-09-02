@@ -128,6 +128,9 @@ class ShellHeaderRegressionTest(unittest.TestCase):
             any("normiq-shell-logo" in body for body in bodies),
             "the sanitiser-safe logo element did not render",
         )
+        brand = next(body for body in bodies if "normiq-shell-brand" in body)
+        self.assertNotIn("Kanton Aargau", brand)
+        self.assertIn("border: 0 !important", css)
 
     def test_the_data_as_of_banner_uses_the_real_run_date(self):
         """Not a placeholder: the seed database's own `runs.finished_at`
@@ -144,9 +147,9 @@ class ShellHeaderRegressionTest(unittest.TestCase):
         ).run()
         self.assertFalse(app.exception)
         bodies = self._html_bodies(app)
-        self.assertTrue(
-            any(f"Datenstand {expected_display}" in body for body in bodies)
-        )
+        banner = next(body for body in bodies if "normiq-shell-data" in body)
+        self.assertIn("Datenstand", banner)
+        self.assertIn(expected_display, banner)
 
 
     def test_the_header_names_no_person(self):
@@ -166,6 +169,11 @@ class ShellHeaderRegressionTest(unittest.TestCase):
         rendered = " ".join(node.proto.body for node in app.get("html"))
         rendered += " " + " ".join(b.label or "" for b in app.button)
         self.assertIn("Gemeinsamer Zugang", rendered)
+        account = next(
+            button for button in app.button
+            if button.label == "Gemeinsamer Zugang"
+        )
+        self.assertEqual(account.icon, ":material/person:")
         for invented in ("Brunner", "Hochbau"):
             self.assertNotIn(invented, rendered)
 

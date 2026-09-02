@@ -208,6 +208,40 @@ _SCREENING_CSS = """
   font-size: 12.5px;
 }
 
+/* BaseWeb's default fill is grey even when the surrounding filter card is
+   white. The supplied Scope design uses white number, text and select fields
+   with a thin neutral border, plus the green focus treatment. */
+.st-key-screening_filters [data-baseweb="input"],
+.st-key-screening_filters [data-baseweb="base-input"],
+.st-key-screening_filters input,
+.st-key-screening_filters [data-baseweb="select"] > div,
+.st-key-screening_filters .react-aria-ComboBox [role="group"],
+.st-key-screening_filters .react-aria-ComboBox [role="group"] > *,
+.st-key-screening_filters [data-testid="stNumberInputContainer"],
+.st-key-screening_filters [data-testid="stNumberInputContainer"] > *,
+.st-key-screening_filters [data-testid="stNumberInputContainer"] button,
+.st-key-screening_filters [data-testid="stTextInputRootElement"],
+.st-key-screening_filters [data-testid="stTextInputRootElement"] > * {
+  background: #fff !important;
+}
+
+.st-key-screening_filters [data-baseweb="input"],
+.st-key-screening_filters [data-baseweb="select"] > div,
+.st-key-screening_filters .react-aria-ComboBox [role="group"],
+.st-key-screening_filters [data-testid="stNumberInputContainer"],
+.st-key-screening_filters [data-testid="stTextInputRootElement"] {
+  border-color: #e0e0e6 !important;
+}
+
+.st-key-screening_filters [data-baseweb="input"]:focus-within,
+.st-key-screening_filters [data-baseweb="select"] > div:focus-within,
+.st-key-screening_filters .react-aria-ComboBox [role="group"]:focus-within,
+.st-key-screening_filters [data-testid="stNumberInputContainer"]:focus-within,
+.st-key-screening_filters [data-testid="stTextInputRootElement"]:focus-within {
+  border-color: #1c4e4a !important;
+  box-shadow: 0 0 0 3px #e2eceb !important;
+}
+
 .st-key-screening_filter_primary {
   padding-top: 7px;
   padding-bottom: 7px;
@@ -231,6 +265,39 @@ _SCREENING_CSS = """
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
+}
+
+/* The export keeps the exclusions as one compact, left-aligned group. Equal
+   Streamlit columns stretched them across the whole card and the help props
+   added icons that the design does not contain. */
+.st-key-screening_exclusion_options {
+  flex-wrap: wrap !important;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 8px 22px !important;
+}
+
+.st-key-screening_exclusion_options > [data-testid="stElementContainer"] {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0;
+}
+
+.st-key-screening_exclusion_options [data-testid="stCheckbox"] label {
+  align-items: center;
+}
+
+/* Streamlit offsets the checkbox square by ~2px to suit its default line
+   height. Scope's 11.5px labels use a tighter line height, so that offset made
+   the square visibly lower than the text. */
+.st-key-screening_exclusion_options [data-testid="stCheckbox"] label > div:first-of-type {
+  margin-top: 0;
+}
+
+/* The Claude export uses plain numeric fields. Keep keyboard entry and native
+   validation, but remove Streamlit's +/- steppers so the controls match it. */
+.st-key-screening_filters [data-testid="stNumberInputContainer"] > div:has(> [data-testid="stNumberInputStepDown"]) {
+  display: none !important;
 }
 
 .st-key-screening_reset button {
@@ -273,6 +340,20 @@ _SCREENING_CSS = """
 
 .st-key-screening_result_toolbar > [data-testid="stElementContainer"]:first-child {
   flex: 1 1 auto !important;
+}
+
+.st-key-screening_result_toolbar .react-aria-ComboBox [role="group"],
+.st-key-screening_result_toolbar .react-aria-ComboBox [role="group"] > * {
+  background: #fff !important;
+}
+
+.st-key-screening_result_toolbar .react-aria-ComboBox [role="group"] {
+  border-color: #e0e0e6 !important;
+}
+
+.st-key-screening_result_toolbar .react-aria-ComboBox [role="group"]:focus-within {
+  border-color: #1c4e4a !important;
+  box-shadow: 0 0 0 3px #e2eceb !important;
 }
 
 .screening-result-summary {
@@ -823,33 +904,27 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     flag_area.html(
         '<span class="screening-exclusion-label">Ausschliessen</span>'
     )
-    c7, c8, c9 = flag_area.columns(3)
-    hide_design_plan = c7.checkbox(
-        "Gestaltungsplan",
-        key="screening_hide_design_plan",
-        help="Wo ein rechtsgültiger Gestaltungsplan gilt, kann er eigene "
-             "Nutzungsziffern festlegen — die Ausnützungsziffer der Grundzone ist "
-             "dort nicht zwingend massgebend.",
-        **_initial_widget_value("screening_hide_design_plan", value=False),
-    )
-    hide_inventory = c8.checkbox(
-        "Denkmalschutz / Inventar",
-        key="screening_hide_inventory",
-        help="Bauinventar und Kurzinventar verbieten einen Ersatzneubau nicht, "
-             "erschweren ihn aber. Geschützte Gebäude sind ohnehin ausgeschlossen.",
-        **_initial_widget_value("screening_hide_inventory", value=False),
-    )
-    hide_transport = c9.checkbox(
-        "Strassen-/Bahnparzellen",
-        key="screening_hide_transport",
-        help=(
-            "Blendet Parzellen aus, deren Fläche gemäss amtlicher Vermessung zu "
-            f"mindestens {LC.MIN_TRANSPORT_SHARE:.0%} aus Strasse/Weg, Trottoir, "
-            "Verkehrsinsel oder Bahn besteht. Einfahrten auf normalen Grundstücken "
-            "bleiben dadurch sichtbar. Wirkt nach einer lokalen Neuberechnung."
-        ),
-        **_initial_widget_value("screening_hide_transport", value=True),
-    )
+    with flag_area.container(
+        key="screening_exclusion_options",
+        horizontal=True,
+        vertical_alignment="center",
+        gap="medium",
+    ):
+        hide_design_plan = st.checkbox(
+            "Gestaltungsplan",
+            key="screening_hide_design_plan",
+            **_initial_widget_value("screening_hide_design_plan", value=False),
+        )
+        hide_inventory = st.checkbox(
+            "Denkmalschutz / Inventar",
+            key="screening_hide_inventory",
+            **_initial_widget_value("screening_hide_inventory", value=True),
+        )
+        hide_transport = st.checkbox(
+            "Strassen-/Bahnparzellen",
+            key="screening_hide_transport",
+            **_initial_widget_value("screening_hide_transport", value=False),
+        )
     query = query_area.text_input(
         "Parzellen-Nr. suchen",
         key="screening_query",
@@ -875,12 +950,21 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         # matches that happen to survive the ranking of everything else.
         text = (query or "").strip().lower()
         if text:
+            parcel_numbers = visible["parcel"].astype(str).str.lower()
             haystack = (
-                visible["parcel"].astype(str).str.lower()
+                parcel_numbers
                 + " " + visible["address"].fillna("").str.lower()
                 + " " + visible["municipality"].fillna("").str.lower()
             )
-            visible = visible[haystack.str.contains(text, regex=False)]
+            exact_parcel = parcel_numbers.eq(text)
+            # A typed parcel number is an identifier, not a fuzzy term. Prefer
+            # exact parcel matches when they exist; otherwise keep the broader
+            # address/municipality search promised by the field's help text.
+            visible = visible[
+                exact_parcel
+                if exact_parcel.any()
+                else haystack.str.contains(text, regex=False)
+            ]
         out = visible[
             (visible["delta"] >= min_delta)
             & (visible["area"].between(area_min, area_upper))
