@@ -53,9 +53,55 @@ CONTACT_OPEN = "acquisition_contact_open"
 #: labels break rather than just after.
 _BOARD_CSS = """
 <style>
+.st-key-acq_board { margin-top: 18px; }
+.st-key-acq_board > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] {
+  align-items: flex-start;
+}
+[class*="st-key-acq_stage_"] {
+  padding: 9px;
+  border: 1px solid #eaeaee;
+  border-radius: 9px;
+  background: #f7f7f9;
+}
+.acq-stage-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: #4a4a52;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.acq-stage-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #e9e9ed;
+  color: #77777f;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  text-align: center;
+}
+[class*="st-key-acq_card_"] {
+  margin-bottom: 8px;
+  padding: 10px !important;
+  border-color: #e4e4e9 !important;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(23,23,27,.03);
+}
+[class*="st-key-acq_card_"] [data-testid="stCaptionContainer"] {
+  font-size: 11px;
+}
 @media (max-width: 1150px) {
   .st-key-acq_board [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
   .st-key-acq_board [data-testid="stColumn"] { min-width: 260px; }
+  .st-key-acq_board [class*="st-key-acq_card_"] [data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap;
+  }
+  .st-key-acq_board [class*="st-key-acq_card_"] [data-testid="stColumn"] {
+    min-width: 0;
+  }
 }
 </style>
 """
@@ -233,11 +279,10 @@ def render(parcels, decisions, db, today, price_of):
     _render_hidden(parcels, decisions, db)
 
 
-#: Column proportions for a follow-up row: due date, address, municipality ·
-#: parcel, owner, stage, next step, then the two action buttons. Kept next to
-#: `_render_due_row` rather than inlined so the header row built from the
-#: same widths cannot silently drift out of alignment with the rows below it.
-_DUE_ROW_WIDTHS = [1.1, 2, 2, 1.9, 1.3, 2.2, 1, 1]
+#: Five compact cells from the design: date; parcel identity; owner plus next
+#: step; stage; actions. Related fields stay together instead of each taking a
+#: separate Streamlit column and squeezing both action labels into two lines.
+_DUE_ROW_WIDTHS = [1.05, 2.3, 2.6, 1.25, 1.8]
 
 #: Matches the overdue tint the dataframe `Styler` used to apply to the
 #: `Wiedervorlage` cell — carried over verbatim so the list still tells late
@@ -285,10 +330,30 @@ _ACQUISITION_INTRO = """
 _DUE_CSS = """
 <style>
 .acq-mobile-label { display: none; }
+.st-key-acq_due {
+  padding: 0 14px 4px;
+  border: 1px solid #eaeaee;
+  border-radius: 9px;
+  background: #fff;
+  overflow: hidden;
+}
+.st-key-acq_due_title {
+  margin: 0 -14px;
+  padding: 9px 14px;
+  border-bottom: 1px solid #f0f0f3;
+  background: #fbfbfc;
+}
+.st-key-acq_due_title [data-testid="stHorizontalBlock"] { align-items: center; }
+.st-key-acq_due_title [data-testid="stCaptionContainer"] { text-align: right; }
+[class*="st-key-acq_due_row_"] {
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f3;
+}
+[class*="st-key-acq_due_row_"]:last-child { border-bottom: 0; }
+.acq-due-primary { font-size: 12px; font-weight: 600; color: #2f2f37; }
+.acq-due-secondary { margin-top: 2px; font-size: 10.5px; color: #8a8a94; }
 
 @media (max-width: 760px) {
-  .st-key-acq_due_header { display: none; }
-
   [class*="st-key-acq_due_row_"] {
     padding: 12px;
     margin-bottom: 10px;
@@ -309,7 +374,8 @@ _DUE_CSS = """
   }
 
   [class*="st-key-acq_due_row_"] [data-testid="stColumn"]:nth-child(2),
-  [class*="st-key-acq_due_row_"] [data-testid="stColumn"]:nth-child(6) {
+  [class*="st-key-acq_due_row_"] [data-testid="stColumn"]:nth-child(3),
+  [class*="st-key-acq_due_row_"] [data-testid="stColumn"]:nth-child(5) {
     grid-column: 1 / -1;
   }
 
@@ -350,19 +416,12 @@ def _render_overdue(shortlist, today):
     overdue_count = len(overdue(shortlist, today))
     with st.container(key="acq_due"):
         st.html(_DUE_CSS)
-        st.markdown(f"**Fällige Wiedervorlagen** · {overdue_count} offen")
-
-        with st.container(key="acq_due_header"):
-            headers = st.columns(_DUE_ROW_WIDTHS)
-            for column, label in zip(
-                headers,
-                (
-                    "Wiedervorlage", "Adresse", "Gemeinde · Parzelle",
-                    "Eigentümerschaft", "Stufe", "Nächster Schritt", "", "",
-                ),
-            ):
-                if label:
-                    column.caption(label)
+        with st.container(key="acq_due_title"):
+            due_heading, due_today = st.columns([4, 1])
+            due_heading.markdown(
+                f"**Fällige Wiedervorlagen** · {overdue_count} offen"
+            )
+            due_today.caption(f"Heute · {escape(str(today))}")
 
         # `due_items` orders overdue leads first, so the first `overdue_count`
         # positions are exactly the overdue ones — a position check against that
@@ -380,10 +439,7 @@ def _render_due_row(row, is_overdue):
 
         for column, label in zip(
             columns,
-            (
-                "Wiedervorlage", "Adresse", "Gemeinde · Parzelle",
-                "Eigentümerschaft", "Stufe", "Nächster Schritt", "", "",
-            ),
+            ("Wiedervorlage", "Parzelle", "Kontakt", "Stufe", "Aktionen"),
         ):
             if label:
                 column.html(f'<span class="acq-mobile-label">{label}</span>')
@@ -401,19 +457,32 @@ def _render_due_row(row, is_overdue):
             )
         else:
             columns[0].write(row["due_date"])
-        columns[1].write(_or_dash(row["address"]))
-        columns[2].write(f"{row['municipality']} · {row['parcel']}")
-        columns[3].write(_or_dash(row["owner_name"]))
+        columns[1].markdown(
+            '<div class="acq-due-primary">'
+            + escape(_or_dash(row["address"]))
+            + '</div><div class="acq-due-secondary">'
+            + escape(f"{row['municipality']} · Parzelle {row['parcel']}")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+        columns[2].markdown(
+            '<div class="acq-due-primary">'
+            + escape(_or_dash(row["owner_name"]))
+            + '</div><div class="acq-due-secondary">'
+            + escape(_or_dash(row["next_step"]))
+            + "</div>",
+            unsafe_allow_html=True,
+        )
         stage = (
             row["contact_status"]
             if row["contact_status"] in WF.CONTACT_STATUS_LABELS
             else WF.DEFAULT_CONTACT_STATUS
         )
-        columns[4].write(WF.CONTACT_STATUS_LABELS[stage])
-        columns[5].write(_or_dash(row["next_step"]))
-        with columns[6]:
+        columns[3].write(WF.CONTACT_STATUS_LABELS[stage])
+        action_owner, action_analyse = columns[4].columns(2)
+        with action_owner:
             _eigentuemer_button(key, f"due_contact_{slug}")
-        with columns[7]:
+        with action_analyse:
             _analyse_button(row, f"due_open_{slug}")
 
 
@@ -428,9 +497,17 @@ def _render_board(shortlist, db, price_of):
         for column, (stage, label) in zip(columns, WF.CONTACT_STATUS_LABELS.items()):
             frame = stages[stage]
             with column:
-                st.markdown(f"**{label}** · {len(frame)}")
-                for _, row in frame.iterrows():
-                    _render_card(row, db, price_of)
+                with st.container(key=f"acq_stage_{stage}"):
+                    st.markdown(
+                        '<div class="acq-stage-heading"><span>'
+                        + escape(label)
+                        + '</span><span class="acq-stage-count">'
+                        + str(len(frame))
+                        + "</span></div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _, row in frame.iterrows():
+                        _render_card(row, db, price_of)
 
     _render_open_contact_dialog(shortlist, db)
 
@@ -487,7 +564,7 @@ def _render_card(row, db, price_of):
         else WF.DEFAULT_CONTACT_STATUS
     )
 
-    with st.container(border=True):
+    with st.container(key=f"acq_card_{slug}", border=True):
         st.markdown(f"**{_or_dash(row['address'])}**")
         st.caption(f"{row['municipality']} · {row['parcel']}")
         st.text(f"Potenzial  {_swiss(row['delta'])} m²")
@@ -513,8 +590,11 @@ def _render_card(row, db, price_of):
             WF.update([key], contact_status=stage, db=db)
             st.rerun()
 
-        _analyse_button(row, f"open_{slug}")
-        _eigentuemer_button(key, f"contact_{slug}")
+        analyse_action, owner_action = st.columns(2)
+        with analyse_action:
+            _analyse_button(row, f"open_{slug}")
+        with owner_action:
+            _eigentuemer_button(key, f"contact_{slug}")
 
 
 def _analyse_button(row, widget_key):

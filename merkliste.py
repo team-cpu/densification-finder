@@ -21,6 +21,42 @@ import workflow as WF
 IN_DIALOG = ("contacted", "in_discussion", "meeting_scheduled")
 
 
+_PAGE_CSS = """
+<style>
+.st-key-merkliste_header { margin: 10px 0 20px; }
+.st-key-merkliste_header [data-testid="stHeadingWithActionElements"] h3 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -.015em;
+}
+.st-key-merkliste_header_actions [data-testid="stHorizontalBlock"] {
+  justify-content: flex-end;
+}
+.st-key-merkliste_header_actions button { white-space: nowrap; }
+.st-key-merkliste_table {
+  margin-top: 14px;
+  padding: 0;
+  border: 1px solid #eaeaee;
+  border-radius: 9px;
+  background: #fff;
+  overflow: hidden;
+}
+.st-key-merkliste_row_actions {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #eaeaee;
+  border-radius: 9px;
+  background: #fff;
+}
+@media (max-width: 760px) {
+  .st-key-merkliste_header [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+  .st-key-merkliste_header [data-testid="stColumn"] { min-width: 100%; }
+}
+</style>
+"""
+
+
 _METRICS_CSS = """
 <style>
 .st-key-merkliste_metrics [data-testid="stHorizontalBlock"] {
@@ -87,16 +123,31 @@ def summary(leads: pd.DataFrame, land_value) -> dict:
 
 def page(parcels, decisions, db, price_of):
     """Summary tiles, the shortlist, and the way on to the board."""
-    st.html(
-        '<div style="margin:10px 0 7px;color:#9a9aa6;font-size:10px;'
-        'font-weight:600;letter-spacing:.1em;text-transform:uppercase">'
-        'Merkliste</div>'
-    )
-    st.subheader("Gemerkte Parzellen")
-    st.caption(
-        "Gemerkte Parzellen. Kontaktstand und Wiedervorlagen werden in der "
-        "Akquisition geführt; hier steht, was insgesamt auf der Liste liegt."
-    )
+    st.html(_PAGE_CSS)
+    with st.container(key="merkliste_header"):
+        header_copy, header_action_column = st.columns(
+            [5, 3], vertical_alignment="bottom"
+        )
+        with header_copy:
+            st.html(
+                '<div style="margin:0 0 7px;color:#9a9aa6;font-size:10px;'
+                'font-weight:600;letter-spacing:.1em;text-transform:uppercase">'
+                'Merkliste</div>'
+            )
+            st.subheader("Gemerkte Parzellen")
+            st.caption(
+                "Gemerkte Parzellen. Kontaktstand und Wiedervorlagen werden in der "
+                "Akquisition geführt; hier steht, was insgesamt auf der Liste liegt."
+            )
+        with header_action_column.container(
+            key="merkliste_header_actions", horizontal=True
+        ):
+            if st.button("Weitere Parzellen suchen", width="stretch"):
+                navigation.go_to("Screening")
+                st.rerun()
+            if st.button("Zur Akquisition", width="stretch"):
+                navigation.go_to("Akquisition")
+                st.rerun()
 
     leads = ACQ.leads(parcels, decisions, "saved")
     if leads.empty:
@@ -148,33 +199,34 @@ def page(parcels, decisions, db, price_of):
         }
     )
 
-    with st.form("merkliste_form"):
-        edited = st.data_editor(
-            table,
-            key="merkliste_editor",
-            width="stretch",
-            hide_index=True,
-            column_order=(
-                "Adresse", "Gemeinde", "Potenzial m²", "Landwert CHF",
-                "Kontaktstand", "Letzter Kontakt", "Eigentümerschaft / Notiz",
-                "Entfernen",
-            ),
-            disabled=(
-                "_bfs", "_parcel", "Adresse", "Gemeinde", "Potenzial m²",
-                "Landwert CHF", "Letzter Kontakt", "Eigentümerschaft / Notiz",
-            ),
-            column_config={
-                "Potenzial m²": st.column_config.NumberColumn(format="%.0f"),
-                "Landwert CHF": st.column_config.NumberColumn(format="%.0f"),
-                "Kontaktstand": st.column_config.SelectboxColumn(
-                    options=list(WF.CONTACT_STATUS_LABELS.values()),
-                    required=True,
-                    width="medium",
+    with st.container(key="merkliste_table"):
+        with st.form("merkliste_form"):
+            edited = st.data_editor(
+                table,
+                key="merkliste_editor",
+                width="stretch",
+                hide_index=True,
+                column_order=(
+                    "Adresse", "Gemeinde", "Potenzial m²", "Landwert CHF",
+                    "Kontaktstand", "Letzter Kontakt", "Eigentümerschaft / Notiz",
+                    "Entfernen",
                 ),
-                "Entfernen": st.column_config.CheckboxColumn(width="small"),
-            },
-        )
-        store = st.form_submit_button("Änderungen speichern")
+                disabled=(
+                    "_bfs", "_parcel", "Adresse", "Gemeinde", "Potenzial m²",
+                    "Landwert CHF", "Letzter Kontakt", "Eigentümerschaft / Notiz",
+                ),
+                column_config={
+                    "Potenzial m²": st.column_config.NumberColumn(format="%.0f"),
+                    "Landwert CHF": st.column_config.NumberColumn(format="%.0f"),
+                    "Kontaktstand": st.column_config.SelectboxColumn(
+                        options=list(WF.CONTACT_STATUS_LABELS.values()),
+                        required=True,
+                        width="medium",
+                    ),
+                    "Entfernen": st.column_config.CheckboxColumn(width="small"),
+                },
+            )
+            store = st.form_submit_button("Änderungen speichern")
 
     if store:
         codes = {label: code for code, label in WF.CONTACT_STATUS_LABELS.items()}
@@ -187,20 +239,26 @@ def page(parcels, decisions, db, price_of):
         st.toast("Merkliste gespeichert.")
         st.rerun()
 
-    left, right = st.columns(2)
-    if left.button("Zur Akquisition", width="stretch"):
-        navigation.go_to("Akquisition")
-        st.rerun()
-    chosen = right.selectbox(
-        "Parzelle analysieren",
-        list(ordered.index),
-        format_func=lambda i: (
-            f"{ACQ._or_dash(ordered.loc[i, 'address'])} · "
-            f"{ordered.loc[i, 'municipality']}"
-        ),
-        key="merkliste_analyse_pick",
-    )
-    if right.button("Analyse öffnen", width="stretch"):
-        detail.open_parcel(detail.parcel_id(ordered.loc[chosen]))
-        navigation.go_to("Analyse")
-        st.rerun()
+    with st.container(key="merkliste_row_actions"):
+        picker, owner_action, analyse_action = st.columns(
+            [4, 1, 1], vertical_alignment="bottom"
+        )
+        chosen = picker.selectbox(
+            "Parzellenaktion",
+            list(ordered.index),
+            format_func=lambda i: (
+                f"{ACQ._or_dash(ordered.loc[i, 'address'])} · "
+                f"{ordered.loc[i, 'municipality']} · {ordered.loc[i, 'parcel']}"
+            ),
+            key="merkliste_analyse_pick",
+        )
+        selected_row = ordered.loc[chosen]
+        selected_key = int(selected_row["bfs"]), str(selected_row["parcel"])
+        with owner_action:
+            ACQ._eigentuemer_button(selected_key, "merkliste_owner_open")
+        if analyse_action.button("Analyse", width="stretch"):
+            detail.open_parcel(detail.parcel_id(selected_row))
+            navigation.go_to("Analyse")
+            st.rerun()
+
+    ACQ._render_open_contact_dialog(leads, db)

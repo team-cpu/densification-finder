@@ -401,6 +401,16 @@ def forget(pid):
 #: background whichever theme is running.
 PAGE_CSS = """
 <style>
+  .st-key-detail_header { margin:10px 0 16px; }
+  .detail-page-kicker { margin-bottom:7px; color:#9a9aa6; font-size:10px;
+      font-weight:600; letter-spacing:.1em; text-transform:uppercase; }
+  .st-key-detail_header [data-testid="stHeadingWithActionElements"] h1 {
+      margin:0; font-size:21px; line-height:1.25; font-weight:600;
+      letter-spacing:-.015em; }
+  .st-key-detail_header [data-testid="stCaptionContainer"] { margin-top:4px; }
+  .st-key-detail_actions [data-testid="stHorizontalBlock"] { align-items:end; }
+  .st-key-detail_actions button { white-space:nowrap; }
+
   .st-key-result_bar { padding:.6rem 1rem .1rem; margin-bottom:.4rem;
       border-radius:8px; border:1px solid rgba(128,128,128,.38);
       background:rgba(127,127,127,.06);
@@ -412,6 +422,10 @@ PAGE_CSS = """
   .st-key-inputs_b, .st-key-inputs_c { padding:.7rem 1rem .1rem;
       margin-bottom:.3rem; border-left:3px solid rgba(255,75,75,.55);
       border-radius:0 8px 8px 0; background:rgba(127,127,127,.09); }
+
+  .st-key-facts_a { padding:.7rem 1rem .1rem; margin-bottom:.3rem;
+      border:1px solid rgba(128,128,128,.28); border-radius:8px;
+      background:rgba(127,127,127,.035); }
 
   /* The data sheet has to stay inside its half. A markdown table sizes itself
      to its content, so from about 1400px down block A ran straight over block
@@ -442,6 +456,11 @@ PAGE_CSS = """
   @media (max-width: 1000px) {
     [class*="st-key-facts_"] td, [class*="st-key-facts_"] th {
         overflow-wrap:anywhere; }
+  }
+  @media (max-width: 760px) {
+    .st-key-detail_header [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
+    .st-key-detail_header [data-testid="stColumn"] { min-width:100%; }
+    .st-key-detail_actions [data-testid="stColumn"] { min-width:0; }
   }
 </style>
 """
@@ -640,27 +659,18 @@ def page(parcels, cache, price_of, db=None):
     pid = selected()
     row = find(parcels, pid)
 
-    # Back on the left, export on the right — the two things done to the page
-    # as a whole, at the top where document actions are looked for. The export
-    # column is written at the end of this function, once there is a document
-    # to hand over; a column keeps its place on the page whenever it is filled.
-    top = st.columns([2, 5, 2], vertical_alignment="center")
-    if top[0].button("← Zurück zur Liste", width="stretch"):
-        close()
-        # Back to the list the reader came from. Analyse is now a page
-        # rather than a view that replaced the list, so dropping the parcel
-        # key alone would leave them here looking at an empty state.
-        navigation.go_back()
-        st.rerun()
-
     if row is None:
+        if st.button("← Zurück zur Liste"):
+            close()
+            navigation.go_back()
+            st.rerun()
         st.warning(
             f"Parzelle {pid} steht nicht mehr in der Ergebnistabelle — "
             "vermutlich wurde inzwischen neu gerechnet."
         )
         st.stop()
 
-    # Merkliste, in the row's middle column — the other thing done to the page
+    # Merkliste, in the header action group — the other thing done to the page
     # as a whole, next to leaving it and exporting it. Reading a parcel's
     # analysis and deciding it is worth pursuing used to mean navigating back
     # to Screening, finding the row again, and ticking it there; this is that
@@ -670,24 +680,40 @@ def page(parcels, cache, price_of, db=None):
     # clicking it.
     key = (int(row["bfs"]), row["parcel"])
     db_path = db if db is not None else paths.DB
-    if _on_merkliste(db_path, *key):
-        if top[1].button("✓ Auf der Merkliste — entfernen", width="stretch"):
-            WF.set_saved([key], False, db_path)
-            st.toast("Von der Merkliste entfernt.")
-            st.rerun()
-    elif top[1].button("Auf Merkliste", width="stretch", type="primary"):
-        WF.set_saved([key], True, db_path)
-        st.toast("Auf die Merkliste gesetzt.")
-        st.rerun()
-
     st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
     address = _text(row.get("address")) or f"Parzelle {row['parcel']}"
-    st.title(address)
-    st.caption(
-        f"{row['municipality']} · Parzelle {row['parcel']} · "
-        f"{_text(row.get('zone')) or 'ohne Zone'}"
-    )
+    with st.container(key="detail_header"):
+        heading, action_column = st.columns([5, 4], vertical_alignment="bottom")
+        with heading:
+            st.html('<div class="detail-page-kicker">Analyse</div>')
+            st.title(address)
+            st.caption(
+                f"{row['municipality']} · Parzelle {row['parcel']} · "
+                f"{_text(row.get('zone')) or 'ohne Zone'}"
+            )
+        with action_column.container(key="detail_actions"):
+            back_action, saved_action, pdf_action = st.columns([1.1, 1.8, 1.2])
+            if back_action.button("← Zurück", width="stretch"):
+                close()
+                # Back to the list the reader came from. Analyse is now a page
+                # rather than a view that replaced the list, so dropping the parcel
+                # key alone would leave them here looking at an empty state.
+                navigation.go_back()
+                st.rerun()
+            if _on_merkliste(db_path, *key):
+                if saved_action.button(
+                    "✓ Merkliste — entfernen", width="stretch"
+                ):
+                    WF.set_saved([key], False, db_path)
+                    st.toast("Von der Merkliste entfernt.")
+                    st.rerun()
+            elif saved_action.button(
+                "Auf Merkliste", width="stretch", type="primary"
+            ):
+                WF.set_saved([key], True, db_path)
+                st.toast("Auf die Merkliste gesetzt.")
+                st.rerun()
 
     price_ref = price_of(row)
     extract = extract_of(row, cache)
@@ -1058,12 +1084,11 @@ def page(parcels, cache, price_of, db=None):
         steps=steps,
         notes=["Annahmen und Quellen:"] + notes,
     )
-    top[2].download_button(
+    pdf_action.download_button(
         "Als PDF exportieren",
         data=document,
         file_name=f"parzelle-{row['municipality']}-{row['parcel']}.pdf".replace(" ", "-"),
         mime="application/pdf",
-        type="primary",
         width="stretch",
         help="Alle drei Blöcke samt vollständigem Rechenweg und Quellen.",
     )

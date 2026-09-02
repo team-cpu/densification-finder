@@ -145,6 +145,16 @@ _SHELL_CSS = """
   border-bottom: 1px solid #eaeaee;
 }
 
+/* The product has its own complete application header. Streamlit's floating
+   development toolbar otherwise sits above the first 52px of the document and
+   covers that header exactly: the wordmark and navigation are present in the
+   accessibility tree but invisible on screen. Remove the redundant chrome so
+   the product shell owns the top edge, as it does in the supplied design. */
+[data-testid="stHeader"],
+[data-testid="stToolbar"] {
+  display: none;
+}
+
 /* Streamlit's default block container reserves 84px above the first element
    and limits content to 80rem. The prototype starts after a compact 16px inset
    and permits a 1560px canvas; keeping the default made the new shell look like

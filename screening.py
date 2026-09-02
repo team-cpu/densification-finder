@@ -143,16 +143,70 @@ _SCREENING_CSS = """
   text-wrap: pretty;
 }
 
+.st-key-screening_header {
+  margin: 10px 0 20px;
+}
+
+.st-key-screening_header .screening-page-intro {
+  margin: 0;
+}
+
+.st-key-screening_header_actions [data-testid="stHorizontalBlock"] {
+  justify-content: flex-end;
+  align-items: end;
+}
+
+.st-key-screening_header_actions [data-testid="stBaseButton-secondary"],
+.st-key-screening_header_actions [data-testid="stDownloadButton"] button {
+  white-space: nowrap;
+}
+
 .st-key-screening_filters {
   margin-bottom: 16px;
-  padding: 14px 16px 16px;
   border: 1px solid #eaeaee;
   border-radius: 9px;
   background: #fff;
+  overflow: hidden;
 }
 
 .st-key-screening_filters [data-testid="stHorizontalBlock"] {
   align-items: end;
+}
+
+.st-key-screening_filter_header {
+  padding: 8px 16px;
+  border-bottom: 1px solid #f0f0f3;
+}
+
+.screening-filter-label {
+  color: #9a9aa6;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.st-key-screening_filter_primary,
+.st-key-screening_filter_numeric,
+.st-key-screening_filter_flags {
+  padding-inline: 16px;
+}
+
+.st-key-screening_filter_primary {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.st-key-screening_filter_numeric {
+  padding-top: 14px;
+  padding-bottom: 14px;
+  border-top: 1px solid #f2f2f5;
+}
+
+.st-key-screening_filter_flags {
+  padding-top: 10px;
+  padding-bottom: 12px;
+  border-top: 1px solid #f2f2f5;
 }
 
 @media (max-width: 760px) {
@@ -166,7 +220,21 @@ _SCREENING_CSS = """
   }
 
   .st-key-screening_filters {
-    padding: 12px;
+    overflow: visible;
+  }
+
+  .st-key-screening_header [data-testid="stHorizontalBlock"] {
+    flex-wrap: wrap;
+  }
+
+  .st-key-screening_header [data-testid="stColumn"] {
+    min-width: 100%;
+  }
+
+  .st-key-screening_filter_primary,
+  .st-key-screening_filter_numeric,
+  .st-key-screening_filter_flags {
+    padding-inline: 12px;
   }
 }
 </style>
@@ -363,7 +431,17 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     _apply_pending_search(parcels)
 
     st.html(_SCREENING_CSS)
-    st.html(_SCREENING_INTRO)
+    with st.container(key="screening_header"):
+        header_copy, header_action_column = st.columns(
+            [5, 4], vertical_alignment="bottom"
+        )
+        header_copy.html(_SCREENING_INTRO)
+        # Filled once `view` exists. A placeholder keeps data-dependent actions
+        # beside the title instead of forcing them below the filter/result
+        # summary where the prototype never places page-level actions.
+        header_actions = header_action_column.container(
+            key="screening_header_actions", horizontal=True
+        )
 
     workflow_by_key = {
         (int(row.bfs), str(row.parcel)): row
@@ -374,16 +452,22 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     }
 
     # ── controls ────────────────────────────────────────────────────────────────
-    # The search and the reset sit above the filter grid rather than inside it:
-    # neither narrows the result set the way the filters below do — one widens
-    # what's easy to find, the other clears everything at once.
+    # Build the visual slots first so the query can still be instantiated before
+    # the reset button (the reset regression test depends on that lifecycle)
+    # while appearing in the compact FILTER header from the design.
     filter_box = st.container(key="screening_filters")
-    query_col, reset_col = filter_box.columns([5, 1])
+    filter_header = filter_box.container(key="screening_filter_header")
+    label_col, query_col, reset_col = filter_header.columns([1, 4, 1])
+    primary_box = filter_box.container(key="screening_filter_primary")
+    numeric_box = filter_box.container(key="screening_filter_numeric")
+    flags_box = filter_box.container(key="screening_filter_flags")
+    label_col.html('<span class="screening-filter-label">Filter</span>')
     query = query_col.text_input(
         "Parzellen-Nr. suchen",
         key="screening_query",
         placeholder="z. B. 1284 oder Seestrasse",
         help="Sucht in Parzellennummer, Adresse und Gemeinde.",
+        label_visibility="collapsed",
     )
     if reset_col.button("Zurücksetzen", key="screening_reset"):
         for key in FILTER_KEYS:
@@ -394,8 +478,8 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     # seven-column strip. Keep the widget creation order below unchanged — the
     # tests and saved-search state both rely on it — while assigning the
     # columns to the same 3 + 4 visual grouping as the design.
-    primary = filter_box.columns(3)
-    numeric = filter_box.columns([1, 1, 2, 1])
+    primary = primary_box.columns(3)
+    numeric = numeric_box.columns([1, 1, 2, 1])
     c0, c4, c5 = primary
     c1, c2, c3, c6 = numeric
     canton = c0.selectbox(
@@ -477,7 +561,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     #: deployment, which carries the results but not the ~600 MB of source geodata.
     _full_run = _ingest.geodata_available()
 
-    c7, c8, c9, c10 = filter_box.columns([2, 2, 2, 1])
+    c7, c8, c9, c10 = flags_box.columns([2, 2, 2, 1])
     hide_design_plan = c7.checkbox(
         "Parzellen mit Gestaltungsplan ausblenden",
         key="screening_hide_design_plan",
@@ -588,34 +672,41 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     known = shortlist["egrid"].isin(with_extract(cache))
     pending = shortlist.loc[~known & shortlist["egrid"].notna() & (shortlist["egrid"] != ""), "egrid"]
 
-    run_col, note_col = st.columns([1, 4])
-    run = run_col.button(
-        "▶ Neu berechnen" if _full_run else "▶ ÖREB prüfen",
-        type="primary",
-        # The label and the help have to agree with what this environment can
-        # actually do. Deployed there is no geodata, so promising a recompute would
-        # be a lie the user only discovers by pressing the button.
-        help=(
-            f"Rechnet die Filterkaskade für alle {len(runs)} Gemeinden neu und fragt "
-            f"anschliessend den ÖREB-Kataster für die Shortlist ab. Rund zwei "
-            f"Minuten. Die Parzellengeometrien werden dabei nicht neu vom WFS "
-            f"geladen — dafür data/parcels_*.xml löschen."
-            if _full_run else
-            "Fragt den ÖREB-Kataster für die Shortlist ab. Die Kaskade kann hier "
-            "nicht neu gerechnet werden — dafür fehlen die Geodaten; das geschieht "
-            "lokal und wird mitdeployt."
-        ),
-    )
-    retry = int(shortlist["egrid"].isin(failed_egrids(cache)).sum())
-    if pending.empty:
-        note_col.success(f"Shortlist vollständig ÖREB-geprüft ({len(shortlist)} Parzellen).")
-    else:
-        note_col.info(
-            f"{len(shortlist) - len(pending)} von {len(shortlist)} der Shortlist geprüft. "
-            + (f"{retry} Abfrage(n) sind fehlgeschlagen und werden beim nächsten Lauf "
-               "erneut versucht. " if retry else "")
-            + "Ungeprüfte Parzellen werden angezeigt, aber noch nicht ausgeschlossen."
+    # Refreshing source data is an occasional maintenance action, not part of
+    # scanning every result set. Keeping it available in a collapsed section
+    # removes a full status row from the primary workflow without changing what
+    # the button does or hiding failures from AppTest/accessibility clients.
+    with st.expander("Daten aktualisieren", expanded=False):
+        run_col, note_col = st.columns([1, 4])
+        run = run_col.button(
+            "▶ Neu berechnen" if _full_run else "▶ ÖREB prüfen",
+            type="primary",
+            # The label and the help have to agree with what this environment can
+            # actually do. Deployed there is no geodata, so promising a recompute would
+            # be a lie the user only discovers by pressing the button.
+            help=(
+                f"Rechnet die Filterkaskade für alle {len(runs)} Gemeinden neu und fragt "
+                f"anschliessend den ÖREB-Kataster für die Shortlist ab. Rund zwei "
+                f"Minuten. Die Parzellengeometrien werden dabei nicht neu vom WFS "
+                f"geladen — dafür data/parcels_*.xml löschen."
+                if _full_run else
+                "Fragt den ÖREB-Kataster für die Shortlist ab. Die Kaskade kann hier "
+                "nicht neu gerechnet werden — dafür fehlen die Geodaten; das geschieht "
+                "lokal und wird mitdeployt."
+            ),
         )
+        retry = int(shortlist["egrid"].isin(failed_egrids(cache)).sum())
+        if pending.empty:
+            note_col.success(
+                f"Shortlist vollständig ÖREB-geprüft ({len(shortlist)} Parzellen)."
+            )
+        else:
+            note_col.info(
+                f"{len(shortlist) - len(pending)} von {len(shortlist)} der Shortlist geprüft. "
+                + (f"{retry} Abfrage(n) sind fehlgeschlagen und werden beim nächsten Lauf "
+                   "erneut versucht. " if retry else "")
+                + "Ungeprüfte Parzellen werden angezeigt, aber noch nicht ausgeschlossen."
+            )
 
     if run:
         import ingest
@@ -700,24 +791,24 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         if reasons else ""
     )
 
-    st.caption(
-        f"{len(runs)} von {MUNICIPALITIES_AG} Gemeinden ausgewertet · {assessed:,} Parzellen "
-        f"beurteilt · {no_az:,} nicht beurteilbar (keine Bauzone mit verwertbarer "
-        f"Nutzungsziffer).{reason_text} "
-        f"{missing} Gemeinden publizieren gar keine Nutzungsziffer und fehlen deshalb "
-        f"vollständig. {len(df):,} Treffer nach Filter → Shortlist {len(shortlist)} → "
-        f"{len(excluded)} durch ÖREB ausgeschlossen."
-    )
-
-    # Reported only when it is wrong, like the other exceptions in this interface.
-    # Phrased as the consequence rather than the cause: "no volume mounted" means
-    # nothing to the person using this, but losing the cadastre answers does.
-    if paths.on_persistent_disk() is False:
-        st.warning(
-            "Kein persistenter Speicher eingebunden — ÖREB-Auszüge, Merkliste und "
-            "Kontaktstatus gehen bei jedem Deployment verloren. "
-            "(Railway: Volume auf /data mounten.)"
+    with st.expander("Datenabdeckung und Methodik", expanded=False):
+        st.caption(
+            f"{len(runs)} von {MUNICIPALITIES_AG} Gemeinden ausgewertet · {assessed:,} Parzellen "
+            f"beurteilt · {no_az:,} nicht beurteilbar (keine Bauzone mit verwertbarer "
+            f"Nutzungsziffer).{reason_text} "
+            f"{missing} Gemeinden publizieren gar keine Nutzungsziffer und fehlen deshalb "
+            f"vollständig. {len(df):,} Treffer nach Filter → Shortlist {len(shortlist)} → "
+            f"{len(excluded)} durch ÖREB ausgeschlossen."
         )
+        # Reported only when it is wrong, like the other exceptions in this
+        # interface. It belongs with data health, not between the result count
+        # and the result table where it previously looked like a row failure.
+        if paths.on_persistent_disk() is False:
+            st.warning(
+                "Kein persistenter Speicher eingebunden — ÖREB-Auszüge, Merkliste und "
+                "Kontaktstatus gehen bei jedem Deployment verloren. "
+                "(Railway: Volume auf /data mounten.)"
+            )
 
 
     if final.empty:
@@ -854,7 +945,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     # the rows: a screening run is a research position — "Wohnzone, 800 m²
     # potential, Bezirk Horgen" — and retyping twelve controls to get back to it
     # is exactly the friction saving one removes.
-    csv_col, search_name_col, search_save_col = st.columns([2, 3, 1])
+    csv_col, search_name_col, search_save_col = header_actions.columns([2, 3, 2])
     csv_col.download_button(
         "CSV exportieren",
         view.to_csv(index=False).encode("utf-8"),

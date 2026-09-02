@@ -122,6 +122,8 @@ class ShellHeaderRegressionTest(unittest.TestCase):
         css = next(body for body in bodies if ".st-key-app_shell" in body)
         self.assertIn("flex-wrap: nowrap !important", css)
         self.assertIn("@media (max-width: 760px)", css)
+        self.assertIn('[data-testid="stHeader"]', css)
+        self.assertIn('[data-testid="stToolbar"]', css)
         self.assertTrue(
             any("normiq-shell-logo" in body for body in bodies),
             "the sanitiser-safe logo element did not render",
