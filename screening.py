@@ -16,6 +16,7 @@ import links as L
 import navigation
 import oereb as O
 import paths
+import searches as SR
 import workflow as WF
 from ranking import rank_candidates
 
@@ -58,6 +59,58 @@ AREA_DEFAULT = (300, NO_LIMIT)
 # query parameter — the same shape `oereb.py` records, and the URL the cadastre
 # prints into its own QR code.
 OEREB_PDF = "https://api.geo.ag.ch/v2/oereb/extract/pdf/?EGRID="
+
+#: Only Aargau has been ingested. The others are listed and labelled rather
+#: than omitted: a selector that hides them implies they were never planned,
+#: and one that offers them as working options returns an empty list that
+#: reads as a fault in the app rather than as the end of the data.
+CANTONS = (
+    "Aargau",
+    "Luzern (noch nicht verfügbar)",
+    "Zürich (noch nicht verfügbar)",
+)
+
+PARCEL_TYPES = ("Bebaut", "Unbebaut", "Alle")
+
+#: Every widget key the filter row owns. One list, not three: the reset
+#: button clears exactly these, a saved search captures exactly these, and
+#: applying one restores exactly these — three separate copies would drift,
+#: and a key missing from one of them is a filter that silently does not
+#: save, or does not reset.
+FILTER_KEYS = (
+    "screening_query", "screening_min_delta", "screening_area",
+    "screening_municipality", "screening_type", "screening_ziffer",
+    "screening_hide_inventory", "screening_hide_design_plan",
+    "screening_hide_transport", "screening_top_n", "screening_min_age",
+    "screening_canton",
+)
+
+#: Human labels for the "these values no longer exist" report `_apply_pending_
+#: search` leaves behind — keyed by widget, not by database column, since
+#: that is what the person restoring a search recognises.
+_FILTER_LABELS = {
+    "screening_municipality": "Gemeinde",
+    "screening_canton": "Kanton",
+    "screening_type": "Grundstückstyp",
+    "screening_area": "Parzellenfläche",
+    "screening_ziffer": "Ziffer",
+    "screening_min_delta": "Mindestpotenzial",
+    "screening_top_n": "Anzahl Resultate",
+    "screening_min_age": "Mindestalter",
+}
+
+#: A parked "load this saved search" request, applied by `_apply_pending_search`
+#: at the top of `page()` — before any filter widget exists. The same two-key
+#: pattern `navigation.py` uses for page jumps, for the same reason: Streamlit
+#: refuses `st.session_state.screening_min_delta = ...` once the widget keyed
+#: `screening_min_delta` has been instantiated during the current run, and the
+#: apply button is drawn well after the filter row.
+PENDING_SEARCH = "screening_apply_search"
+
+#: Where `_apply_pending_search` leaves the list of stored values it had to
+#: drop, so the saved-search section — drawn after the filters — can tell the
+#: user rather than silently discarding them.
+SKIPPED_SEARCH_VALUES = "screening_skipped_search_values"
 
 
 def read_oereb_cache():
@@ -135,8 +188,91 @@ def parcel_key(row):
     return int(row["bfs"]), str(row["parcel"])
 
 
+def _valid_search_values(parcels, filters):
+    """Split a saved search's stored values into what the current data and
+    control ranges still accept, and what has to be dropped.
+
+    A saved search can outlive the data it was drawn from — a municipality
+    disappears from the current run, the AZ range narrows on a fresh cascade —
+    and Streamlit's option-constrained widgets (multiselect, selectbox,
+    select_slider, a bounded number_input) raise `StreamlitAPIException`
+    outright when handed a `session_state` value outside their current
+    domain, rather than clamping it themselves. So the check has to happen
+    here, before any widget sees the value, not after.
+
+    Returns (values, skipped): `values` only ever holds entries `page()` can
+    hand straight to `session_state`; `skipped` names, in German, which
+    widgets lost a value so the caller can tell the user.
+    """
+    municipalities = set(parcels["municipality"].dropna().unique())
+    az = parcels["az"].dropna()
+    az_min, az_max = (float(az.min()), float(az.max())) if not az.empty else (0.0, 0.0)
+
+    values = {}
+    skipped = []
+    for key, value in filters.items():
+        if key not in FILTER_KEYS:
+            continue  # a search saved by an older or newer release
+        if key == "screening_municipality":
+            # Partial application, not all-or-nothing: the municipalities
+            # still in the data are exactly as usable as they were when the
+            # search was saved, and dropping the whole filter because one
+            # neighbour merged away would lose more than it protects.
+            kept = [m for m in (value or []) if m in municipalities]
+            if len(kept) != len(value or []):
+                skipped.append(_FILTER_LABELS[key])
+            values[key] = kept
+            continue
+        if key == "screening_canton":
+            ok = value in CANTONS
+        elif key == "screening_type":
+            ok = value in PARCEL_TYPES
+        elif key == "screening_area":
+            ok = (
+                isinstance(value, (list, tuple)) and len(value) == 2
+                and value[0] in AREA_STEPS and value[1] in AREA_STEPS
+            )
+        elif key == "screening_ziffer":
+            ok = value is None or az_min <= float(value) <= az_max
+        elif key == "screening_min_delta":
+            ok = value is not None and MIN_STORED_DELTA <= value <= 5000
+        elif key == "screening_top_n":
+            ok = value is not None and 5 <= value <= SHORTLIST
+        elif key == "screening_min_age":
+            ok = value is not None and 0 <= value <= 100
+        else:
+            ok = True  # free text and plain booleans have no domain to outlive
+        if ok:
+            values[key] = tuple(value) if key == "screening_area" else value
+        else:
+            skipped.append(_FILTER_LABELS.get(key, key))
+    return values, skipped
+
+
+def _apply_pending_search(parcels, state=None):
+    """Apply a parked saved-search request, if any. Call before rendering any
+    filter widget — see PENDING_SEARCH."""
+    state = st.session_state if state is None else state
+    filters = state.pop(PENDING_SEARCH, None)
+    if filters is None:
+        return
+    values, skipped = _valid_search_values(parcels, filters)
+    # A saved search is a full snapshot of FILTER_KEYS (see the save button in
+    # `page()`), so a key it doesn't mention is cleared back to the widget's
+    # own default rather than left at whatever the previous run happened to
+    # have — "load this search" should mean exactly that search, not that
+    # search layered on top of leftover state.
+    for key in FILTER_KEYS:
+        state.pop(key, None)
+    state.update(values)
+    state[SKIPPED_SEARCH_VALUES] = skipped
+
+
 def page(parcels, decisions, db, price_of, land_price_references, runs):
     """The screening list: filters, ranking, the ÖREB check and the table."""
+    # Before any filter widget below is created — see PENDING_SEARCH.
+    _apply_pending_search(parcels)
+
     workflow_by_key = {
         (int(row.bfs), str(row.parcel)): row
         for row in decisions.itertuples(index=False)
@@ -157,26 +293,11 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         help="Sucht in Parzellennummer, Adresse und Gemeinde.",
     )
     if reset_col.button("Zurücksetzen", key="screening_reset"):
-        for key in (
-            "screening_query", "screening_min_delta", "screening_area",
-            "screening_municipality", "screening_type", "screening_ziffer",
-            "screening_hide_inventory", "screening_hide_design_plan",
-            "screening_hide_transport", "screening_top_n", "screening_min_age",
-            "screening_canton",
-        ):
+        for key in FILTER_KEYS:
             st.session_state.pop(key, None)
         st.rerun()
 
     c0, c1, c2, c3, c4, c5, c6 = st.columns(7)
-    #: Only Aargau has been ingested. The others are listed and labelled rather
-    #: than omitted: a selector that hides them implies they were never planned,
-    #: and one that offers them as working options returns an empty list that
-    #: reads as a fault in the app rather than as the end of the data.
-    CANTONS = (
-        "Aargau",
-        "Luzern (noch nicht verfügbar)",
-        "Zürich (noch nicht verfügbar)",
-    )
     canton = c0.selectbox(
         "Kanton",
         CANTONS,
@@ -232,7 +353,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     )
     parcel_type = c5.selectbox(
         "Grundstückstyp",
-        ("Bebaut", "Unbebaut", "Alle"),
+        PARCEL_TYPES,
         key="screening_type",
         help=(
             "«Unbebaut» bedeutet: Im GWR ist kein stehendes Gebäude irgendeiner "
@@ -625,13 +746,82 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         f"Potenzial **{F.swiss(final['delta'].sum())} m²** · "
         f"Landwert **CHF {F.swiss(land_value_total)}**"
     )
-    st.download_button(
+    # ── saved searches ───────────────────────────────────────────────────────────
+    # Beside the export because both act on the filters just arrived at, not on
+    # the rows: a screening run is a research position — "Wohnzone, 800 m²
+    # potential, Bezirk Horgen" — and retyping twelve controls to get back to it
+    # is exactly the friction saving one removes.
+    csv_col, search_name_col, search_save_col = st.columns([2, 3, 1])
+    csv_col.download_button(
         "CSV exportieren",
         view.to_csv(index=False).encode("utf-8"),
         file_name="verdichtungspotenzial.csv",
         mime="text/csv",
         key="screening_csv",
     )
+    search_name = search_name_col.text_input(
+        "Name der Suche",
+        key="screening_search_name",
+        placeholder="z. B. Wohnzone Horgen",
+        label_visibility="collapsed",
+    )
+    if search_save_col.button("Suche speichern", width="stretch"):
+        try:
+            SR.save(
+                search_name,
+                {key: st.session_state.get(key) for key in FILTER_KEYS},
+                db,
+            )
+        except ValueError as error:
+            # Left open on the error, not popped/rerun: the whole point of
+            # validating first is that a bad name doesn't lose the filters the
+            # user was about to save, the same reasoning acquisition.py's
+            # contact form uses for its own ValueError.
+            st.error(str(error))
+        else:
+            st.session_state.pop("screening_search_name", None)
+            st.toast(f"Suche „{search_name}“ gespeichert.")
+            st.rerun()
+
+    # Reported once, right after the rerun that applied a search — not read
+    # again on the next unrelated rerun, which is why `_apply_pending_search`
+    # writes it and this is the only place that pops it back out.
+    skipped = st.session_state.pop(SKIPPED_SEARCH_VALUES, [])
+    if skipped:
+        st.warning(
+            "Diese Werte der geladenen Suche gibt es nicht mehr und wurden "
+            "übersprungen: " + ", ".join(skipped) + "."
+        )
+
+    # Not cached, like `workflow.load`: a save or delete just above must be
+    # visible in this same picker on the very next run.
+    saved = SR.load(db)
+    if not saved.empty:
+        search_pick_col, search_apply_col, search_delete_col = st.columns([3, 1, 1])
+        picked = search_pick_col.selectbox(
+            "Gespeicherte Suche",
+            list(saved["name"]),
+            key="screening_search_pick",
+            label_visibility="collapsed",
+        )
+        if search_apply_col.button("Anwenden", width="stretch"):
+            # Parked rather than written straight to the filter keys: this
+            # button is rendered after every filter widget above, and writing
+            # e.g. `st.session_state.screening_min_delta` here raises
+            # StreamlitAPIException. `_apply_pending_search` reconciles it at
+            # the top of the next run instead.
+            st.session_state[PENDING_SEARCH] = (
+                saved.set_index("name").loc[picked, "filters"]
+            )
+            st.rerun()
+        if search_delete_col.button("Löschen", width="stretch"):
+            SR.delete(picked, db)
+            # The picker is keyed, so a stale selection pointing at a name
+            # that no longer exists would hit the same "value not in options"
+            # failure the search values above are guarded against.
+            st.session_state.pop("screening_search_pick", None)
+            st.toast(f"Suche „{picked}“ gelöscht.")
+            st.rerun()
 
     # Multi-row selection supports saving and dismissing several leads at once. An
     # explicit action opens the single-parcel analysis because a row click can no

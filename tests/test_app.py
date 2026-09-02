@@ -12,6 +12,7 @@ import acquisition
 import ingest
 import navigation
 import paths
+import searches
 import workflow
 
 
@@ -263,6 +264,38 @@ class AppRegressionTest(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertEqual(field(app, "Parzellen-Nr. suchen").value, "")
         self.assertEqual(app.number_input[0].value, 130)
+
+    def test_saving_and_applying_a_search_restores_the_filter(self):
+        """The test that matters: applying a saved search writes straight
+        into widget-keyed session_state values (screening_min_delta and the
+        rest), and the "Anwenden" button that triggers it is rendered well
+        after those widgets are instantiated. Writing to one of those keys
+        after its widget already exists this run raises
+        StreamlitAPIException — `_apply_pending_search` parks the request
+        instead, exactly as `navigation.reconcile` does for page jumps. Set a
+        filter away from its default, save, reset, apply, and check the value
+        survives the whole round trip."""
+        app = self.screening()
+
+        def button(label):
+            return next(b for b in app.button if b.label == label)
+
+        app.number_input[0].set_value(2000).run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.number_input[0].value, 2000)
+
+        field(app, "Name der Suche").set_value("Testsuche").run()
+        button("Suche speichern").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(list(searches.load(self.database)["name"]), ["Testsuche"])
+
+        button("Zurücksetzen").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.number_input[0].value, 130)
+
+        button("Anwenden").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.number_input[0].value, 2000)
 
     def test_only_aargau_can_be_chosen(self):
         """The dataset is Aargau. Omitting the others implies they were never

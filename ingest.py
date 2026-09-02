@@ -167,6 +167,16 @@ WORKFLOW_COLUMNS = [
     ("email", "TEXT NOT NULL DEFAULT ''"),
 ]
 
+# Saved screening filter presets. Outside `parcel_results` for the same reason
+# `parcel_workflow` is: "Wohnzone, 800 m² potential, Bezirk Horgen" is a user
+# decision — a research position worth returning to — not calculated data, and
+# must survive a cascade recompute intact.
+SAVED_SEARCH_COLUMNS = [
+    ("name", "TEXT NOT NULL"),
+    ("filters", "TEXT NOT NULL"),
+    ("created_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+]
+
 
 def _column_definitions(columns):
     return ",\n            ".join(
@@ -289,6 +299,7 @@ def schema(con):
     run_cols = _column_definitions(RUN_COLUMNS)
     oereb_cols = _column_definitions(OEREB_COLUMNS)
     workflow_cols = _column_definitions(WORKFLOW_COLUMNS)
+    saved_search_cols = _column_definitions(SAVED_SEARCH_COLUMNS)
     statuses = ", ".join(f"'{status}'" for status in WF.CONTACT_STATUS_LABELS)
     con.executescript(
         f"""
@@ -319,12 +330,20 @@ def schema(con):
             CHECK (contact_status IN ({statuses})),
             PRIMARY KEY (bfs, parcel)
         );
+        -- Keyed by name, so saving under an existing name replaces it rather
+        -- than accumulating near-duplicates silently. New table, no legacy
+        -- rows to migrate — CREATE TABLE IF NOT EXISTS is all it needs.
+        CREATE TABLE IF NOT EXISTS saved_searches (
+            {saved_search_cols},
+            PRIMARY KEY (name)
+        );
         """
     )
     _add_missing_columns(con, "parcel_results", COLUMNS)
     _add_missing_columns(con, "runs", RUN_COLUMNS)
     _add_missing_columns(con, "oereb_cache", OEREB_COLUMNS)
     _add_missing_columns(con, "parcel_workflow", WORKFLOW_COLUMNS)
+    _add_missing_columns(con, "saved_searches", SAVED_SEARCH_COLUMNS)
     # After widening, because the copy carries whichever columns the widened
     # table has; before the indexes, because DROP TABLE takes its indexes with
     # it and the CREATE INDEX statements below put them back.
