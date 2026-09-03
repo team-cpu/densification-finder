@@ -423,6 +423,39 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(len(due_buttons), 1)
         self.assertIn("Zweitgespräch vereinbaren", text)
 
+    def test_the_acquisition_overview_stays_visible_when_nothing_is_due(self):
+        """The design keeps the follow-up card present with a truthful zero.
+
+        Dropping the whole section when the query is empty makes an empty desk
+        indistinguishable from a rendering regression and shifts the board up.
+        """
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
+            sqlite3.connect(self.database),
+        ).iloc[0]
+        workflow.set_saved(
+            [(int(first["bfs"]), str(first["parcel"]))], True, self.database
+        )
+
+        app = AppTest.from_file(
+            os.path.join(paths.HERE, "app.py"), default_timeout=30
+        )
+        app.session_state[navigation.PAGE] = "Akquisition"
+        app.run()
+
+        self.assertFalse(app.exception)
+        text = " ".join(element.value for element in app.markdown)
+        self.assertIn("Fällige Wiedervorlagen** · 0 offen", text)
+        self.assertFalse(
+            any(
+                str(widget.key or "").startswith("due_contact_")
+                for widget in app.button
+            )
+        )
+        html = " ".join(element.proto.body for element in app.get("html"))
+        self.assertIn("acquisition-page-footer", html)
+        self.assertIn("Kein\nBestandteil der amtlichen Parzellendaten", html)
+
     def test_moving_a_card_to_another_stage_persists_it(self):
         """A stage change that only moves the widget and never reaches
         `parcel_workflow` would look real on screen right up until the next
@@ -456,7 +489,7 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(stored, "in_discussion")
 
     def test_the_contact_form_stores_what_was_typed(self):
-        """`Speichern` fires the same toast whether or not the write behind
+        """`Fertig` fires the same toast whether or not the write behind
         it succeeded — a field `_contact_dialog` dropped on the way to
         `WF.update` would only surface the next time someone reopened this
         exact lead and found their own note missing."""
@@ -479,8 +512,8 @@ class AppRegressionTest(unittest.TestCase):
 
         field(app, "Kontaktperson").set_value("Frau Meier")
         field(app, "Telefon").set_value("+41 79 000 00 00")
-        field(app, "Wiedervorlage").set_value("2026-09-15")
-        app.text_area[0].set_value("Rückruf nächste Woche vereinbart.")
+        field(app, "Wiedervorlage").set_value("15.09.2026")
+        field(app, "Notiz").set_value("Rückruf nächste Woche vereinbart.")
         app.button(key="acq_contact_save").click().run()
         self.assertFalse(app.exception)
 
@@ -531,7 +564,7 @@ class AppRegressionTest(unittest.TestCase):
 
         self.assertFalse(app.exception)
 
-        field(app, "Wiedervorlage").set_value("02.09.2026")
+        field(app, "Wiedervorlage").set_value("32.09.2026")
         field(app, "Kontaktperson").set_value("Neuer Name")
         app.button(key="acq_contact_save").click().run()
         self.assertFalse(app.exception)
@@ -556,11 +589,10 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(due_date, "2026-01-01")
         self.assertEqual(contact_person, "Herr Muster")
 
-    def test_removing_a_lead_takes_it_off_the_board(self):
-        """`Von Merkliste entfernen` sits one button away from `Speichern`
-        in the same dialog — a copy-paste of the wrong boolean into
-        `WF.set_saved` would silently keep a declined lead on the board
-        instead of taking it off."""
+    def test_the_contact_dialog_exposes_the_designs_single_fertig_action(self):
+        """The owner modal has one footer action, as in the design; removing
+        a parcel remains available from Screening instead of sitting beside
+        the contact save action where it could be clicked accidentally."""
         first = pd.read_sql_query(
             "SELECT bfs, parcel FROM parcel_results LIMIT 1",
             sqlite3.connect(self.database),
@@ -578,19 +610,11 @@ class AppRegressionTest(unittest.TestCase):
 
         self.assertFalse(app.exception)
 
-        app.button(key="acq_contact_remove").click().run()
-        self.assertFalse(app.exception)
-
-        with sqlite3.connect(self.database) as connection:
-            saved = connection.execute(
-                "SELECT saved FROM parcel_workflow WHERE bfs = ? AND parcel = ?",
-                (bfs, parcel),
-            ).fetchone()[0]
-        self.assertEqual(saved, 0)
+        self.assertEqual(app.button(key="acq_contact_save").label, "Fertig")
         self.assertFalse(
             any(
-                str(widget.key or "").startswith("stage_")
-                for widget in app.selectbox
+                widget.key in {"acq_contact_remove", "acq_contact_cancel"}
+                for widget in app.button
             )
         )
 

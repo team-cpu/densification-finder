@@ -103,6 +103,93 @@ def _text(value):
     return "" if value is None or pd.isna(value) else str(value)
 
 
+def _detail_header_badges(row, cache):
+    """Compact parcel facts used beside the detail title in the prototype."""
+    badges = []
+
+    def add(label, tone):
+        if label not in {item[0] for item in badges}:
+            badges.append((label, tone))
+
+    if bool(row.get("design_plan")):
+        add("Gestaltungsplan", "dev")
+    if _text(row.get("heritage")):
+        add("Inventar", "heritage")
+
+    egrid = _text(row.get("egrid"))
+    notable = ""
+    if (
+        egrid
+        and cache is not None
+        and not cache.empty
+        and egrid in cache.index
+        and "notable" in cache.columns
+    ):
+        notable = _text(cache.loc[egrid, "notable"]).casefold()
+    if "lärm" in notable:
+        add("Lärm ES II", "warning")
+    elif "gewässer" in notable:
+        add("Gewässerabstand", "warning")
+    elif "dienstbarkeit" in notable:
+        add("Dienstbarkeit", "warning")
+
+    return badges[:2] or [("Unbelastet", "clear")]
+
+
+def _detail_calculated_at(value):
+    """Prototype timestamp text, using the parcel's real calculation time."""
+    text = _text(value)
+    if not text:
+        return "Zuletzt gerechnet —"
+    try:
+        return pd.Timestamp(text).strftime("Zuletzt gerechnet %d.%m.%Y, %H:%M")
+    except (TypeError, ValueError):
+        return "Zuletzt gerechnet —"
+
+
+def _result_bar_html(row, land, per_m2, price_ref):
+    """Render the three-cell result strip with the prototype's exact hierarchy."""
+    per_m2_text = "—" if per_m2 is None else f"{E.chf(per_m2)} CHF"
+    reference_label = "Referenz"
+    reference_value = "—"
+    comparison = ""
+    if price_ref:
+        reference_label = f"Referenz {price_ref.scope}"
+        reference_value = E.chf(price_ref.price_chf_m2)
+        if per_m2 is not None and price_ref.price_chf_m2:
+            delta = (per_m2 / price_ref.price_chf_m2 - 1) * 100
+            delta_label = f"{'+' if delta >= 0 else '−'}{abs(delta):.1f}%"
+            delta_tone = "positive" if delta >= 0 else "negative"
+            comparison = (
+                '<div class="detail-result-comparison">'
+                f'<span class="detail-result-delta {delta_tone}">'
+                f'{escape(delta_label)}</span>'
+                '<span class="detail-result-note">vs. Referenz</span></div>'
+            )
+
+    caveat = NEGATIVE_CAVEAT if land < 0 else RESULT_CAVEAT
+    return (
+        '<div class="detail-result-grid" '
+        f'data-residual="{escape(str(land))}" '
+        f'data-per-square-metre="{escape(str(per_m2))}">'
+        '<div class="detail-result-cell detail-result-primary">'
+        '<div class="detail-result-label">Residualer Landwert</div>'
+        '<div class="detail-result-primary-value">'
+        '<span class="detail-result-currency">CHF</span>'
+        f'<span class="detail-result-hero">{escape(E.chf(land))}</span></div>'
+        f'<div class="detail-result-note">{escape(caveat)}</div></div>'
+        '<div class="detail-result-cell">'
+        '<div class="detail-result-label">Pro m² Grundstück</div>'
+        f'<div class="detail-result-value">{escape(per_m2_text)}</div>'
+        '<div class="detail-result-note">Grundstück '
+        f'{escape(E.chf(float(row["area"])))} m²</div></div>'
+        '<div class="detail-result-cell">'
+        f'<div class="detail-result-label">{escape(reference_label)}</div>'
+        f'<div class="detail-result-value reference">{escape(reference_value)}</div>'
+        f'{comparison}</div></div>'
+    )
+
+
 def extract_of(row, cache):
     """The rest of the ÖREB answer for this parcel, or None if it was never
     fetched. Stored as JSON when the shortlist was checked, so reading it costs
@@ -118,22 +205,6 @@ def extract_of(row, cache):
         return json.loads(blob)
     except ValueError:
         return None
-
-
-def _document_line(doc):
-    """`Bau- und Nutzungsordnung [4195]` plus its files. A plan and its annexes
-    arrive as one title with several attachments, exactly as the printed extract
-    stacks them."""
-    head = doc["title"]
-    if doc.get("abbr") and doc["abbr"] not in head:
-        head += f" ({doc['abbr']})"
-    if doc.get("number"):
-        head += f" · {doc['number']}"
-    links = " · ".join(
-        f"[Dokument{'' if len(doc['urls']) == 1 else f' {i}'}]({u})"
-        for i, u in enumerate(doc.get("urls") or [], 1)
-    )
-    return f"{head} — {links}" if links else head
 
 
 def _oereb_text(row, cache):
@@ -234,17 +305,312 @@ def _base_block(row, cache, price_ref, extract=None):
     return rows
 
 
-def _edict_rows(edicts):
-    """One row per regulation: when it came into force, and which municipality's
-    it is. The date leads because the list is a chronology — what changed most
-    recently is the question the panel exists to answer."""
+def _detail_facts_html(row, cache, price_ref, extract=None):
+    """The compact official-data card used by the HTML prototype.
+
+    The full register payload still feeds the PDF and block D.  This summary is
+    deliberately kept to the ten rows a user needs beside the assumptions;
+    only material ÖREB or area discrepancies add a warning row.
+    """
+    metric = F.METRIC_LABELS.get(row["metric"], "Ausnützungsziffer")
+    permitted = float(row["existing"]) + float(row["delta"])
+    use = F.short_use(_text(row.get("use_class")))
+    year = F.short_year(_text(row.get("built")))
+    if int(row["buildings"]) == 0:
+        building = "unbebaut"
+    else:
+        building = ", ".join(filter(None, [use, f"Baujahr {year}" if year else ""]))
+        building = building or f"{int(row['buildings'])} Gebäude"
+
+    reference = "keine Referenz hinterlegt"
+    if price_ref:
+        reference = (
+            f"CHF {E.chf(price_ref.price_chf_m2)}/m² · "
+            f"{price_ref.scope} · {price_ref.as_of}"
+        )
+
+    rows = [
+        ("Adresse", _text(row.get("address")) or "— (keine GWR-Adresse)", False, ""),
+        ("Gemeinde / Kanton", f"{row['municipality']} / Aargau", False, ""),
+        (
+            "Parzellen-Nr. (E-GRID)",
+            " · ".join(filter(None, [str(row["parcel"]), _text(row.get("egrid"))])) or "—",
+            True,
+            "",
+        ),
+        ("Grundstücksfläche", f"{E.chf(float(row['area']))} m²", True, ""),
+        ("Zone", _text(row.get("zone")) or "—", False, ""),
+        (metric, f"{row['az']:.3f}".rstrip("0").rstrip("."), True, ""),
+        ("Zulässige aBGF", f"{E.chf(permitted)} m²", True, ""),
+        ("Bestehende aBGF", f"{E.chf(float(row['existing']))} m²", True, ""),
+        ("Bestehendes Gebäude", building, False, ""),
+        ("Referenzpreis Land", reference, True, ""),
+    ]
+
+    oereb = _oereb_text(row, cache).replace("**", "")
+    if oereb != "keine Eigentumsbeschränkung im Kataster":
+        rows.append(("ÖREB-Kataster", oereb, False, "warning"))
+
+    if extract and extract.get("land_registry_area"):
+        registry = float(extract["land_registry_area"])
+        gap = abs(registry - float(row["area"]))
+        if gap > 1:
+            rows.append((
+                "Abweichung Grundbuchfläche",
+                f"{E.chf(registry)} m² im ÖREB · Abweichung zur berechneten "
+                f"Fläche {E.chf(gap)} m²",
+                True,
+                "warning",
+            ))
+
+    row_html = "".join(
+        '<div class="detail-fact-row '
+        f'{escape(tone)}">'
+        f'<span class="detail-fact-label">{escape(str(label))}</span>'
+        '<span class="detail-fact-value'
+        f'{" mono" if mono else ""}">{escape(str(value))}</span></div>'
+        for label, value, mono, tone in rows
+    )
+    return (
+        '<section class="detail-facts-card">'
+        '<div class="detail-facts-head">'
+        '<span class="detail-facts-title">A · Amtliche Grunddaten</span>'
+        '<span class="detail-edit-pill readonly">Nicht editierbar</span>'
+        '</div>'
+        f'<div class="detail-facts-body">{row_html}'
+        '<div class="detail-facts-source">Quelle: Grundbuch Kanton Aargau, '
+        f'kommunale Bau- und Zonenordnung {escape(str(row["municipality"]))}, '
+        'amtliche Vermessung.</div></div></section>'
+    )
+
+
+def _potential_result_html(row, potential, unit_size, possible):
+    """Render block B's calculated part in the prototype's compact layout."""
+    units = "—" if possible is None else f"{possible:.1f}"
+    formula = "—"
+    if possible is not None:
+        formula = f"{E.chf(potential)} m² ÷ {E.chf(unit_size)} m²"
+
+    replacement_note = ""
+    existing = float(row.get("existing") or 0)
+    if existing > 0:
+        replacement_note = (
+            '<div class="detail-replacement-note">Ersatzneubau geprüft: '
+            f'bestehendes Volumen von {E.chf(existing)} m² aBGF wird ersetzt, '
+            'Abbruchkosten in Block C berücksichtigt.</div>'
+        )
+
+    return (
+        '<div class="detail-potential-result" '
+        f'data-units="{escape(units)}">'
+        '<div><div class="detail-potential-result-label">'
+        'Resultierende Wohneinheiten</div>'
+        f'<div class="detail-potential-formula">{escape(formula)}</div></div>'
+        f'<div class="detail-potential-units">{escape(units)}</div></div>'
+        f'{replacement_note}'
+    )
+
+
+def _safe_href(value):
+    """Return an escaped web URL, or an empty string for unsafe schemes."""
+    url = _text(value).strip()
+    if not url.lower().startswith(("https://", "http://")):
+        return ""
+    return escape(url, quote=True)
+
+
+def _reference_card_html(extract, zone_rows, notes):
+    """Legal references and assumptions in the prototype's compact card."""
+    documents = []
+    if extract:
+        for category, key in (
+            ("Rechtsvorschrift", "provisions"),
+            ("Gesetzliche Grundlage", "laws"),
+        ):
+            for doc in extract.get(key) or []:
+                title = _text(doc.get("title")) or category
+                abbreviation = _text(doc.get("abbr"))
+                if abbreviation and abbreviation not in title:
+                    title += f" ({abbreviation})"
+                qualifier = " · ".join(
+                    part for part in (
+                        _text(doc.get("number")),
+                    ) if part and part not in title
+                )
+                documents.append((category, title, qualifier, doc.get("urls") or []))
+
+    link_count = sum(max(1, len(urls)) for _, _, _, urls in documents)
+    meta = (
+        f"{link_count} Referenz{'en' if link_count != 1 else ''} · PDF"
+        if documents else "ÖREB-Abfrage ausstehend"
+    )
+
     rows = []
-    for e in edicts:
-        what = f"{e.municipality} · {e.label}"
-        if e.document:
-            what += f" — [Dokument]({e.document})"
-        rows.append((e.when, what))
-    return rows
+    for category, title, qualifier, urls in documents:
+        actions = []
+        for index, url in enumerate(urls, 1):
+            href = _safe_href(url)
+            if href:
+                label = "PDF" if len(urls) == 1 else f"PDF {index}"
+                actions.append(
+                    f'<a class="detail-reference-action" href="{href}" '
+                    f'target="_blank" rel="noopener noreferrer">{label}</a>'
+                )
+        rows.append(
+            '<div class="detail-reference-row">'
+            f'<span class="detail-reference-type">{escape(category)}</span>'
+            '<div><div class="detail-reference-title">'
+            f'{escape(title)}</div>'
+            f'<div class="detail-reference-detail">{escape(qualifier or "ÖREB-Auszug dieser Parzelle")}</div></div>'
+            f'<div class="detail-reference-actions">{"".join(actions) or "—"}</div></div>'
+        )
+
+    if not documents:
+        rows.append(
+            '<div class="detail-reference-empty">Erst nach der ÖREB-Abfrage '
+            'verfügbar — geprüft wird die Shortlist über „Neu berechnen“.</div>'
+        )
+
+    if extract and (extract.get("office") or {}).get("name"):
+        office = extract["office"]
+        office_name = escape(_text(office.get("name")))
+        office_url = _safe_href(office.get("url"))
+        office_value = (
+            f'<a href="{office_url}" target="_blank" rel="noopener noreferrer">'
+            f'{office_name}</a>' if office_url else office_name
+        )
+        rows.append(
+            '<div class="detail-reference-row detail-reference-row--plain">'
+            '<span class="detail-reference-type">Zuständige Stelle</span>'
+            f'<div class="detail-reference-title">{office_value}</div><div></div></div>'
+        )
+
+    if zone_rows:
+        zone_summary = " · ".join(
+            f"{_text(label)}: {_text(value)}" for label, value in zone_rows[:3]
+        )
+        rows.append(
+            '<div class="detail-reference-row detail-reference-row--plain">'
+            '<span class="detail-reference-type">ÖREB-Objekte</span>'
+            f'<div class="detail-reference-detail">{escape(zone_summary)}</div><div></div></div>'
+        )
+
+    assumption_rows = "".join(f'<li>{escape(note)}</li>' for note in notes)
+    created = ""
+    if extract and extract.get("created"):
+        created = f" · Stand {escape(_text(extract['created'])[:10])}"
+
+    return (
+        '<details class="detail-reference-card detail-reference-card--legal">'
+        '<summary><span class="detail-reference-summary-copy">'
+        '<span class="detail-reference-summary-title">Rechtliche Grundlagen &amp; Quellen</span>'
+        f'<span class="detail-reference-summary-meta">{escape(meta)}</span>'
+        '</span><span class="detail-reference-sign" aria-hidden="true"></span></summary>'
+        '<div class="detail-reference-body">'
+        + "".join(rows)
+        + '<div class="detail-assumptions"><div class="detail-assumptions-title">'
+          f'Annahmen &amp; Benchmarks{created}</div><ul>{assumption_rows}</ul></div>'
+          '</div></details>'
+    )
+
+
+def _regulation_card_html(row, edicts, own, own_note, *, loading=False, error=""):
+    """Current regulation news in the prototype's second compact card."""
+    municipality = escape(_text(row.get("municipality")))
+    if loading:
+        meta = "wird geladen"
+    elif error:
+        meta = "derzeit nicht abrufbar"
+    else:
+        meta = f"{len(edicts)} Einträge im Kanton"
+
+    badge = (
+        '<span class="detail-reference-badge">1 relevant für diese Parzelle</span>'
+        if own else ""
+    )
+    rows = []
+    if loading:
+        rows.append('<div class="detail-reference-empty">Änderungsliste wird geladen …</div>')
+    elif error:
+        rows.append(
+            '<div class="detail-reference-empty detail-reference-empty--error">'
+            f'Änderungsliste nicht abrufbar: {escape(error)}. Die Rechtsgrundlagen '
+            'aus dem ÖREB-Auszug sind davon nicht betroffen.</div>'
+        )
+    else:
+        if own:
+            own_href = _safe_href(own.document)
+            own_action = (
+                f'<a class="detail-reference-action" href="{own_href}" target="_blank" '
+                'rel="noopener noreferrer">PDF</a>' if own_href else "—"
+            )
+            rows.append(
+                '<div class="detail-regulation-row detail-regulation-row--relevant">'
+                f'<span class="detail-regulation-date">{escape(own.when)}</span>'
+                '<div><div class="detail-regulation-source">Diese Parzelle</div>'
+                f'<div class="detail-reference-title">{municipality} · {escape(own.label)}</div>'
+                '<div class="detail-reference-detail">Aktuell in Kraft</div></div>'
+                '<span class="detail-regulation-impact">Relevant</span>'
+                f'<div class="detail-reference-actions">{own_action}</div></div>'
+            )
+        else:
+            rows.append(
+                '<div class="detail-reference-empty">Für diese Gemeinde ist in '
+                'OEREBlex keine gültige Rechtsvorschrift verzeichnet.</div>'
+            )
+
+        for edict in edicts[:3]:
+            href = _safe_href(edict.document)
+            action = (
+                f'<a class="detail-reference-action" href="{href}" target="_blank" '
+                'rel="noopener noreferrer">PDF</a>' if href else "—"
+            )
+            rows.append(
+                '<div class="detail-regulation-row">'
+                f'<span class="detail-regulation-date">{escape(edict.when)}</span>'
+                '<div><div class="detail-regulation-source">OEREBlex Aargau</div>'
+                f'<div class="detail-reference-title">{escape(edict.municipality)} · '
+                f'{escape(edict.label)}</div><div class="detail-reference-detail">'
+                'Rechtsvorschrift in Kraft</div></div>'
+                '<span class="detail-regulation-impact detail-regulation-impact--neutral">Kanton</span>'
+                f'<div class="detail-reference-actions">{action}</div></div>'
+            )
+
+        if len(edicts) > 3:
+            remaining = []
+            for edict in edicts[3:]:
+                href = _safe_href(edict.document)
+                document = (
+                    f' · <a href="{href}" target="_blank" rel="noopener noreferrer">Dokument</a>'
+                    if href else ""
+                )
+                remaining.append(
+                    '<li><span>{date}</span><span>{municipality} · {label}{document}</span></li>'.format(
+                        date=escape(edict.when),
+                        municipality=escape(edict.municipality),
+                        label=escape(edict.label),
+                        document=document,
+                    )
+                )
+            rows.append(
+                '<details class="detail-regulation-more"><summary>Alle '
+                f'{len(edicts)} Änderungen</summary><ul>{"".join(remaining)}</ul></details>'
+            )
+
+    note = f'<div class="detail-regulation-note">{escape(own_note)}</div>' if own_note else ""
+    return (
+        '<details class="detail-reference-card detail-reference-card--regulations">'
+        '<summary><span class="detail-reference-summary-copy">'
+        f'<span class="detail-reference-summary-title">Regulatorische Änderungen · {municipality}</span>'
+        f'<span class="detail-reference-summary-meta">{escape(meta)}</span>{badge}'
+        '</span><span class="detail-reference-sign" aria-hidden="true"></span></summary>'
+        '<div class="detail-reference-body">'
+        + "".join(rows)
+        + note
+        + '<div class="detail-regulation-note">Quelle: oereblex.ag.ch. Verzeichnet '
+          'Rechtsvorschriften, die bereits in Kraft sind; laufende Mitwirkungs- '
+          'und Revisionsverfahren sind nicht enthalten.</div></div></details>'
+    )
 
 
 @st.fragment(run_every=1)
@@ -401,61 +767,200 @@ def forget(pid):
 #: background whichever theme is running.
 PAGE_CSS = """
 <style>
-  .st-key-detail_breadcrumb { margin:4px 0 14px; align-items:center; gap:8px; }
+  .st-key-detail_breadcrumb { min-height:14px; height:14px; margin:0 0 2px;
+      align-items:center; gap:8px; }
+  .st-key-detail_breadcrumb > [data-testid="stElementContainer"],
+  .st-key-detail_breadcrumb [data-testid="stButton"],
+  .st-key-detail_breadcrumb [data-testid="stHtml"] {
+      min-height:14px; height:14px; line-height:14px; }
   .st-key-detail_breadcrumb [data-testid="stButton"] button { min-height:0;
-      height:auto; padding:0; border:0; background:transparent; color:#1c4e4a;
-      font-size:11.5px; }
-  .detail-breadcrumb-copy { color:#9a9aa6; font-size:11.5px; }
-  .detail-breadcrumb-copy strong { color:#4a4a54; font-weight:400; }
-  .st-key-detail_header { margin:0 0 20px; }
+      height:14px; padding:0; border:0; background:transparent; color:#1c4e4a;
+      font-size:11.5px; line-height:14px; }
+  .st-key-detail_breadcrumb [data-testid="stButton"]
+      [data-testid="stMarkdownContainer"],
+  .st-key-detail_breadcrumb [data-testid="stButton"] p {
+      font-size:11.5px; line-height:14px; }
+  .detail-breadcrumb-trail { height:14px; display:flex; align-items:center;
+      gap:8px; color:#9a9aa6; font-size:11.5px; line-height:14px; }
+  .detail-breadcrumb-current { color:#4a4a54; }
+  .st-key-detail_header { margin:0 0 22px; }
+  .st-key-detail_header > [data-testid="stHorizontalBlock"] {
+      align-items:flex-start; gap:24px; }
+  .st-key-detail_header [data-testid="stColumn"]:first-child
+      [data-testid="stVerticalBlock"] { gap:0; }
+  .st-key-detail_header [data-testid="stHeadingWithActionElements"] {
+      min-height:26px; height:26px; margin:0; padding:0; }
+  .st-key-detail_header [data-testid="stHeading"]
+      [data-testid="stMarkdownContainer"] {
+      height:26px; margin:0 !important; }
   .st-key-detail_header [data-testid="stHeadingWithActionElements"] h1 {
-      margin:0; font-size:21px; line-height:1.25; font-weight:600;
-      letter-spacing:-.015em; }
-  .st-key-detail_header [data-testid="stCaptionContainer"] { margin-top:4px; }
-  .st-key-detail_actions [data-testid="stHorizontalBlock"] { align-items:end; }
-  .st-key-detail_actions button { white-space:nowrap; }
+      margin:0; padding:0; font-size:21px; line-height:26px;
+      font-weight:600; letter-spacing:-.015em; }
+  .detail-header-meta { min-height:18px; margin-top:7px; display:flex;
+      align-items:center; gap:9px; flex-wrap:wrap; }
+  .detail-header-updated { color:#9a9aa6; font-size:11.5px; line-height:14px; }
+  .detail-status-pill { display:inline-flex; align-items:center; padding:4px 8px;
+      border-radius:20px; font-size:10.5px; font-weight:500; line-height:1;
+      white-space:nowrap; }
+  .detail-status-pill.clear { background:#eef6f0; color:#2f6b45; }
+  .detail-status-pill.dev { background:#eef2fb; color:#33538f; }
+  .detail-status-pill.heritage { background:#f2f0fb; color:#4e4899; }
+  .detail-status-pill.warning { background:#fdf5e7; color:#8a5a12; }
+  .st-key-detail_actions [data-testid="stHorizontalBlock"] {
+      align-items:flex-start; justify-content:flex-end; gap:8px; }
+  .st-key-detail_actions [data-testid="stColumn"] {
+      flex:0 0 auto !important; width:auto !important; min-width:0 !important; }
+  .st-key-detail_actions button { min-height:30px; height:30px; padding:0 12px;
+      border-radius:6px; font-size:12px; font-weight:500; line-height:14px;
+      white-space:nowrap; }
 
-  .st-key-result_bar { padding:20px 24px 14px; margin-bottom:24px;
-      border-radius:10px; border:1px solid #dde9e7; background:#fbfdfd; }
-  .st-key-result_bar [data-testid="stMetricLabel"] p { color:#8a8a94;
-      font-size:10px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; }
-  .st-key-result_bar [data-testid="stMetricValue"] { font-family:"IBM Plex Mono",
-      monospace; font-size:22px; font-weight:600; }
-  .st-key-result_bar [data-testid="stColumn"]:first-child [data-testid="stMetricValue"] {
-      font-size:38px; letter-spacing:-.02em; }
-  .st-key-result_bar [data-testid="stColumn"] + [data-testid="stColumn"] {
+  .st-key-result_bar { padding:0; margin-bottom:26px; }
+  .detail-result-grid { border:1px solid #dde9e7; border-radius:10px;
+      background:#fbfdfd; padding:22px 24px; display:grid;
+      grid-template-columns:minmax(0,1.35fr) minmax(0,1fr) minmax(0,1fr);
+      gap:28px; align-items:end; }
+  .detail-result-cell + .detail-result-cell {
       border-left:1px solid #eaeaee; padding-left:22px; }
-
-  .st-key-facts_a, .st-key-inputs_b, .st-key-inputs_c {
-      padding:14px 16px 12px; margin-bottom:20px; border:1px solid #eaeaee;
-      border-radius:9px; background:#fff; }
-  .st-key-inputs_c { margin-top:0; padding:14px 16px 4px; }
-  .st-key-facts_a [data-testid="stHeadingWithActionElements"] h3,
-  .st-key-inputs_b [data-testid="stHeadingWithActionElements"] h3,
-  .st-key-inputs_c [data-testid="stHeadingWithActionElements"] h3 {
-      color:#8a8a94; font-size:10px; font-weight:600; letter-spacing:.1em;
+  .detail-result-label { margin-bottom:9px; color:#8a8a94; font-size:10px;
+      font-weight:600; line-height:12px; letter-spacing:.1em;
       text-transform:uppercase; }
+  .detail-result-primary-value { display:flex; align-items:baseline; gap:9px; }
+  .detail-result-currency { color:#77777f; font-family:"IBM Plex Mono",monospace;
+      font-size:15px; font-weight:500; line-height:1; }
+  .detail-result-hero { font-family:"IBM Plex Mono",monospace; font-size:42px;
+      font-weight:600; line-height:1; letter-spacing:-.02em;
+      font-variant-numeric:tabular-nums; }
+  .detail-result-value { font-family:"IBM Plex Mono",monospace; font-size:22px;
+      font-weight:600; line-height:1; font-variant-numeric:tabular-nums; }
+  .detail-result-value.reference { color:#4a4a54; }
+  .detail-result-note { margin-top:9px; color:#9a9aa6; font-size:11.5px;
+      line-height:14px; }
+  .detail-result-comparison { margin-top:9px; display:flex; align-items:center;
+      gap:7px; }
+  .detail-result-comparison .detail-result-note { margin-top:0; }
+  .detail-result-delta { display:inline-flex; align-items:center; padding:3px 8px;
+      border-radius:20px; font-size:10.5px; font-weight:500; line-height:1; }
+  .detail-result-delta.positive { background:#eef6f0; color:#2f6b45; }
+  .detail-result-delta.negative { background:#fbf0ef; color:#8a4a44; }
+
+  .st-key-inputs_b { gap:0; overflow:hidden; margin-bottom:20px; padding:0;
+      border:1px solid #eaeaee; border-radius:9px; background:#fff; }
+  .detail-potential-head { display:flex; align-items:center;
+      justify-content:space-between; padding:12px 16px;
+      border-bottom:1px solid #f0f0f3; }
+  .detail-potential-title { color:#8a8a94; font-size:10px; font-weight:600;
+      line-height:12px; letter-spacing:.1em; text-transform:uppercase; }
+  .st-key-inputs_b_body { gap:0 !important; padding:16px !important; }
+  .st-key-inputs_b_body > [data-testid="stHorizontalBlock"] { gap:14px; }
+  .st-key-inputs_b_body [data-testid="stColumn"]
+      > [data-testid="stVerticalBlock"] { gap:6px; }
+  .st-key-inputs_b [data-testid="stNumberInput"] { gap:6px; }
+  .st-key-inputs_b [data-testid="stWidgetLabel"] { height:auto; margin:0; }
+  .st-key-inputs_b [data-testid="stWidgetLabel"] p { color:#8a8a94;
+      font-size:10px; font-weight:600; line-height:12px; letter-spacing:.07em;
+      text-transform:uppercase; }
+  .st-key-inputs_b [data-testid="stNumberInputContainer"] { height:32px;
+      min-height:32px; border:1px solid #dcdce4; border-radius:6px;
+      background:#fff; box-shadow:none; }
+  .st-key-inputs_b [data-testid="stNumberInputContainer"]:focus-within {
+      border-color:#1c4e4a; box-shadow:0 0 0 3px #e2eceb; }
+  .st-key-inputs_b [data-testid="stNumberInputContainer"] > div:has(
+      > [data-testid="stNumberInputStepDown"]),
+  .st-key-inputs_b [data-testid="stNumberInputContainer"] > div:has(
+      > [data-testid="stNumberInputStepUp"]),
+  .st-key-inputs_b [data-testid="stNumberInputContainer"] button {
+      display:none; }
+  .st-key-inputs_b [data-testid="stNumberInput"] input { height:30px;
+      min-height:30px; padding:0 10px; border:0; background:#fff;
+      font-family:"IBM Plex Mono",monospace; font-size:13px; line-height:30px;
+      text-align:right; font-variant-numeric:tabular-nums; }
+  .detail-input-hint { color:#b0b0b8; font-size:10.5px; line-height:14px; }
+  .detail-potential-result { display:flex; align-items:flex-end;
+      justify-content:space-between; gap:16px; margin-top:16px; padding-top:14px;
+      border-top:1px solid #f0f0f3; }
+  .detail-potential-result-label { color:#8a8a94; font-size:10px;
+      font-weight:600; line-height:12px; letter-spacing:.07em;
+      text-transform:uppercase; }
+  .detail-potential-formula { margin-top:6px; color:#9a9aa6;
+      font-size:11.5px; line-height:14px; }
+  .detail-potential-units { color:#17171b; font-family:"IBM Plex Mono",monospace;
+      font-size:26px; font-weight:600; line-height:1;
+      font-variant-numeric:tabular-nums; }
+  .detail-replacement-note { margin-top:16px; padding:11px 12px;
+      border:1px solid #f2ebdc; border-radius:7px; background:#fdfaf3;
+      color:#7a6533; font-size:11.5px; line-height:16px; text-wrap:pretty; }
+  .st-key-inputs_c { gap:0; overflow:hidden; margin:0 0 20px; padding:0;
+      border:1px solid #eaeaee; border-radius:9px; background:#fff; }
+  .st-key-inputs_c_header { gap:0 !important; padding:12px 16px !important;
+      border-bottom:1px solid #f0f0f3; }
+  .st-key-inputs_c_header > [data-testid="stHorizontalBlock"] {
+      align-items:center; gap:12px; }
+  .detail-calculation-title { color:#8a8a94; font-size:10px; font-weight:600;
+      line-height:12px; letter-spacing:.1em; text-transform:uppercase; }
+  .detail-calculation-meta { display:flex; align-items:center;
+      justify-content:flex-end; gap:10px; white-space:nowrap; }
+  .detail-calculation-hint { color:#b0b0b8; font-size:11px; line-height:14px; }
+  .st-key-inputs_c_header [data-testid="stButton"] button { min-height:24px;
+      height:24px; padding:0; border:0; background:none; box-shadow:none;
+      color:#77777f; font-size:11.5px; font-weight:400; white-space:nowrap; }
+  .st-key-inputs_c_header [data-testid="stButton"] button:hover {
+      border:0; background:none; color:#17171b; }
+  .st-key-inputs_c_body { gap:14px !important; padding:16px !important;
+      border-bottom:1px solid #f0f0f3; }
+  .st-key-inputs_c_body > [data-testid="stHorizontalBlock"] { gap:16px; }
+  .st-key-inputs_c_body [data-testid="stColumn"]
+      > [data-testid="stVerticalBlock"] { gap:6px; }
+  .st-key-inputs_c_body [data-testid="stNumberInput"] { gap:6px; }
+  .st-key-inputs_c_body [data-testid="stNumberInput"]
+      [data-testid="stWidgetLabel"] { height:auto; margin:0; }
+  .st-key-inputs_c_body [data-testid="stNumberInput"]
+      [data-testid="stWidgetLabel"] p { color:#8a8a94; font-size:10px;
+      font-weight:600; line-height:12px; letter-spacing:.07em;
+      text-transform:uppercase; }
+  .st-key-inputs_c_body [data-testid="stWidgetLabel"] button,
+  .st-key-inputs_c_body [data-testid="stNumberInputContainer"] > div:has(
+      > [data-testid="stNumberInputStepDown"]),
+  .st-key-inputs_c_body [data-testid="stNumberInputContainer"] > div:has(
+      > [data-testid="stNumberInputStepUp"]),
+  .st-key-inputs_c_body [data-testid="stNumberInputContainer"] button {
+      display:none; }
+  .st-key-inputs_c_body [data-testid="stNumberInputContainer"] { height:32px;
+      min-height:32px; border:1px solid #dcdce4; border-radius:6px;
+      background:#fff; box-shadow:none; }
+  .st-key-inputs_c_body [data-testid="stNumberInputContainer"]:focus-within {
+      border-color:#1c4e4a; box-shadow:0 0 0 3px #e2eceb; }
+  .st-key-inputs_c_body [data-testid="stNumberInput"] input { height:30px;
+      min-height:30px; padding:0 10px; border:0; background:#fff;
+      font-family:"IBM Plex Mono",monospace; font-size:13px; line-height:30px;
+      text-align:right; font-variant-numeric:tabular-nums; }
+  .st-key-inputs_c_body [data-testid="stCheckbox"] { padding-bottom:5px; }
+  .st-key-inputs_c_body [data-testid="stCheckbox"] p { color:#77777f;
+      font-size:10.5px; line-height:14px; }
   .detail-edit-pill { display:inline-flex; align-items:center; padding:3px 9px;
       border-radius:20px; background:#e8f0ef; color:#143a37; font-size:10.5px; }
   .detail-edit-pill.readonly { background:#f4f4f6; color:#8a8a94; }
-  .st-key-inputs_b [data-testid="stNumberInput"] input,
-  .st-key-inputs_c [data-testid="stNumberInput"] input { font-family:"IBM Plex Mono",
-      monospace; font-size:13px; text-align:right; }
-  .st-key-inputs_b [data-testid="stMetricValue"] { font-family:"IBM Plex Mono",
-      monospace; font-size:26px; font-weight:600; }
-
-  /* The data sheet has to stay inside its half. A markdown table sizes itself
-     to its content, so from about 1400px down block A ran straight over block
-     B — an EGRID and a zone name are wide and neither wraps on its own. */
-  /* Streamlit gives every markdown table cell a border on all four sides, and
-     an earlier pass only ever overrode the bottom one — so the data sheet grew
-     column separators and an outer box that the design never had. A data sheet
-     is a list of rows, not a grid. */
-  /* A markdown table is not a table without a header row, so `_facts` emits an
-     empty one — and Streamlit renders it: 13px of nothing with a rule above and
-     a rule below, which is the doubled line at the top of every data sheet
-     here. None of these tables has a header worth showing; they are label/value
-     lists. Do not delete this without giving `_facts` a real header. */
+  [data-testid="stHorizontalBlock"]:has(.st-key-facts_a) {
+      align-items:flex-start; gap:20px; }
+  .st-key-facts_a { margin-bottom:20px; padding:0; border:0; background:transparent; }
+  .detail-facts-card { overflow:hidden; border:1px solid #eaeaee;
+      border-radius:9px; background:#fff; }
+  .detail-facts-head { display:flex; align-items:center; justify-content:space-between;
+      padding:12px 16px; border-bottom:1px solid #f0f0f3; }
+  .detail-facts-title { color:#8a8a94; font-size:10px; font-weight:600;
+      line-height:12px; letter-spacing:.1em; text-transform:uppercase; }
+  .detail-facts-body { padding:4px 16px 12px; }
+  .detail-fact-row { display:flex; align-items:baseline; justify-content:space-between;
+      gap:16px; padding:8px 0; border-bottom:1px solid #f5f5f7; }
+  .detail-fact-label { flex:none; color:#8a8a94; font-size:12px;
+      line-height:16px; }
+  .detail-fact-value { max-width:65%; color:#17171b; font-size:12.5px;
+      line-height:17px; text-align:right; overflow-wrap:anywhere; }
+  .detail-fact-value.mono { font-family:"IBM Plex Mono",monospace;
+      font-variant-numeric:tabular-nums; }
+  .detail-fact-row.warning .detail-fact-label,
+  .detail-fact-row.warning .detail-fact-value { color:#8a5a12; }
+  .detail-facts-source { padding-top:11px; color:#b0b0b8; font-size:11px;
+      line-height:15px; text-wrap:pretty; }
   [class*="st-key-facts_"] table thead { display:none; }
 
   [class*="st-key-facts_"] table { width:100%; }
@@ -466,14 +971,78 @@ PAGE_CSS = """
   [class*="st-key-facts_"] [data-testid="stMarkdownContainer"] {
       overflow-x:auto; }
 
-  .st-key-inputs_c .calc__scroll { margin:14px -16px 0; }
+  .st-key-inputs_c .calc__scroll { margin:0; }
   .st-key-inputs_c table.calc { width:100%; min-width:760px; }
-  .st-key-inputs_c table.calc th, .st-key-inputs_c table.calc td {
-      padding:9px 16px; border-bottom:1px solid #f4f4f7; }
-  .st-key-inputs_c table.calc thead th { background:#fafafb; }
-  .st-key-inputs_c table.calc tr.calc__result th,
-  .st-key-inputs_c table.calc tr.calc__result td { background:#fafafb;
-      border-top:1px solid #e4e4ea; }
+
+  .detail-reference-card { margin:0 0 12px; border:1px solid #eaeaee;
+      border-radius:9px; background:#fff; overflow:hidden; }
+  .detail-reference-stack { display:block; }
+  .detail-reference-card--regulations { margin-bottom:0; }
+  .detail-reference-card > summary { display:flex; align-items:center;
+      justify-content:space-between; gap:12px; min-height:44px; padding:0 16px;
+      color:#17171b; cursor:pointer; list-style:none; }
+  .detail-reference-card > summary::-webkit-details-marker { display:none; }
+  .detail-reference-summary-copy { display:flex; align-items:baseline; gap:10px;
+      min-width:0; flex-wrap:wrap; }
+  .detail-reference-summary-title { font-size:12.5px; font-weight:500;
+      line-height:16px; }
+  .detail-reference-summary-meta { color:#b0b0b8; font-size:11.5px;
+      line-height:15px; }
+  .detail-reference-badge, .detail-regulation-impact { display:inline-flex;
+      align-items:center; width:max-content; padding:2px 8px; border-radius:20px;
+      background:#fdf5e7; color:#8a5a12; font-size:10.5px; font-weight:500;
+      line-height:15px; }
+  .detail-reference-sign::before { content:'+'; color:#9a9aa6;
+      font-family:"IBM Plex Mono",monospace; font-size:11px; }
+  .detail-reference-card[open] > summary .detail-reference-sign::before {
+      content:'−'; }
+  .detail-reference-body { padding:2px 16px 16px;
+      border-top:1px solid #f0f0f3; }
+  .detail-reference-row { display:grid;
+      grid-template-columns:minmax(140px,200px) minmax(0,1fr) minmax(80px,auto);
+      gap:16px; align-items:center; padding:10px 0;
+      border-bottom:1px solid #f5f5f7; }
+  .detail-reference-type, .detail-reference-title { color:#17171b;
+      font-size:12px; font-weight:500; line-height:16px; }
+  .detail-reference-detail { margin-top:3px; color:#77777f;
+      font-size:12px; line-height:16px; text-wrap:pretty; }
+  .detail-reference-actions { display:flex; justify-content:flex-end; gap:6px;
+      color:#b0b0b8; font-size:11px; }
+  .detail-reference-action { display:inline-flex; align-items:center; height:25px;
+      padding:0 9px; border:1px solid #e2e2e8; border-radius:5px; color:#3a3a44;
+      font-size:11px; font-weight:500; line-height:1; text-decoration:none; }
+  .detail-reference-action:hover { border-color:#c9c9d2; color:#17171b; }
+  .detail-reference-empty { padding:13px 0; color:#9a9aa6;
+      font-size:11.5px; line-height:16px; }
+  .detail-reference-empty--error { color:#8a4a44; }
+  .detail-assumptions { padding-top:13px; }
+  .detail-assumptions-title { color:#8a8a94; font-size:10px; font-weight:600;
+      line-height:12px; letter-spacing:.08em; text-transform:uppercase; }
+  .detail-assumptions ul { display:grid; grid-template-columns:1fr 1fr; gap:5px 24px;
+      margin:9px 0 0; padding-left:18px; color:#77777f; font-size:11px;
+      line-height:15px; }
+  .detail-regulation-row { display:grid;
+      grid-template-columns:96px minmax(0,1fr) 92px 72px; gap:16px;
+      align-items:center; padding:11px 0; border-bottom:1px solid #f5f5f7; }
+  .detail-regulation-date { color:#9a9aa6; font-family:"IBM Plex Mono",monospace;
+      font-size:11.5px; font-variant-numeric:tabular-nums; }
+  .detail-regulation-source { color:#a0a0aa; font-size:10px; font-weight:600;
+      line-height:12px; letter-spacing:.07em; text-transform:uppercase; }
+  .detail-regulation-impact { justify-self:end; }
+  .detail-regulation-impact--neutral { background:#f4f4f6; color:#77777f; }
+  .detail-regulation-note { margin-top:12px; max-width:90ch; color:#b0b0b8;
+      font-size:11px; line-height:15px; text-wrap:pretty; }
+  .detail-regulation-more { padding-top:10px; }
+  .detail-regulation-more > summary { color:#4a4a54; cursor:pointer;
+      font-size:11.5px; font-weight:500; }
+  .detail-regulation-more ul { margin:10px 0 0; padding:0; list-style:none; }
+  .detail-regulation-more li { display:grid; grid-template-columns:96px 1fr;
+      gap:16px; padding:7px 0; border-top:1px solid #f5f5f7; color:#77777f;
+      font-size:11.5px; line-height:16px; }
+  .detail-regulation-more li span:first-child { color:#9a9aa6;
+      font-family:"IBM Plex Mono",monospace; }
+  .detail-final-note { margin:20px 0 0; max-width:80ch; color:#b0b0b8;
+      font-size:11px; line-height:15px; text-wrap:pretty; }
 
   /* Below about a thousand pixels the halves are too narrow for
      "Denkmal-/Inventarstatus" to fit on any line, and a word that cannot fit
@@ -487,36 +1056,57 @@ PAGE_CSS = """
     .st-key-detail_header [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
     .st-key-detail_header [data-testid="stColumn"] { min-width:100%; }
     .st-key-detail_actions [data-testid="stColumn"] { min-width:0; }
-    .st-key-result_bar [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
-    .st-key-result_bar [data-testid="stColumn"] { min-width:100%; border-left:0 !important;
-        padding-left:0 !important; }
+    .detail-result-grid { grid-template-columns:1fr; gap:18px; }
+    .detail-result-cell + .detail-result-cell { border-left:0; padding-left:0;
+        border-top:1px solid #eaeaee; padding-top:18px; }
+    [data-testid="stHorizontalBlock"]:has(.st-key-facts_a) {
+        flex-wrap:wrap; }
+    [data-testid="stHorizontalBlock"]:has(.st-key-facts_a)
+        > [data-testid="stColumn"] { min-width:100%; }
+    .st-key-inputs_c_header > [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
+    .st-key-inputs_c_header [data-testid="stColumn"] { min-width:auto; }
+    .st-key-inputs_c_body > [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
+    .st-key-inputs_c_body > [data-testid="stHorizontalBlock"]
+        > [data-testid="stColumn"] { min-width:calc(50% - 8px); }
+    .detail-reference-row { grid-template-columns:1fr; gap:5px; }
+    .detail-reference-actions { justify-content:flex-start; }
+    .detail-regulation-row { grid-template-columns:82px minmax(0,1fr); gap:8px 12px; }
+    .detail-regulation-impact, .detail-regulation-row .detail-reference-actions {
+        grid-column:2; justify-self:start; }
+    .detail-assumptions ul { grid-template-columns:1fr; }
   }
 </style>
 """
 
 CALC_CSS = """
 <style>
-  /* Its own scroller: in the right-hand column the three columns of the table
-     no longer always fit, and a page that scrolls sideways is worse than a
-     table that does. */
-  div.calc__scroll { overflow-x:auto; margin:.4rem 0 1rem; }
-  table.calc { border-collapse:collapse; width:auto; min-width:min(680px,100%);
-      margin:0; }
-  table.calc th, table.calc td { text-align:left; padding:.42rem .9rem .42rem 0;
-      border-top:0; border-left:0; border-right:0;
-      border-bottom:1px solid rgba(128,128,128,.28); font-weight:400; }
-  table.calc thead th { font-weight:600; font-size:.86em; letter-spacing:.02em;
-      text-transform:uppercase; opacity:.65; }
-  table.calc td.calc__amount { text-align:right; padding-right:0;
+  div.calc__scroll { overflow-x:auto; margin:0; }
+  table.calc { width:100%; min-width:760px; margin:0; border-collapse:collapse; }
+  table.calc th, table.calc td { border:0; border-bottom:1px solid #f4f4f7;
+      text-align:left; }
+  table.calc thead th { padding:9px 16px; border-bottom:1px solid #ebebef;
+      background:#fafafb; color:#8a8a94; font-size:9.5px; font-weight:600;
+      line-height:12px; letter-spacing:.08em; text-transform:uppercase; }
+  table.calc tbody th { padding:9px 16px; color:#17171b; font-size:12.5px;
+      font-weight:500; line-height:16px; }
+  table.calc td.calc__formula { padding:9px 16px; color:#8a8a94;
+      font-family:"IBM Plex Mono",monospace; font-size:11.5px; line-height:16px;
+      font-variant-numeric:tabular-nums; }
+  table.calc .calc__amount { width:190px; padding:9px 16px; text-align:right;
+      font-family:"IBM Plex Mono",monospace; font-size:12.5px; line-height:16px;
       font-variant-numeric:tabular-nums; white-space:nowrap; }
-  table.calc td.calc__formula { opacity:.75; }
-  table.calc tr.calc__result th, table.calc tr.calc__result td { font-weight:700;
-      border-top:2px solid currentColor; border-bottom:none; }
+  table.calc tr.calc__result th, table.calc tr.calc__result td {
+      padding-top:13px; padding-bottom:13px; border-top:1px solid #e4e4ea;
+      border-bottom:0; background:#fafafb; font-weight:600; }
+  table.calc tr.calc__result th { font-size:13px; }
+  table.calc tr.calc__result td.calc__amount { font-size:15px; }
+  table.calc tr.calc__sqm th, table.calc tr.calc__sqm td { padding-top:9px;
+      padding-bottom:9px; border-bottom:0; }
+  table.calc tr.calc__sqm th { color:#77777f; font-size:12px; font-weight:400; }
+  table.calc tr.calc__sqm td.calc__formula { color:#b0b0b8; }
+  table.calc tr.calc__sqm td.calc__amount { color:#4a4a54; font-size:12px; }
 
-  /* The hover box. Its own element rather than a `title` attribute: the native
-     tooltip waits about a second, strips the line breaks that make the formula
-     readable, and cannot be styled to look like the code it is showing. */
-  span.calc__name { position:relative; border-bottom:1px dotted rgba(128,128,128,.75);
+  span.calc__name { position:relative; border-bottom:1px dotted #b0b0b8;
       cursor:help; outline-offset:3px; }
   span.calc__tip { position:absolute; left:0; top:calc(100% + .45rem); z-index:9999;
       display:none; white-space:pre; padding:.6rem .75rem; border-radius:4px;
@@ -547,26 +1137,49 @@ def _tooltip(step):
     )
 
 
-def _calculation_table(steps):
-    """An HTML table rather than markdown, because a markdown cell cannot carry
-    a hover box and the formula has to sit on the name it explains."""
+def _calculation_table(steps, parcel_area=None, per_m2=None):
+    """Render the formula path in the compact table used by the prototype."""
     rows = []
-    for step in steps:
-        amount = (f"{E.chf(step.value)} m²" if step.unit == "m²"
-                  else f"CHF {E.chf(step.value)}")
+    result = next((step for step in steps if step.kind == "result"), None)
+    for step in (step for step in steps if step.kind != "result"):
+        amount = (
+            f"{E.chf(step.value)} m²"
+            if step.unit == "m²"
+            else f"CHF {E.chf(step.value)}"
+        ).replace("-", "−")
+        label = step.label.lstrip("−= ").strip()
         rows.append(
-            f'<tr class="{"calc__result" if step.kind == "result" else ""}">'
+            f'<tr class="calc__row calc__{escape(step.kind)}">'
             f'<th scope="row"><span class="calc__name" tabindex="0">'
-            f'{escape(step.label)}'
+            f'{escape(label)}'
             f'<span class="calc__tip">{_tooltip(step)}</span></span></th>'
             f'<td class="calc__formula">{escape(step.formula)}</td>'
             f'<td class="calc__amount">{escape(amount)}</td></tr>'
         )
-    body = "".join(rows)
-    return (CALC_CSS + '<div class="calc__scroll"><table class="calc"><thead><tr>'
-            '<th>Schritt</th><th>Rechnung</th>'
-            '<th class="calc__amount">Betrag</th></tr></thead><tbody>'
-            + body + "</tbody></table></div>")
+
+    if result is not None:
+        result_amount = f"CHF {E.chf(result.value)}".replace("-", "−")
+        rows.append(
+            '<tr class="calc__result"><th scope="row">Residualer Landwert</th>'
+            '<td class="calc__formula">Erlös − Kosten − Reserve</td>'
+            f'<td class="calc__amount">{escape(result_amount)}</td></tr>'
+        )
+    if parcel_area is not None:
+        sqm_amount = "—" if per_m2 is None else f"CHF {E.chf(per_m2)}"
+        rows.append(
+            '<tr class="calc__sqm"><th scope="row">Davon pro m² Grundstück</th>'
+            f'<td class="calc__formula">÷ {escape(E.chf(parcel_area))} m²</td>'
+            f'<td class="calc__amount">{escape(sqm_amount)}</td></tr>'
+        )
+
+    return (
+        CALC_CSS
+        + '<div class="calc__scroll"><table class="calc"><thead><tr>'
+        '<th>Position</th><th>Berechnung</th>'
+        '<th class="calc__amount">Betrag CHF</th></tr></thead><tbody>'
+        + "".join(rows)
+        + "</tbody></table></div>"
+    )
 
 
 def _number(container, label, pid, name, default, *, step, minimum=0.0,
@@ -636,27 +1249,22 @@ def _assumption_notes(used):
 #: the parcel, which is the one thing it is not. The short form rides in the
 #: result bar; the full one sits directly under the calculation it qualifies.
 RESULT_CAVEAT = (
-    "Bewertet nur das zusätzliche Potenzial — nicht die Parzelle und nicht "
-    "das bestehende Gebäude."
+    "Bei aktuellen Annahmen · vor Steuern und Transaktionskosten"
 )
 
 #: The same line when the number comes out negative. One line either way, so
 #: bar keeps its height: a warning box here added 72px to it, and did it in
 #: exactly the case where the inputs underneath most need the room.
 NEGATIVE_CAVEAT = (
-    ":red[**Negativer Residualwert** — das zusätzliche Potenzial trägt die "
-    "Erstellungskosten nicht.] Bewertet ist nur dieses Potenzial, nicht die "
-    "Parzelle und nicht das bestehende Gebäude."
+    "Negativer Residualwert — das zusätzliche Potenzial trägt die "
+    "Erstellungskosten nicht."
 )
 
-DISCLAIMER = (
-    "Der Residualwert bewertet nur das zusätzliche Potenzial, nicht die "
-    "Parzelle: der Wert des bestehenden Gebäudes ist darin nicht enthalten. "
-    "Erschliessung, Baugrund, Lärmschutz, Auflagen aus einem Gestaltungsplan "
-    "und die tatsächliche anrechenbare Geschossfläche sind hier nicht "
-    "gerechnet. Die eigenen Annahmen aus Block C gelten für alle Parzellen "
-    "dieser Sitzung — einmal eingetragen, nicht pro Parzelle wieder. "
-    "Potenzial und Abbruch gehören zur Parzelle und bleiben dort."
+FINAL_NOTE = (
+    "Berechnung ohne Gewähr. Amtliche Daten aus öffentlichen Registern des "
+    "Kantons Aargau; Referenzpreise gemäss der jeweils ausgewiesenen Quelle. "
+    "Vor Erwerb ist eine rechtliche Prüfung der Bau- und Zonenordnung durch "
+    "die zuständige Baubehörde erforderlich."
 )
 
 
@@ -713,35 +1321,46 @@ def page(parcels, cache, price_of, db=None):
 
     address = _text(row.get("address")) or f"Parzelle {row['parcel']}"
     with st.container(key="detail_breadcrumb", horizontal=True):
-        if st.button("← Screening", key="detail_back"):
+        if st.button("Screening", key="detail_back"):
             close()
             navigation.go_back()
             st.rerun()
         st.html(
-            '<span class="detail-breadcrumb-copy">/ '
-            f'{escape(str(row["municipality"]))} / '
-            f'<strong>Parzelle {escape(str(row["parcel"]))}</strong></span>'
+            '<div class="detail-breadcrumb-trail">'
+            '<span>/</span>'
+            f'<span>{escape(str(row["municipality"]))}</span>'
+            '<span>/</span>'
+            '<span class="detail-breadcrumb-current">'
+            f'Parzelle {escape(str(row["parcel"]))}</span></div>'
         )
 
     with st.container(key="detail_header"):
-        heading, action_column = st.columns([5, 3], vertical_alignment="bottom")
+        heading, action_column = st.columns([5, 3], vertical_alignment="top")
         with heading:
+            badge_html = "".join(
+                '<span class="detail-status-pill '
+                f'{escape(tone)}">{escape(label)}</span>'
+                for label, tone in _detail_header_badges(row, cache)
+            )
             st.title(address)
-            st.caption(
-                f"{row['municipality']} · Parzelle {row['parcel']} · "
-                f"{_text(row.get('zone')) or 'ohne Zone'}"
+            st.html(
+                '<div class="detail-header-meta">'
+                f'{badge_html}'
+                '<span class="detail-header-updated">'
+                f'{escape(_detail_calculated_at(row.get("calculated_at")))}'
+                '</span></div>'
             )
         with action_column.container(key="detail_actions"):
             saved_action, pdf_action = st.columns([1.6, 1.2])
             if _on_merkliste(db_path, *key):
                 if saved_action.button(
-                    "✓ Merkliste — entfernen", width="stretch"
+                    "Merkliste — entfernen", width="content"
                 ):
                     WF.set_saved([key], False, db_path)
                     st.toast("Von der Merkliste entfernt.")
                     st.rerun()
             elif saved_action.button(
-                "Auf Merkliste", width="stretch", type="primary"
+                "Auf Merkliste", width="content"
             ):
                 WF.set_saved([key], True, db_path)
                 st.toast("Auf die Merkliste gesetzt.")
@@ -749,6 +1368,7 @@ def page(parcels, cache, price_of, db=None):
 
     price_ref = price_of(row)
     extract = extract_of(row, cache)
+    zone_rows = _zone_rows(extract) if extract else []
 
     # Claimed here and written at the end: the result needs the inputs below to
     # exist before it can be computed, but it belongs above them on the page.
@@ -758,117 +1378,117 @@ def page(parcels, cache, price_of, db=None):
 
     # ── Block A ─────────────────────────────────────────────────────────────
     with facts.container(key="facts_a"):
-        fact_title, fact_badge = st.columns([3, 1], vertical_alignment="center")
-        fact_title.subheader("A · Grunddaten")
-        fact_badge.html(
-            '<span class="detail-edit-pill readonly">Nicht editierbar</span>'
-        )
-        st.caption("Aus den Registern übernommen — hier ist nichts veränderbar.")
-        st.markdown(_facts(_base_block(row, cache, price_ref, extract)))
-        st.markdown(_links(row))
-        zone_rows = _zone_rows(extract) if extract else []
-        if zone_rows:
-            st.markdown("**Legende beteiligter Objekte** (ÖREB-Auszug)")
-            st.markdown(_facts(zone_rows))
+        st.html(_detail_facts_html(row, cache, price_ref, extract))
 
     # ── Block B ─────────────────────────────────────────────────────────────
     with potential_panel.container(key="inputs_b"):
-        potential_title, potential_badge = st.columns(
-            [3, 1], vertical_alignment="center"
+        st.html(
+            '<div class="detail-potential-head">'
+            '<span class="detail-potential-title">B · Potenzial-Annahmen</span>'
+            '<span class="detail-edit-pill">Editierbar</span></div>'
         )
-        potential_title.subheader("B · Potenzial")
-        potential_badge.html('<span class="detail-edit-pill">Editierbar</span>')
-        b1, b2 = st.columns(2)
-        potential = _number(
-            b1, "Potenzial (m² GF)", pid, "gf", float(row["delta"]), step=10.0,
-            help=(
-                "Vorbelegt mit dem berechneten Wert: Fläche in der Bauzone × Ziffer "
-                "− geschätzte bestehende Geschossfläche. Überschreibbar, sobald eine "
-                "eigene Flächenberechnung vorliegt."
-            ),
-        )
-        unit_size = _number(
-            b2, "Wohnungsgrösse (m²)", pid, "unit", float(E.SQM_PER_UNIT), step=5.0,
-            minimum=10.0,
-            help="Faustregel aus dem Auftrag, keine Planungsgrösse.",
-        )
-        possible = E.units(potential, unit_size)
-        st.divider()
-        st.metric(
-            "Mögliche Wohnungen",
-            "—" if possible is None else f"{possible:.1f}",
-            help="Potenzial ÷ Wohnungsgrösse. Rechnerisch, ohne Grundriss.",
-        )
+        with st.container(key="inputs_b_body"):
+            b1, b2 = st.columns(2, gap="small")
+            potential = _number(
+                b1, "Ausnutzungsreserve aBGF m²", pid, "gf",
+                float(row["delta"]), step=10.0,
+            )
+            b1.html(
+                '<div class="detail-input-hint">Vorschlag aus BZO: '
+                f'{E.chf(float(row["delta"]))} m²</div>'
+            )
+            unit_size = _number(
+                b2, "Ø Wohnungsgrösse m²", pid, "unit",
+                float(E.SQM_PER_UNIT), step=5.0, minimum=10.0,
+            )
+            b2.html(
+                '<div class="detail-input-hint">'
+                'Marktübliche 3.5-Zi-Wohnung</div>'
+            )
+            possible = E.units(potential, unit_size)
+            st.html(_potential_result_html(row, potential, unit_size, possible))
 
     # ── Block C ─────────────────────────────────────────────────────────────
     calculation_panel = st.container(key="inputs_c")
     with calculation_panel:
-        calculation_title, calculation_badge = st.columns(
-            [4, 1], vertical_alignment="center"
-        )
-        calculation_title.subheader("C · Residualwertrechnung")
-        calculation_badge.html('<span class="detail-edit-pill">Editierbar</span>')
-        st.caption(
-            "Landwert = Verkaufserlös der neuen Flächen − Baukosten − Baunebenkosten "
-            "− Abbruch − Finanzierung − Reserve. Der Verkaufspreis rechnet auf 80% "
-            "der Geschossfläche, die Baukosten auf 100%. Mit der Maus über einen "
-            "Schritt fahren zeigt die Formel dahinter."
-        )
-        c1, c2, c3, c4 = st.columns(4)
-        sale_price = _number(
-            c1, "Verkaufspreis (CHF/m²)", pid, "sale",
-            E.BENCHMARKS["sale_price_chf_m2"].value, step=100.0,
-            help=_benchmark_help("sale_price_chf_m2", name="sale"),
-        )
-        sale_share = _number(
-            c2, "Verkaufsflächenanteil (%)", pid, "share",
-            E.BENCHMARKS["sale_area_pct"].value, step=1.0, minimum=10.0, maximum=100.0,
-            help=_benchmark_help(
-                "sale_area_pct",
-                "Wirkt nur auf den Erlös; die Baukosten rechnen auf der ganzen "
-                "Geschossfläche.",
-                name="share",
-            ),
-        )
-        construction = _number(
-            c3, "Baukosten (CHF/m²)", pid, "build",
-            E.BENCHMARKS["construction_chf_m2"].value, step=50.0,
-            help=_benchmark_help("construction_chf_m2", name="build"),
-        )
-        ancillary = _number(
-            c4, "Baunebenkosten (%)", pid, "ancillary",
-            E.BENCHMARKS["ancillary_pct"].value, step=1.0, maximum=100.0,
-            help=_benchmark_help("ancillary_pct", name="ancillary"),
-        )
+        with st.container(key="inputs_c_header"):
+            calculation_title, calculation_meta, calculation_reset = st.columns(
+                [5, 2.2, 1.1], vertical_alignment="center"
+            )
+            calculation_title.html(
+                '<span class="detail-calculation-title">'
+                'C · Residualwert-Rechnung</span>'
+            )
+            calculation_meta.html(
+                '<div class="detail-calculation-meta">'
+                '<span class="detail-edit-pill">Editierbar</span>'
+                '<span class="detail-calculation-hint">'
+                'Eingaben direkt editierbar</span></div>'
+            )
+            if calculation_reset.button(
+                "Standardwerte", key=f"{pid}::calculation-defaults"
+            ):
+                forget(pid)
+                st.rerun()
 
-        d1, d2, d3, d4 = st.columns(4, vertical_alignment="bottom")
-        has_building = bool(row["buildings"]) and row["existing"] > 0
-        demolition = _number(
-            d1, "Abbruchkosten (CHF/m²)", pid, "demolition",
-            E.BENCHMARKS["demolition_chf_m2"].value, step=10.0,
-            help=_benchmark_help("demolition_chf_m2", name="demolition"),
-        )
-        financing = _number(
-            d2, "Finanzierung (%)", pid, "financing",
-            E.BENCHMARKS["financing_pct"].value, step=0.5, maximum=100.0, fmt="%.1f",
-            help=_benchmark_help("financing_pct", name="financing"),
-        )
-        reserve = _number(
-            d3, "Reserve / Unvorhergesehenes (%)", pid, "reserve",
-            E.BENCHMARKS["reserve_pct"].value, step=1.0, maximum=100.0,
-            help=_benchmark_help("reserve_pct", name="reserve"),
-        )
-        demolish = _remember(pid, "demolish", d4.checkbox(
-            "Bestehendes Gebäude abbrechen",
-            value=bool(_recall(pid, "demolish", has_building)),
-            key=_widget_key(pid, "demolish"),
-            disabled=not has_building,
-            help=(
-                "Aus, wenn aufgestockt oder angebaut statt ersetzt wird."
-                if has_building else
-                "Auf dieser Parzelle steht kein Gebäude, das abgebrochen werden müsste."
-            ),
-        ))
+        with st.container(key="inputs_c_body"):
+            c1, c2, c3, c4 = st.columns(4)
+            sale_price = _number(
+                c1, "Verkaufspreis CHF/m²", pid, "sale",
+                E.BENCHMARKS["sale_price_chf_m2"].value, step=100.0,
+                help=_benchmark_help("sale_price_chf_m2", name="sale"),
+            )
+            sale_share = _number(
+                c2, "Verkaufsfläche % der aBGF", pid, "share",
+                E.BENCHMARKS["sale_area_pct"].value, step=1.0,
+                minimum=10.0, maximum=100.0,
+                help=_benchmark_help(
+                    "sale_area_pct",
+                    "Wirkt nur auf den Erlös; die Baukosten rechnen auf der ganzen "
+                    "Geschossfläche.",
+                    name="share",
+                ),
+            )
+            construction = _number(
+                c3, "Baukosten CHF/m² aBGF", pid, "build",
+                E.BENCHMARKS["construction_chf_m2"].value, step=50.0,
+                help=_benchmark_help("construction_chf_m2", name="build"),
+            )
+            ancillary = _number(
+                c4, "Nebenkosten % Baukosten", pid, "ancillary",
+                E.BENCHMARKS["ancillary_pct"].value, step=1.0, maximum=100.0,
+                help=_benchmark_help("ancillary_pct", name="ancillary"),
+            )
+
+            d1, d2, d3, d4 = st.columns(4, vertical_alignment="bottom")
+            has_building = bool(row["buildings"]) and row["existing"] > 0
+            demolition = _number(
+                d1, "Abbruch CHF/m² best. GF", pid, "demolition",
+                E.BENCHMARKS["demolition_chf_m2"].value, step=10.0,
+                help=_benchmark_help("demolition_chf_m2", name="demolition"),
+            )
+            financing = _number(
+                d2, "Finanzierung % der Kosten", pid, "financing",
+                E.BENCHMARKS["financing_pct"].value, step=0.5,
+                maximum=100.0, fmt="%.1f",
+                help=_benchmark_help("financing_pct", name="financing"),
+            )
+            reserve = _number(
+                d3, "Reserve % der Kosten", pid, "reserve",
+                E.BENCHMARKS["reserve_pct"].value, step=1.0, maximum=100.0,
+                help=_benchmark_help("reserve_pct", name="reserve"),
+            )
+            demolish = _remember(pid, "demolish", d4.checkbox(
+                "Bestehendes Gebäude abbrechen",
+                value=bool(_recall(pid, "demolish", has_building)),
+                key=_widget_key(pid, "demolish"),
+                disabled=not has_building,
+                help=(
+                    "Aus, wenn aufgestockt oder angebaut statt ersetzt wird."
+                    if has_building else
+                    "Auf dieser Parzelle steht kein Gebäude, das abgebrochen werden müsste."
+                ),
+            ))
 
     steps = E.residual(
         potential_gf=potential,
@@ -911,40 +1531,15 @@ def page(parcels, cache, price_of, db=None):
     # step name shows the expression behind it, symbols and all — read off the
     # rule that computed the number, so the two cannot drift apart.
     calculation_panel.markdown(
-        _calculation_table(steps), unsafe_allow_html=True
+        _calculation_table(steps, float(row["area"]), per_m2),
+        unsafe_allow_html=True,
     )
-    calculation_panel.caption(DISCLAIMER)
-    with calculation_panel.expander("Annahmen und Quellen"):
-        for note in notes:
-            st.markdown(f"- {note}")
-        if st.button("Annahmen zurücksetzen"):
-            forget(pid)
-            st.rerun()
 
     # ── The result bar ──────────────────────────────────────────────────────
     # Written last, drawn first. The warning belongs here rather than beside the
     # table: it explains the number, and this is where the number is read.
     with result_bar:
-        r1, r2, r3 = st.columns([1.35, 1, 1])
-        r1.metric("Residualer Landwert", f"CHF {E.chf(land)}")
-        r2.metric(
-            "pro m² Parzelle",
-            "—" if per_m2 is None else f"CHF {E.chf(per_m2)}",
-            help="Direkt vergleichbar mit der Landpreis-Referenz in der Liste.",
-        )
-        if price_ref:
-            r3.metric(
-                f"Referenz {price_ref.scope}",
-                f"CHF {E.chf(price_ref.price_chf_m2)}/m²",
-                delta=None if per_m2 is None
-                else f"{E.chf(per_m2 - price_ref.price_chf_m2)} /m² Differenz",
-                help=(
-                    "Die Referenz gilt der ganzen Parzelle inklusive Bestand, der "
-                    "Residualwert nur der zusätzlichen Geschossfläche. Ein "
-                    "Screening-Vergleich, keine Bewertung."
-                ),
-            )
-        st.caption(NEGATIVE_CAVEAT if land < 0 else RESULT_CAVEAT)
+        st.html(_result_bar_html(row, land, per_m2, price_ref))
 
     # ── Block D ─────────────────────────────────────────────────────────────
     # The regulations themselves, straight out of the same extract. Before this,
@@ -952,32 +1547,10 @@ def page(parcels, cache, price_of, db=None):
     # that sets the number is one click away, and it is the one the cadastre
     # names for this parcel rather than one found by matching municipality names.
     #
-    # Folded away by default: it is a reference to open when a candidate is
-    # worth the reading, not something to scroll past on every parcel.
-    with st.expander("D · Rechtsgrundlagen", expanded=False):
-        if not extract:
-            st.caption(
-                "Erst nach der ÖREB-Abfrage verfügbar — geprüft wird die Shortlist, "
-                "über «▶ Neu berechnen» in der Liste."
-            )
-        else:
-            left, right = st.columns(2)
-            left.markdown("**Rechtsvorschriften**")
-            for doc in extract.get("provisions") or []:
-                left.markdown(f"- {_document_line(doc)}")
-            if not extract.get("provisions"):
-                left.caption("keine im Auszug")
-            right.markdown("**Gesetzliche Grundlagen**")
-            for doc in extract.get("laws") or []:
-                right.markdown(f"- {_document_line(doc)}")
-            if not extract.get("laws"):
-                right.caption("keine im Auszug")
-            st.caption(
-                "Aus dem ÖREB-Auszug dieser Parzelle"
-                + (f" vom {extract['created'][:10]}" if extract.get("created") else "")
-                + ". Die Bau- und Nutzungsordnung ist die der zuständigen Gemeinde, "
-                "so wie der Kataster sie dieser Parzelle zuordnet."
-            )
+    # The prototype keeps legal references and the assumptions that qualify
+    # them in one compact native disclosure card. There is no standalone
+    # disclaimer paragraph or second "Annahmen und Quellen" expander.
+    legal_card = _reference_card_html(extract, zone_rows, notes)
 
     # ── Block E ─────────────────────────────────────────────────────────────
     # What block D cannot say. The ÖREB extract names the documents that govern
@@ -985,15 +1558,10 @@ def page(parcels, cache, price_of, db=None):
     # date is the whole question behind "is this analysis still on the current
     # rules", and OEREBlex answers it for the canton in one request.
     #
-    # Three rows visible and the rest folded, rather than folded entirely: a
-    # change list nobody opens is a change list nobody reads, and the top of it
-    # is short enough to take in at a glance.
-    #
     # The request itself runs in a background thread (`regulations.
     # ensure_news_started`), started here rather than awaited here: block E is
     # the only thing in this view that depends on a third-party server, and
     # this function has no business making the other four blocks wait on it.
-    st.subheader("E · Neueste Änderungen")
     # Started first, then read — never "started, therefore nothing yet". A
     # twelve-hour re-arm also returns True while the previous list is still
     # held, and collapsing those two cases threw that list away for exactly
@@ -1026,50 +1594,25 @@ def page(parcels, cache, price_of, db=None):
         (None, "") if not have_news or news_error
         else R.for_municipality(edicts, _text(row["municipality"]), int(row["bfs"]))
     )
-    with st.container(key="facts_e"):
-        if not have_news:
-            # Nothing to show yet — fills itself in on its own schedule, see
-            # `_regulation_news_poll`.
-            _regulation_news_poll()
-        elif news_error:
-            # Never a blank panel: an empty change list reads as "nothing has
-            # changed lately", which is the opposite of "we could not ask".
-            st.caption(
-                f"Änderungsliste nicht abrufbar: {news_error}. Block D ist davon "
-                "unberührt — der stammt aus dem ÖREB-Auszug dieser Parzelle, "
-                "nicht aus dieser Abfrage."
-            )
-        else:
-            if own:
-                line = f"**{own.label}** in Kraft seit **{own.when}**"
-                if own.document:
-                    line += f" — [Dokument]({own.document})"
-                st.markdown(f"{row['municipality']}: {line}")
-            else:
-                st.markdown(
-                    f"{row['municipality']}: in OEREBlex keine gültige "
-                    "Rechtsvorschrift verzeichnet."
-                )
-            if own_note:
-                st.caption(own_note)
-            if edicts:
-                st.markdown("**Im Kanton zuletzt in Kraft getreten**")
-                st.markdown(_facts(_edict_rows(edicts[:3])))
-                if len(edicts) > 3:
-                    with st.expander(f"Alle {len(edicts)} Änderungen"):
-                        st.markdown(_facts(_edict_rows(edicts[3:])))
-            st.caption(
-                "Quelle: oereblex.ag.ch — dieselbe Plattform, auf die die "
-                "Dokumente in Block D verlinken. Verzeichnet, was in Kraft ist; "
-                "Revisionen im Mitwirkungsverfahren stehen dort nicht und sind "
-                "nur über das Amtsblatt-Abonnement zu sehen."
-            )
-            if news_status != "done":
-                # A refresh is running behind the list above. The fragment
-                # draws nothing while a result exists; it is here so the
-                # replacement arrives on its own rather than waiting for the
-                # reader to click something unrelated.
-                _regulation_news_poll()
+    regulation_card = _regulation_card_html(
+        row,
+        edicts,
+        own,
+        own_note,
+        loading=not have_news,
+        error=news_error if have_news else "",
+    )
+    st.html(
+        '<div class="detail-reference-stack">'
+        + legal_card
+        + regulation_card
+        + f'<p class="detail-final-note">{escape(FINAL_NOTE)}</p>'
+        + '</div>'
+    )
+    if not have_news or news_status != "done":
+        # The compact card keeps the same non-blocking refresh behaviour as the
+        # old open list: it fills itself without requiring an unrelated click.
+        _regulation_news_poll()
 
     # ── Export ──────────────────────────────────────────────────────────────
     blocks = [
@@ -1123,6 +1666,7 @@ def page(parcels, cache, price_of, db=None):
         data=document,
         file_name=f"parzelle-{row['municipality']}-{row['parcel']}.pdf".replace(" ", "-"),
         mime="application/pdf",
-        width="stretch",
+        type="primary",
+        width="content",
         help="Alle drei Blöcke samt vollständigem Rechenweg und Quellen.",
     )

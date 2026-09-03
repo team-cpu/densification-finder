@@ -1,6 +1,7 @@
 import datetime
 import io
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -93,6 +94,95 @@ def wait_for_news(timeout=5):
     raise AssertionError("regulation news fetch did not settle in time")
 
 
+def result_markup(app):
+    """Return the dedicated result strip rather than coupling tests to widgets."""
+    return next(
+        str(getattr(element.proto, "body", ""))
+        for element in app.main
+        if getattr(element, "type", "") == "html"
+        and 'class="detail-result-grid"' in str(getattr(element.proto, "body", ""))
+    )
+
+
+def facts_markup(app):
+    return next(
+        str(getattr(element.proto, "body", ""))
+        for element in app.main
+        if getattr(element, "type", "") == "html"
+        and 'class="detail-facts-card"' in str(getattr(element.proto, "body", ""))
+    )
+
+
+def potential_markup(app):
+    return next(
+        str(getattr(element.proto, "body", ""))
+        for element in app.main
+        if getattr(element, "type", "") == "html"
+        and 'class="detail-potential-result"' in str(
+            getattr(element.proto, "body", "")
+        )
+    )
+
+
+def potential_units(app):
+    match = re.search(r'data-units="([^"]*)"', potential_markup(app))
+    if match is None:
+        raise AssertionError("potential result has no data-units attribute")
+    return match.group(1)
+
+
+def calculation_header_markup(app):
+    return next(
+        str(getattr(element.proto, "body", ""))
+        for element in app.main
+        if getattr(element, "type", "") == "html"
+        and 'class="detail-calculation-title"' in str(
+            getattr(element.proto, "body", "")
+        )
+    )
+
+
+def reference_card_markup(app):
+    return next(
+        str(getattr(element.proto, "body", ""))
+        for element in app.main
+        if getattr(element, "type", "") == "html"
+        and 'class="detail-reference-card detail-reference-card--legal"' in str(
+            getattr(element.proto, "body", "")
+        )
+    )
+
+
+def regulation_card_markup(app):
+    return next(
+        str(getattr(element.proto, "body", ""))
+        for element in app.main
+        if getattr(element, "type", "") == "html"
+        and 'class="detail-reference-card detail-reference-card--regulations"' in str(
+            getattr(element.proto, "body", "")
+        )
+    )
+
+
+def final_note_markup(app):
+    return next(
+        str(getattr(element.proto, "body", ""))
+        for element in app.main
+        if getattr(element, "type", "") == "html"
+        and 'class="detail-final-note"' in str(getattr(element.proto, "body", ""))
+    )
+
+
+def result_attribute(app, name):
+    match = re.search(
+        rf'{re.escape(name)}="([^"]*)"',
+        result_markup(app),
+    )
+    if match is None:
+        raise AssertionError(f"result strip has no {name!r} attribute")
+    return match.group(1)
+
+
 class DetailViewTest(unittest.TestCase):
     """The single-parcel analysis view, driven the way the interface drives it."""
 
@@ -135,20 +225,22 @@ class DetailViewTest(unittest.TestCase):
 
     def test_all_four_blocks_render_for_a_selected_parcel(self):
         app = self.open_detail()
-        self.assertEqual(
-            [s.value for s in app.subheader],
-            ["A · Grunddaten", "B · Potenzial", "C · Residualwertrechnung",
-             "E · Neueste Änderungen"],
-        )
-        # D is the fourth block, folded away rather than dropped.
-        self.assertIn("D · Rechtsgrundlagen", [e.label for e in app.expander])
+        self.assertEqual([s.value for s in app.subheader], [])
+        self.assertIn("A · Amtliche Grunddaten", facts_markup(app))
+        self.assertIn("Resultierende Wohneinheiten", potential_markup(app))
+        self.assertIn("C · Residualwert-Rechnung", calculation_header_markup(app))
+        self.assertIn("Rechtliche Grundlagen &amp; Quellen", reference_card_markup(app))
+        self.assertIn("Regulatorische Änderungen", regulation_card_markup(app))
         labels = {n.label for n in app.number_input}
-        self.assertIn("Potenzial (m² GF)", labels)
-        self.assertIn("Verkaufspreis (CHF/m²)", labels)
-        self.assertIn("Reserve / Unvorhergesehenes (%)", labels)
+        self.assertIn("Ausnutzungsreserve aBGF m²", labels)
+        self.assertIn("Verkaufspreis CHF/m²", labels)
+        self.assertIn("Reserve % der Kosten", labels)
 
         # Block B is pre-filled from the pipeline, not typed in again.
-        potential = next(n for n in app.number_input if n.label == "Potenzial (m² GF)")
+        potential = next(
+            n for n in app.number_input
+            if n.label == "Ausnutzungsreserve aBGF m²"
+        )
         self.assertAlmostEqual(potential.value, self.delta, places=6)
 
 
@@ -162,10 +254,7 @@ class DetailViewTest(unittest.TestCase):
         app = self.open_detail()
         wait_for_news()
         app.run()
-        self.assertIn(
-            "Im Kanton zuletzt in Kraft getreten",
-            " ".join(m.value for m in app.markdown),
-        )
+        self.assertIn("OEREBlex Aargau", regulation_card_markup(app))
 
         # Age the cache past its TTL and make the replacement fetch hang, so
         # the render under test is the one that re-arms.
@@ -183,22 +272,18 @@ class DetailViewTest(unittest.TestCase):
 
         self.assertFalse(app.exception)
         self.assertTrue(started.wait(5), "the refetch never started")
-        self.assertIn(
-            "Im Kanton zuletzt in Kraft getreten",
-            " ".join(m.value for m in app.markdown),
-        )
-        self.assertNotIn("Wird geladen", " ".join(c.value for c in app.caption))
+        self.assertIn("OEREBlex Aargau", regulation_card_markup(app))
+        self.assertNotIn("wird geladen", regulation_card_markup(app))
 
-    def test_the_references_are_folded_away_and_the_sources_stay_folded(self):
-        """Philipp asked for block D to open on demand like «Annahmen und
-        Quellen», so the parcel a user is judging is not pushed off the screen
-        by a list of documents they will read once."""
+    def test_the_reference_cards_are_native_folded_disclosures(self):
+        """The HTML reference uses compact details cards, closed by default."""
         app = self.open_detail()
-        # `expanded` lives on the block proto; the test helper exposes the
-        # label but not the state.
-        folded = {e.label: e.proto.expanded for e in app.expander}
-        self.assertFalse(folded["D · Rechtsgrundlagen"])
-        self.assertFalse(folded["Annahmen und Quellen"])
+        legal = reference_card_markup(app)
+        regulations = regulation_card_markup(app)
+        self.assertIn('<details class="detail-reference-card', legal)
+        self.assertIn('detail-reference-card--regulations', regulations)
+        self.assertNotIn("<details open", legal)
+        self.assertNotIn("<details open", regulations)
 
     def test_the_result_is_written_above_the_form_that_produces_it(self):
         """The bar has to be drawn before the inputs to sit above them: the
@@ -207,29 +292,25 @@ class DetailViewTest(unittest.TestCase):
         one thing keeping the total off the foot of the page now that the bar
         no longer sticks."""
         app = self.open_detail()
-        order = [
-            (element.type, getattr(element, "label", ""))
-            for element in app.main
-        ]
-        result = order.index(("metric", "Residualer Landwert"))
+        order = list(app.main)
+        result = next(
+            i for i, element in enumerate(order)
+            if element.type == "html"
+            and 'class="detail-result-grid"' in str(element.proto.body)
+        )
         first_input = min(
-            i for i, (kind, _) in enumerate(order) if kind == "number_input"
+            i for i, element in enumerate(order) if element.type == "number_input"
         )
         self.assertLess(result, first_input)
 
-    def test_the_caveat_sits_directly_under_the_calculation(self):
-        """It used to sit under the export button, three screens below the
-        figure it qualifies. Directly under means directly under — nothing
-        between the table and the sentence that says what the number is not."""
+    def test_the_reference_cards_replace_the_legacy_disclaimer(self):
+        """The prototype has two compact cards and one small final note."""
         app = self.open_detail()
-        captions = [c.value for c in app.caption]
-        self.assertIn(detail.RESULT_CAVEAT, captions)
-        self.assertIn(detail.DISCLAIMER, captions)
-
-        body = [getattr(e, "value", None) for e in app.main]
-        table = next(i for i, v in enumerate(body)
-                     if isinstance(v, str) and 'class="calc"' in v)
-        self.assertEqual(body[table + 1], detail.DISCLAIMER)
+        self.assertIn(detail.RESULT_CAVEAT, result_markup(app))
+        self.assertIn(detail.FINAL_NOTE, final_note_markup(app))
+        self.assertNotIn("Der Residualwert bewertet nur", " ".join(
+            str(getattr(element.proto, "body", "")) for element in app.main
+        ))
 
     def test_a_negative_result_does_not_grow_the_result_bar(self):
         """The warning used to be its own block inside the bar, which added 72px
@@ -237,19 +318,18 @@ class DetailViewTest(unittest.TestCase):
         is the same single caption line now, whatever the sign."""
         app = self.open_detail()
         self.assertEqual(len(app.warning), 0)
-        self.assertIn(detail.RESULT_CAVEAT, [c.value for c in app.caption])
+        self.assertIn(detail.RESULT_CAVEAT, result_markup(app))
 
         cost = next(n for n in app.number_input
-                    if n.label == "Baukosten (CHF/m²)")
+                    if n.label == "Baukosten CHF/m² aBGF")
         cost.set_value(99999.0).run()
         self.assertFalse(app.exception)
-        land = next(m for m in app.metric if m.label == "Residualer Landwert")
-        self.assertIn("-", land.value)
+        self.assertLess(float(result_attribute(app, "data-residual")), 0)
         # The strip gained no block: same one line, different words.
         self.assertEqual(len(app.warning), 0)
-        captions = [c.value for c in app.caption]
-        self.assertIn(detail.NEGATIVE_CAVEAT, captions)
-        self.assertNotIn(detail.RESULT_CAVEAT, captions)
+        markup = result_markup(app)
+        self.assertIn(detail.NEGATIVE_CAVEAT, markup)
+        self.assertNotIn(detail.RESULT_CAVEAT, markup)
 
     def test_the_export_is_at_the_top(self):
         """Philipp asked for it in the top right corner. It is built at the end
@@ -273,9 +353,8 @@ class DetailViewTest(unittest.TestCase):
         self.assertEqual(boxed, [], "the calculation is back inside a column")
         # …and it is still on the page at all.
         self.assertTrue(any('class="calc"' in m.value for m in app.markdown))
-        # The assumptions list now belongs to the same full-width calculation
-        # card as the values it documents.
-        self.assertIn("Annahmen und Quellen", [e.label for e in app.expander])
+        # Assumptions are preserved inside the prototype's legal/source card.
+        self.assertIn("Annahmen &amp; Benchmarks", reference_card_markup(app))
 
     def test_the_page_does_not_wait_on_a_slow_oereblex(self):
         """The bug this change fixes: block E's fetch used to run on the render
@@ -309,13 +388,10 @@ class DetailViewTest(unittest.TestCase):
             "— the fetch is back on the render path",
         )
         # Fast because the page actually rendered, not because it gave up early.
-        self.assertEqual(
-            [s.value for s in app.subheader],
-            ["A · Grunddaten", "B · Potenzial", "C · Residualwertrechnung",
-             "E · Neueste Änderungen"],
-        )
-        self.assertTrue(any(m.label == "Residualer Landwert" for m in app.metric))
-        self.assertIn("Wird geladen", " ".join(c.value for c in app.caption))
+        self.assertEqual([s.value for s in app.subheader], [])
+        self.assertIn("A · Amtliche Grunddaten", facts_markup(app))
+        self.assertIn('class="detail-result-grid"', result_markup(app))
+        self.assertIn("wird geladen", regulation_card_markup(app))
 
         # The fetch is still running in the background when the test's own
         # assertions finish; let it settle before `tearDown`'s next `setUp`
@@ -343,20 +419,17 @@ class DetailViewTest(unittest.TestCase):
         app.run()
         self.assertFalse(app.exception)
 
-        self.assertIn("Wird geladen", " ".join(c.value for c in app.caption))
-        self.assertEqual(
-            " ".join(m.value for m in app.markdown).count("Im Kanton zuletzt"), 0,
-            "the edict list rendered before the fetch had answered",
-        )
+        self.assertIn("wird geladen", regulation_card_markup(app))
+        self.assertNotIn("OEREBlex Aargau", regulation_card_markup(app))
 
         wait_for_news()
         app.run()
         self.assertFalse(app.exception)
 
-        body = " ".join(m.value for m in app.markdown)
-        self.assertIn("Im Kanton zuletzt in Kraft getreten", body)
+        body = regulation_card_markup(app)
+        self.assertIn("OEREBlex Aargau", body)
         self.assertIn("Gipf-Oberfrick", body)
-        self.assertNotIn("Wird geladen", " ".join(c.value for c in app.caption))
+        self.assertNotIn("wird geladen", body)
 
     def test_the_change_list_says_when_it_could_not_be_fetched(self):
         """The dangerous failure mode for this panel is the silent one: an empty
@@ -385,13 +458,13 @@ class DetailViewTest(unittest.TestCase):
         app.run()
         self.assertFalse(app.exception)
 
-        captions = " ".join(c.value for c in app.caption)
-        self.assertIn("nicht abrufbar", captions)
-        self.assertIn("nodename nor servname", captions)
+        body = regulation_card_markup(app)
+        self.assertIn("nicht abrufbar", body)
+        self.assertIn("nodename nor servname", body)
         # …and the page is otherwise whole.
-        self.assertIn("E · Neueste Änderungen", [s.value for s in app.subheader])
-        self.assertIn("D · Rechtsgrundlagen", [e.label for e in app.expander])
-        self.assertTrue(any(m.label == "Residualer Landwert" for m in app.metric))
+        self.assertIn("Regulatorische Änderungen", body)
+        self.assertIn("Rechtliche Grundlagen", reference_card_markup(app))
+        self.assertIn('class="detail-result-grid"', result_markup(app))
 
     def test_the_parcel_carries_its_own_regulation_date(self):
         """What block D cannot say: since when. It is the first line of E, above
@@ -403,11 +476,12 @@ class DetailViewTest(unittest.TestCase):
         wait_for_news()
         app.run()
         self.assertFalse(app.exception)
-        body = " ".join(m.value for m in app.markdown)
-        self.assertIn("in Kraft seit", body)
-        # three rows on show, the remainder folded away
-        self.assertTrue(any(e.label.startswith("Alle ") and "Änderungen" in e.label
-                            for e in app.expander))
+        body = regulation_card_markup(app)
+        self.assertIn(self.municipality, body)
+        self.assertIn("Aktuell in Kraft", body)
+        self.assertIn("Relevant", body)
+        self.assertIn("Alle ", body)
+        self.assertIn("Änderungen", body)
 
     def test_each_step_carries_the_formula_that_produced_it(self):
         """Philipp asked for the reasoning to be visible on hover, and for the
@@ -419,7 +493,7 @@ class DetailViewTest(unittest.TestCase):
         self.assertIn("potenzial_gf * baukosten_pro_m2", body)
         self.assertIn('class="calc__name"', body)
         # The help on the input says where its number goes, read off the formulas.
-        price = next(n for n in app.number_input if n.label == "Verkaufspreis (CHF/m²)")
+        price = next(n for n in app.number_input if n.label == "Verkaufspreis CHF/m²")
         self.assertIn("{verkaufspreis}", price.help)
         self.assertIn("Verkaufserlös", price.help)
 
@@ -436,7 +510,7 @@ class DetailViewTest(unittest.TestCase):
 
     def test_back_returns_to_the_list(self):
         app = self.open_detail()
-        back = next(b for b in app.button if b.label.startswith("←"))
+        back = next(b for b in app.button if b.label == "Screening")
         back.click().run()
         self.assertFalse(app.exception)
         self.assertNotIn(detail.SELECTED, app.session_state)
@@ -453,29 +527,28 @@ class DetailViewTest(unittest.TestCase):
         """No recalculate button: the residual value has to follow the input on
         the same rerun, which is the whole interaction the brief describes."""
         app = self.open_detail()
-        before = next(m for m in app.metric if m.label == "Residualer Landwert").value
+        before = float(result_attribute(app, "data-residual"))
 
-        price = next(n for n in app.number_input if n.label == "Verkaufspreis (CHF/m²)")
+        price = next(n for n in app.number_input if n.label == "Verkaufspreis CHF/m²")
         price.set_value(price.value * 2).run()
         self.assertFalse(app.exception)
-        after = next(m for m in app.metric if m.label == "Residualer Landwert").value
+        after = float(result_attribute(app, "data-residual"))
         self.assertNotEqual(before, after)
-        self.assertGreater(self._amount(after), self._amount(before))
+        self.assertGreater(after, before)
 
     def test_unit_count_follows_the_assumed_unit_size(self):
         app = self.open_detail()
-        size = next(n for n in app.number_input if n.label == "Wohnungsgrösse (m²)")
+        size = next(n for n in app.number_input if n.label == "Ø Wohnungsgrösse m²")
         size.set_value(180.0).run()
         self.assertFalse(app.exception)
-        units = next(m for m in app.metric if m.label == "Mögliche Wohnungen")
-        self.assertAlmostEqual(float(units.value), self.delta / 180.0, places=1)
+        self.assertAlmostEqual(float(potential_units(app)), self.delta / 180.0, places=1)
 
     def test_own_numbers_follow_the_user_to_the_next_parcel(self):
         """A developer's construction cost does not change because they clicked
         a different row. Keeping these per parcel would mean retyping seven
         numbers on every lead."""
         app = self.open_detail()
-        price = next(n for n in app.number_input if n.label == "Verkaufspreis (CHF/m²)")
+        price = next(n for n in app.number_input if n.label == "Verkaufspreis CHF/m²")
         price.set_value(9999.0).run()
 
         with sqlite3.connect(self.database) as con:
@@ -484,7 +557,7 @@ class DetailViewTest(unittest.TestCase):
                 "WHERE bfs || ':' || parcel <> ? ORDER BY delta DESC LIMIT 1",
                 (self.pid,),
             ).fetchone()
-        next(b for b in app.button if b.label.startswith("←")).click().run()
+        next(b for b in app.button if b.label == "Screening").click().run()
         # Back now lands on Screening, so choosing the next parcel means both
         # the key and the page — the parcel key alone stopped being the whole
         # navigation when Analyse became a page.
@@ -493,20 +566,23 @@ class DetailViewTest(unittest.TestCase):
         app.run()
         self.assertFalse(app.exception)
 
-        price = next(n for n in app.number_input if n.label == "Verkaufspreis (CHF/m²)")
+        price = next(n for n in app.number_input if n.label == "Verkaufspreis CHF/m²")
         self.assertEqual(price.value, 9999.0)
         # …but the parcel's own figures do not follow it.
-        potential = next(n for n in app.number_input if n.label == "Potenzial (m² GF)")
+        potential = next(
+            n for n in app.number_input
+            if n.label == "Ausnutzungsreserve aBGF m²"
+        )
         self.assertAlmostEqual(potential.value, other[2], places=6)
         self.assertNotAlmostEqual(potential.value, self.delta, places=6)
 
     def test_reset_restores_the_published_benchmarks(self):
         app = self.open_detail()
-        price = next(n for n in app.number_input if n.label == "Verkaufspreis (CHF/m²)")
+        price = next(n for n in app.number_input if n.label == "Verkaufspreis CHF/m²")
         price.set_value(9999.0).run()
-        next(b for b in app.button if b.label == "Annahmen zurücksetzen").click().run()
+        next(b for b in app.button if b.label == "Standardwerte").click().run()
         self.assertFalse(app.exception)
-        price = next(n for n in app.number_input if n.label == "Verkaufspreis (CHF/m²)")
+        price = next(n for n in app.number_input if n.label == "Verkaufspreis CHF/m²")
         self.assertEqual(price.value, E.BENCHMARKS["sale_price_chf_m2"].value)
 
     def test_auf_merkliste_saves_the_open_parcel(self):
@@ -555,11 +631,9 @@ class DetailViewTest(unittest.TestCase):
         next(b for b in app.button if b.label == "Auf Merkliste").click().run()
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state[detail.SELECTED], self.pid)
-        self.assertEqual(
-            [s.value for s in app.subheader],
-            ["A · Grunddaten", "B · Potenzial", "C · Residualwertrechnung",
-             "E · Neueste Änderungen"],
-        )
+        self.assertEqual([s.value for s in app.subheader], [])
+        self.assertIn("Regulatorische Änderungen", regulation_card_markup(app))
+        self.assertIn("A · Amtliche Grunddaten", facts_markup(app))
 
     def test_a_selection_that_no_longer_exists_says_so(self):
         """A recompute can drop a parcel out of the table while it is open."""
@@ -570,11 +644,6 @@ class DetailViewTest(unittest.TestCase):
         app.run()
         self.assertFalse(app.exception)
         self.assertTrue(any("steht nicht mehr" in w.value for w in app.warning))
-
-    @staticmethod
-    def _amount(text):
-        return float(text.replace("CHF", "").replace("’", "").strip())
-
 
 class DetailEdgeCaseTest(unittest.TestCase):
     """Rows the current canton-wide result set happens not to contain. The code
@@ -624,7 +693,13 @@ class DetailEdgeCaseTest(unittest.TestCase):
         return app
 
     def text(self, app):
-        return " ".join(m.value for m in app.markdown)
+        markdown = " ".join(m.value for m in app.markdown)
+        html = " ".join(
+            str(getattr(element.proto, "body", ""))
+            for element in app.main
+            if getattr(element, "type", "") == "html"
+        )
+        return f"{markdown} {html}"
 
     def test_parcel_without_an_egrid_says_it_cannot_be_asked(self):
         self.edit("UPDATE parcel_results SET egrid='' WHERE bfs=? AND parcel=?",
@@ -690,9 +765,7 @@ class DetailEdgeCaseTest(unittest.TestCase):
 
     def test_an_unchecked_parcel_says_the_regulations_are_not_fetched_yet(self):
         app = self.open_detail()
-        self.assertTrue(
-            any("Erst nach der ÖREB-Abfrage" in c.value for c in app.caption)
-        )
+        self.assertIn("Erst nach der ÖREB-Abfrage", reference_card_markup(app))
 
     def test_a_hard_restriction_is_shown_on_the_parcel(self):
         self.edit(
@@ -716,13 +789,15 @@ class DetailEdgeCaseTest(unittest.TestCase):
 
     def test_zero_potential_does_not_break_the_calculation(self):
         app = self.open_detail()
-        potential = next(n for n in app.number_input if n.label == "Potenzial (m² GF)")
+        potential = next(
+            n for n in app.number_input
+            if n.label == "Ausnutzungsreserve aBGF m²"
+        )
         potential.set_value(0.0).run()
         self.assertFalse(app.exception)
-        units = next(m for m in app.metric if m.label == "Mögliche Wohnungen")
-        self.assertEqual(float(units.value), 0.0)
-        land = next(m for m in app.metric if m.label == "Residualer Landwert")
-        self.assertIn("CHF", land.value)
+        self.assertEqual(float(potential_units(app)), 0.0)
+        self.assertIn("CHF", result_markup(app))
+        self.assertTrue(result_attribute(app, "data-residual"))
 
     def test_the_password_gate_still_stands_in_front_of_a_parcel(self):
         """A session-state key must not be a way past the gate: the deployed URL

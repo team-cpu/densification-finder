@@ -10,6 +10,7 @@ is still on its card; what the user works through day to day is the stage.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from html import escape
 
 import pandas as pd
@@ -34,6 +35,268 @@ DUE_PREVIEW = 4
 #: Session state survives that rerun, so the dialog keeps reopening itself on
 #: every rerun until something explicitly pops this key.
 CONTACT_OPEN = "acquisition_contact_open"
+
+
+_CONTACT_STAGE_TINTS = {
+    "not_contacted": ("#f4f4f6", "#6a6a74"),
+    "contacted": ("#eef2fb", "#33538f"),
+    "in_discussion": ("#e8f0ef", "#143a37"),
+    "meeting_scheduled": ("#eef6f0", "#2f6b45"),
+    "declined": ("#f6f2ee", "#7a5a3a"),
+}
+
+
+_CONTACT_DIALOG_CSS = """
+<style>
+div[data-testid="stDialog"]:has(.scope-contact-modal) {
+  align-items: stretch !important;
+  padding: 0 !important;
+}
+
+div[data-testid="stDialog"]:has(.scope-contact-modal) > div {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  max-width: none !important;
+  height: 100vh !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: flex-start !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  padding: 64px 24px !important;
+  overflow-y: auto !important;
+  background: rgba(23, 23, 27, .28) !important;
+}
+
+div[data-testid="stDialog"]:has(.scope-contact-modal) section[role="dialog"] {
+  position: relative !important;
+  width: 620px !important;
+  min-width: 0 !important;
+  max-width: calc(100vw - 48px) !important;
+  max-height: none !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid #e4e4ea !important;
+  border-radius: 11px !important;
+  background: #fff !important;
+  box-shadow: none !important;
+}
+
+div[data-testid="stDialog"]:has(.scope-contact-modal) section[role="dialog"]
+  > h2 {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+}
+
+div[data-testid="stDialog"]:has(.scope-contact-modal) section[role="dialog"]
+  > button[aria-label="Close"] {
+  top: 18px !important;
+  right: 20px !important;
+  z-index: 4 !important;
+  width: 26px !important;
+  min-width: 26px !important;
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 !important;
+  border: 1px solid #e2e2e8 !important;
+  border-radius: 5px !important;
+  background: #fff !important;
+  color: #77777f !important;
+}
+
+div[data-testid="stDialog"]:has(.scope-contact-modal) section[role="dialog"]
+  > div:last-child {
+  padding: 0 !important;
+}
+
+div[data-testid="stDialog"]:has(.scope-contact-modal)
+  section[role="dialog"] [data-testid="stVerticalBlock"]:not(.st-key-contact_modal_body) {
+  gap: 0 !important;
+}
+
+.scope-contact-modal,
+.scope-contact-modal * {
+  box-sizing: border-box;
+}
+
+.scope-contact-header {
+  position: relative;
+  min-height: 91px;
+  padding: 18px 150px 18px 20px;
+  border-bottom: 1px solid #f0f0f3;
+}
+
+.scope-contact-kicker {
+  color: #8a8a94;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 12px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.scope-contact-kicker {
+  margin-bottom: 6px;
+}
+
+.scope-contact-address {
+  color: #17171b;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: normal;
+  letter-spacing: -.01em;
+}
+
+.scope-contact-place {
+  margin-top: 4px;
+  color: #9a9aa6;
+  font-size: 11.5px;
+  line-height: 14px;
+}
+
+.scope-contact-stage {
+  position: absolute;
+  top: 22px;
+  right: 56px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 20px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+div[data-testid="stDialog"]:has(.scope-contact-modal)
+  .st-key-contact_modal_body {
+  padding: 18px 20px !important;
+  gap: 14px !important;
+}
+
+.st-key-contact_modal_body [data-testid="stHorizontalBlock"] {
+  gap: 16px !important;
+}
+
+.st-key-contact_modal_body [data-testid="stColumn"] {
+  min-width: 0 !important;
+}
+
+.st-key-contact_modal_body [data-testid="stTextInput"] label {
+  min-height: 12px !important;
+  height: 12px !important;
+  margin: 0 0 6px !important;
+  color: #8a8a94 !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  line-height: 12px !important;
+  letter-spacing: .07em !important;
+  text-transform: uppercase !important;
+}
+
+.st-key-contact_modal_body [data-testid="stTextInput"] label span,
+.st-key-contact_modal_body [data-testid="stTextInput"] label [data-testid="stMarkdownContainer"],
+.st-key-contact_modal_body [data-testid="stTextInput"] label p {
+  color: inherit !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  line-height: 12px !important;
+  letter-spacing: .07em !important;
+}
+
+.st-key-contact_modal_body [data-testid="stTextInput"]
+  div[data-testid="stTextInputRootElement"] {
+  min-height: 32px !important;
+  height: 32px !important;
+  border: 1px solid #e2e2e8 !important;
+  border-radius: 6px !important;
+  background: #fff !important;
+  box-shadow: none !important;
+}
+
+.st-key-contact_modal_body [data-testid="stTextInput"]
+  div[data-testid="stTextInputRootElement"]:focus-within {
+  border-color: #1c4e4a !important;
+  box-shadow: 0 0 0 3px #e2eceb !important;
+}
+
+.st-key-contact_modal_body [data-testid="stTextInput"] input {
+  height: 30px !important;
+  padding: 0 10px !important;
+  color: #17171b !important;
+  background: transparent !important;
+  font-family: "Instrument Sans", "Source Sans", sans-serif !important;
+  font-size: 12.5px !important;
+}
+
+.st-key-contact_modal_body [data-testid="stTextInput"] input::placeholder {
+  color: #aaaab3 !important;
+  opacity: 1 !important;
+}
+
+.st-key-contact_modal_footer {
+  min-height: 59px;
+  padding: 14px 20px !important;
+  border-top: 1px solid #f0f0f3;
+}
+
+.st-key-contact_modal_footer[data-testid="stHorizontalBlock"],
+.st-key-contact_modal_footer [data-testid="stHorizontalBlock"] {
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+}
+
+.scope-contact-footer-note {
+  color: #b0b0b8;
+  font-size: 11px;
+  line-height: 13.5px;
+  text-wrap: pretty;
+}
+
+.st-key-acq_contact_save button[kind="primary"] {
+  min-height: 30px !important;
+  height: 30px !important;
+  padding: 0 14px !important;
+  border: 1px solid #1c4e4a !important;
+  border-radius: 6px !important;
+  background: #1c4e4a !important;
+  color: #fff !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+}
+
+@media (max-width: 700px) {
+  div[data-testid="stDialog"]:has(.scope-contact-modal) > div {
+    padding: 20px 12px !important;
+  }
+
+  div[data-testid="stDialog"]:has(.scope-contact-modal) section[role="dialog"] {
+    max-width: calc(100vw - 24px) !important;
+  }
+
+  .scope-contact-header {
+    padding-right: 116px;
+  }
+
+  .st-key-contact_modal_body [data-testid="stHorizontalBlock"] {
+    flex-wrap: wrap !important;
+  }
+
+  .st-key-contact_modal_body [data-testid="stColumn"] {
+    min-width: 100% !important;
+  }
+}
+</style>
+"""
 
 def leads(parcels: pd.DataFrame, decisions: pd.DataFrame, field: str) -> pd.DataFrame:
     """Saved or hidden decisions joined back to the parcel facts they name.
@@ -200,7 +463,7 @@ def render(parcels, decisions, db, today, price_of):
                 mime="text/csv",
                 key="acq_contacts_csv",
                 type="primary",
-                width="stretch",
+                width="content",
             )
 
     if shortlist.empty:
@@ -210,6 +473,7 @@ def render(parcels, decisions, db, today, price_of):
         _render_board(shortlist, db, price_of, today)
 
     _render_hidden(parcels, decisions, db)
+    st.html(_ACQUISITION_FOOTER)
 
 
 #: Five compact cells from the design: date; parcel identity; owner plus next
@@ -225,6 +489,24 @@ _OVERDUE_TINT = "background-color:#fdf5e7;color:#8a5a12;padding:1px 6px;border-r
 _ACQUISITION_INTRO = """
 <style>
 .st-key-acq_header { margin: 10px 0 20px; }
+.st-key-acq_header [data-testid="stHorizontalBlock"] {
+  align-items: flex-end;
+  gap: 24px;
+}
+.st-key-acq_header [data-testid="stColumn"]:last-child [data-testid="stDownloadButton"] {
+  display: flex;
+  justify-content: flex-end;
+}
+.st-key-acq_header [data-testid="stDownloadButton"] button {
+  width: auto;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 13px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
 .acquisition-page-intro { margin: 0; }
 .acquisition-page-kicker {
   margin-bottom: 7px;
@@ -251,15 +533,31 @@ _ACQUISITION_INTRO = """
   .acquisition-page-intro h1 { font-size: 19px; }
   .st-key-acq_header [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
   .st-key-acq_header [data-testid="stColumn"] { min-width: 100%; }
+  .st-key-acq_header [data-testid="stColumn"]:last-child [data-testid="stDownloadButton"] {
+    justify-content: flex-start;
+  }
 }
 </style>
 <div class="acquisition-page-intro">
   <div class="acquisition-page-kicker">Akquisition</div>
   <h1>Eigentümer-Dialog</h1>
-  <p>Kontaktstand je Parzelle und Eigentümerschaft. Das Wiedervorlagedatum
-     steuert die Fälligkeit, Karten werden per Drag &amp; Drop verschoben.
-     Eigentümerangaben werden weiterhin von Hand im AGIS nachgeschlagen.</p>
+  <p>Kontaktstand je Parzelle und Eigentümerschaft. Wiedervorlagedatum steuert
+     die Fälligkeit; Karten per Drag &amp; Drop zwischen den Stufen verschieben.</p>
 </div>
+"""
+
+_ACQUISITION_FOOTER = """
+<style>
+.acquisition-page-footer {
+  margin-top: 18px;
+  color: #9a9aa6;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+</style>
+<p class="acquisition-page-footer">Eigentümerangaben werden manuell im AGIS
+nachgeschlagen; Bearbeitung nur für den internen Akquisitionsprozess. Kein
+Bestandteil der amtlichen Parzellendaten.</p>
 """
 
 _DUE_CSS = """
@@ -333,10 +631,11 @@ _DUE_CSS = """
 
 
 def _render_overdue(shortlist, today):
-    """Hidden entirely when nothing is due, rather than shown as an empty frame
-    — an empty table reads as a broken query, not as a clear desk.
+    """Render the follow-up overview even when no lead is currently due.
 
-    The rows are `due_items` (overdue leads, then a look-ahead at what is
+    The persistent heading and its ``0 offen`` badge mirror the reference and
+    make an empty result read as a clear desk instead of a missing feature.
+    Rows are `due_items` (overdue leads, then a look-ahead at what is
     coming, capped), but the badge counts `overdue` alone — the badge answers
     "how many need chasing right now", and counting the look-ahead rows too
     would make it lie the moment the preview shows anything upcoming.
@@ -346,8 +645,6 @@ def _render_overdue(shortlist, today):
     morning without first hunting for its card among five stage columns.
     """
     rows = due_items(shortlist, today)
-    if rows.empty:
-        return
     overdue_count = len(overdue(shortlist, today))
     with st.container(key="acq_due"):
         st.html(_DUE_CSS)
@@ -570,60 +867,148 @@ def _eigentuemer_button(key, widget_key):
         st.rerun()
 
 
-@st.dialog("Kontaktdetails")
+def _contact_date_display(value) -> str:
+    """Show stored ISO dates in the same Swiss format as the design."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError:
+        return text
+
+
+def _contact_date_storage(value) -> str:
+    """Accept the displayed Swiss date format while storing canonical ISO."""
+    text = str(value or "").strip()
+    if not text or "." not in text:
+        return text
+    try:
+        return datetime.strptime(text, "%d.%m.%Y").date().isoformat()
+    except ValueError:
+        # Let workflow.update produce its established validation message and
+        # preserve its all-or-nothing write guarantee.
+        return text
+
+
+def _close_contact_dialog() -> None:
+    st.session_state.pop(CONTACT_OPEN, None)
+
+
+@st.dialog(
+    "Eigentümerschaft",
+    width="large",
+    on_dismiss=_close_contact_dialog,
+)
 def _contact_dialog(row, key, db):
-    """The contact form for one lead, built once per open dialog rather than
-    once per card. A per-card `st.expander` built the same 9 widgets whether
-    or not it was open — at 100 leads that was ~900 invisible widgets the
-    browser still carried. A single dialog for the session's one open lead
-    turns that into 9 widgets that exist only while someone is actually
-    looking at them.
+    """Render the one open lead in the design's compact two-column modal.
 
-    Dates are text rather than `st.date_input` because "no date yet" is a
-    real and common state here, and a date picker has to invent a day to show.
-    The format is stated in the placeholder and enforced by `workflow.update`,
-    which reports what it refused.
-
-    No `st.form`: a dialog already gates everything behind its own explicit
-    buttons, and a form here would only add a second, redundant submit
-    boundary and more button-key bookkeeping for no behaviour gained.
+    The fields remain a single atomic save: if either date is malformed,
+    workflow validation rejects every edit and leaves the dialog open. That
+    safety is retained even though the surrounding presentation now mirrors
+    the exported owner card rather than Streamlit's tall default form.
     """
-    owner_name = st.text_input(
-        "Eigentümerschaft", value=str(row["owner_name"]), max_chars=200
+    status_code = str(row.get("contact_status", WF.DEFAULT_CONTACT_STATUS))
+    status_label = WF.CONTACT_STATUS_LABELS.get(
+        status_code, WF.CONTACT_STATUS_LABELS[WF.DEFAULT_CONTACT_STATUS]
     )
-    contact_person = st.text_input(
-        "Kontaktperson",
-        value=str(row["contact_person"]),
-        max_chars=200,
-        placeholder="Name, Funktion",
+    stage_background, stage_color = _CONTACT_STAGE_TINTS.get(
+        status_code, _CONTACT_STAGE_TINTS[WF.DEFAULT_CONTACT_STATUS]
     )
-    phone = st.text_input(
-        "Telefon", value=str(row["phone"]), max_chars=50, placeholder="+41 …"
+    slug = f"{key[0]}_{key[1]}"
+    st.html(
+        _CONTACT_DIALOG_CSS
+        + f"""
+<div class="scope-contact-modal">
+  <div class="scope-contact-header">
+    <div class="scope-contact-kicker">Eigentümerschaft</div>
+    <div class="scope-contact-address">{escape(str(row['address']))}</div>
+    <div class="scope-contact-place">{escape(str(row['municipality']))} · {escape(str(row['parcel']))}</div>
+    <span class="scope-contact-stage" style="background:{stage_background};color:{stage_color}">{escape(status_label)}</span>
+  </div>
+</div>
+"""
     )
-    email = st.text_input(
-        "E-Mail",
-        value=str(row["email"]),
-        max_chars=200,
-        placeholder="name@domain.ch",
-    )
-    last_contact = st.text_input(
-        "Letzter Kontakt",
-        value=str(row["last_contact"]),
-        max_chars=10,
-        placeholder="JJJJ-MM-TT",
-    )
-    due_date = st.text_input(
-        "Wiedervorlage",
-        value=str(row["due_date"]),
-        max_chars=10,
-        placeholder="JJJJ-MM-TT",
-    )
-    next_step = st.text_input(
-        "Nächster Schritt", value=str(row["next_step"]), max_chars=300
-    )
-    note = st.text_area("Notiz", value=str(row["note"]), max_chars=1000)
 
-    if st.button("Speichern", key="acq_contact_save"):
+    with st.container(key="contact_modal_body"):
+        first_row = st.columns(2)
+        owner_name = first_row[0].text_input(
+            "Eigentümerschaft",
+            value=str(row["owner_name"]),
+            max_chars=200,
+            key=f"acq_contact_owner_{slug}",
+        )
+        contact_person = first_row[1].text_input(
+            "Kontaktperson",
+            value=str(row["contact_person"]),
+            max_chars=200,
+            placeholder="Name, Funktion",
+            key=f"acq_contact_person_{slug}",
+        )
+
+        second_row = st.columns(2)
+        phone = second_row[0].text_input(
+            "Telefon",
+            value=str(row["phone"]),
+            max_chars=50,
+            placeholder="+41 …",
+            key=f"acq_contact_phone_{slug}",
+        )
+        email = second_row[1].text_input(
+            "E-Mail",
+            value=str(row["email"]),
+            max_chars=200,
+            placeholder="name@domain.ch",
+            key=f"acq_contact_email_{slug}",
+        )
+
+        third_row = st.columns(2)
+        last_contact = third_row[0].text_input(
+            "Letzter Kontakt",
+            value=_contact_date_display(row["last_contact"]),
+            max_chars=10,
+            placeholder="TT.MM.JJJJ",
+            key=f"acq_contact_last_{slug}",
+        )
+        due_date = third_row[1].text_input(
+            "Wiedervorlage",
+            value=_contact_date_display(row["due_date"]),
+            max_chars=10,
+            placeholder="TT.MM.JJJJ",
+            key=f"acq_contact_due_{slug}",
+        )
+
+        fourth_row = st.columns(2)
+        next_step = fourth_row[0].text_input(
+            "Nächster Schritt",
+            value=str(row["next_step"]),
+            max_chars=300,
+            key=f"acq_contact_next_{slug}",
+        )
+        note = fourth_row[1].text_input(
+            "Notiz",
+            value=str(row["note"]),
+            max_chars=1000,
+            key=f"acq_contact_note_{slug}",
+        )
+        error_slot = st.empty()
+
+    with st.container(
+        key="contact_modal_footer",
+        horizontal=True,
+        horizontal_alignment="distribute",
+        vertical_alignment="center",
+        gap="small",
+    ):
+        st.html(
+            '<span class="scope-contact-footer-note">Mit «Fertig» speichern. '
+            "Kontaktstufe per Drag &amp; Drop im Board ändern.</span>"
+        )
+        save_clicked = st.button(
+            "Fertig", key="acq_contact_save", type="primary"
+        )
+
+    if save_clicked:
         try:
             WF.update(
                 [key],
@@ -631,31 +1016,17 @@ def _contact_dialog(row, key, db):
                 contact_person=contact_person,
                 phone=phone,
                 email=email,
-                last_contact=last_contact,
-                due_date=due_date,
+                last_contact=_contact_date_storage(last_contact),
+                due_date=_contact_date_storage(due_date),
                 next_step=next_step,
                 note=note,
                 db=db,
             )
         except ValueError as error:
-            # Left open on the error rather than popped/rerun: the whole point
-            # of `WF.update`'s all-or-nothing validation is that a bad date
-            # cannot lose a good field along with it, and closing here anyway
-            # would silently drop everything the user just typed.
-            st.error(str(error))
+            error_slot.error(str(error))
             return
         st.toast("Kontaktdaten gespeichert.")
-        st.session_state.pop(CONTACT_OPEN, None)
-        st.rerun()
-
-    if st.button("Von Merkliste entfernen", key="acq_contact_remove"):
-        WF.set_saved([key], False, db)
-        st.toast("Parzelle von der Merkliste entfernt.")
-        st.session_state.pop(CONTACT_OPEN, None)
-        st.rerun()
-
-    if st.button("Abbrechen", key="acq_contact_cancel"):
-        st.session_state.pop(CONTACT_OPEN, None)
+        _close_contact_dialog()
         st.rerun()
 
 

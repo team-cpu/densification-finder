@@ -121,7 +121,8 @@ class ShellHeaderRegressionTest(unittest.TestCase):
         )
         css = next(body for body in bodies if ".st-key-app_shell" in body)
         self.assertIn("flex-wrap: nowrap !important", css)
-        self.assertIn("@media (max-width: 960px)", css)
+        self.assertIn("@media (max-width: 720px)", css)
+        self.assertNotIn("@media (max-width: 960px)", css)
         self.assertIn('[data-testid="stHeader"]', css)
         self.assertIn('[data-testid="stToolbar"]', css)
         self.assertTrue(
@@ -150,7 +151,7 @@ class ShellHeaderRegressionTest(unittest.TestCase):
         banner = next(body for body in bodies if "normiq-shell-data" in body)
         self.assertIn("Datenstand", banner)
         self.assertIn(expected_display, banner)
-
+        self.assertIn("gap:5px", banner)
 
     def test_the_header_names_no_person(self):
         """The prototype's chip shows "M. Brunner · Hochbau AG" because it
@@ -161,11 +162,9 @@ class ShellHeaderRegressionTest(unittest.TestCase):
             os.path.join(paths.HERE, "app.py"), default_timeout=60
         ).run()
 
-        # The chip used to be inert `st.html` markup; it is now a real
-        # `st.button` that opens `organisation.py`'s preview dialog (see
-        # `shell._account_chip`), so its label lives in `app.button`, not
-        # `app.get("html")`, and both have to be searched for an invented
-        # name to keep meaning what this test's docstring says it means.
+        # The account trigger is a popover and its truthful menu header is
+        # HTML, while its actions are buttons. Search both surfaces so a
+        # fictional identity cannot slip into either one.
         rendered = " ".join(node.proto.body for node in app.get("html"))
         rendered += " " + " ".join(b.label or "" for b in app.button)
         self.assertIn("Gemeinsamer Zugang", rendered)
@@ -177,6 +176,7 @@ class ShellHeaderRegressionTest(unittest.TestCase):
         self.assertIn('content: "▾"', css)
         self.assertIn("color: #a8a8b2", css)
         self.assertIn("font-size: 9px", css)
+        self.assertIn("scope-account-menu", css)
         for invented in ("Brunner", "Hochbau"):
             self.assertNotIn(invented, rendered)
 

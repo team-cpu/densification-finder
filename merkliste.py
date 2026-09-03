@@ -24,17 +24,56 @@ IN_DIALOG = ("contacted", "in_discussion", "meeting_scheduled")
 
 _PAGE_CSS = """
 <style>
-.st-key-merkliste_header { margin: 10px 0 20px; }
+.st-key-merkliste_header { margin: 12px 0 4px; }
+.st-key-merkliste_header [data-testid="stColumn"]:first-child
+  > [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+.scope-merkliste-kicker {
+  margin: 0 0 7px;
+  color: #9a9aa6;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 12px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
 .st-key-merkliste_header [data-testid="stHeadingWithActionElements"] h3 {
   margin: 0;
+  padding: 0;
   font-size: 21px;
   font-weight: 600;
+  line-height: 26px;
   letter-spacing: -.015em;
 }
-.st-key-merkliste_header_actions [data-testid="stHorizontalBlock"] {
-  justify-content: flex-end;
+.st-key-merkliste_header [data-testid="stHeading"]
+  [data-testid="stMarkdownContainer"] {
+  margin: 0 !important;
 }
-.st-key-merkliste_header_actions button { white-space: nowrap; }
+.st-key-merkliste_header [data-testid="stCaptionContainer"] {
+  height: auto;
+  margin: 7px 0 0;
+  color: #77777f;
+  font-size: 12.5px;
+  line-height: 15px;
+}
+.st-key-merkliste_header [data-testid="stCaptionContainer"] p {
+  margin: 0;
+}
+.st-key-merkliste_header_actions[data-testid="stHorizontalBlock"] {
+  justify-content: flex-end;
+  gap: 8px;
+}
+.st-key-merkliste_header_actions button {
+  width: auto;
+  min-height: 30px;
+  height: 30px;
+  padding: 0 12px;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+}
 @media (max-width: 760px) {
   .st-key-merkliste_header [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
   .st-key-merkliste_header [data-testid="stColumn"] { min-width: 100%; }
@@ -64,6 +103,47 @@ _METRICS_CSS = """
 
 .st-key-merkliste_metrics [data-testid="stColumn"]:last-child {
   border-right: 0;
+}
+
+.st-key-merkliste_metrics [data-testid="stMetricLabel"] {
+  display: block;
+  height: 12px;
+  min-height: 0;
+  color: #8a8a94;
+  font-family: "Instrument Sans", "Source Sans", sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.st-key-merkliste_metrics [data-testid="stMetricLabel"] p {
+  color: inherit;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+}
+
+.st-key-merkliste_metrics [data-testid="stMetricValue"] {
+  margin-top: 6px;
+  padding: 0;
+  color: #17171b;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.st-key-merkliste_metrics [data-testid="stMetricValue"] p {
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
 }
 
 @media (max-width: 760px) {
@@ -165,32 +245,30 @@ def handle_table_event(event: dict, leads: pd.DataFrame, state=None) -> bool:
 def page(parcels, decisions, db, price_of):
     """Summary tiles, the shortlist, and the way on to the board."""
     st.html(_PAGE_CSS)
+    leads = ACQ.leads(parcels, decisions, "saved")
     with st.container(key="merkliste_header"):
         header_copy, header_action_column = st.columns(
             [5, 3], vertical_alignment="bottom"
         )
         with header_copy:
             st.html(
-                '<div style="margin:0 0 7px;color:#9a9aa6;font-size:10px;'
-                'font-weight:600;letter-spacing:.1em;text-transform:uppercase">'
-                'Merkliste</div>'
+                '<div class="scope-merkliste-kicker">Merkliste</div>'
             )
             st.subheader("Gemerkte Parzellen")
             st.caption(
-                "Gemerkte Parzellen. Kontaktstand und Wiedervorlagen werden in der "
-                "Akquisition geführt; hier steht, was insgesamt auf der Liste liegt."
+                f"{ACQ._swiss(len(leads))} Parzellen · manuell gepflegt. "
+                "Kontaktstand und Wiedervorlagen werden in der Akquisition geführt."
             )
         with header_action_column.container(
             key="merkliste_header_actions", horizontal=True
         ):
-            if st.button("Weitere Parzellen suchen", width="stretch"):
+            if st.button("Weitere Parzellen suchen"):
                 navigation.go_to("Screening")
                 st.rerun()
-            if st.button("Zur Akquisition", width="stretch"):
+            if st.button("Zur Akquisition"):
                 navigation.go_to("Akquisition")
                 st.rerun()
 
-    leads = ACQ.leads(parcels, decisions, "saved")
     if leads.empty:
         st.info("Noch keine Parzellen gemerkt.")
         return

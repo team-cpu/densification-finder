@@ -75,43 +75,51 @@ _SPACER_HTML = '<div class="normiq-shell-spacer"></div>'
 #: exist. The slot is kept so the shell matches the design; what fills it is
 #: true.
 #:
-#: The chip used to end here, as inert markup with a `title` explaining that
-#: the menu behind it did not exist. `organisation.py` gives it somewhere
-#: genuine to go — an explicitly-labelled preview, not a working feature — so
-#: the chip is now a real `st.button` (`_account_chip`, below) rather than a
-#: non-interactive `div`.
+#: The chip now opens the same first-level menu as the export. Its Team and
+#: Einstellungen entries lead to the truthful previews in `organisation.py`.
 _ACCOUNT_LABEL = "Gemeinsamer Zugang"
 
 
 def _data_as_of_html(data_as_of: str) -> str:
-    """The data-as-of stamp, split out from the account chip now that the
-    chip is a real `st.button` and can no longer share one `st.html` blob
-    with it."""
+    """The data-as-of stamp, with an explicit label/value gap."""
     return f"""\
 <span class="normiq-shell-data" style="font-size:11.5px;color:#77777f;white-space:nowrap;
-             display:flex;align-items:center;height:100%">
-  Datenstand <span style="font-family:'IBM Plex Mono',monospace">{data_as_of}</span>
+             display:flex;align-items:center;gap:5px;height:100%">
+  <span>Datenstand</span><span style="font-family:'IBM Plex Mono',monospace">{data_as_of}</span>
 </span>
 """
 
 
 def _account_chip() -> None:
-    """The account area, now genuinely clickable: opens `organisation.py`'s
-    preview dialog.
-
-    A plain `st.button` rather than more HTML — the previous inert chip was
-    hand-styled markup because there was nothing behind it to wire a real
-    widget to; now that there is, using the actual widget is what makes it
-    keyboard-reachable and lets Streamlit manage its own click/rerun cycle
-    instead of this module re-implementing one over `st.html`.
-    """
-    if st.button(
+    """The export's account dropdown, backed only by features that exist."""
+    with st.popover(
         _ACCOUNT_LABEL,
-        key="app_shell_account_open",
-        help="Organisation öffnen (Vorschau).",
+        key="app_shell_account_menu",
     ):
-        st.session_state[organisation.DIALOG_OPEN] = True
-        st.rerun()
+        st.html(
+            '<div class="scope-account-menu">'
+            '<div class="scope-account-menu-title">Gemeinsamer Zugang</div>'
+            '<div class="scope-account-menu-caption">Keine Benutzerkonten aktiv</div>'
+            '</div>'
+        )
+        if st.button("Team", key="app_shell_account_team", width="stretch"):
+            st.session_state[organisation.DIALOG_VIEW] = "team"
+            st.session_state[organisation.DIALOG_OPEN] = True
+            st.rerun()
+        if st.button(
+            "Einstellungen",
+            key="app_shell_account_settings",
+            width="stretch",
+        ):
+            st.session_state[organisation.DIALOG_VIEW] = "settings"
+            st.session_state[organisation.DIALOG_OPEN] = True
+            st.rerun()
+        st.html('<div class="scope-account-menu-separator"></div>')
+        if st.button("Abmelden", key="app_shell_account_logout", width="stretch"):
+            st.session_state.pop("_ok", None)
+            st.session_state.pop(organisation.DIALOG_OPEN, None)
+            st.session_state.pop(organisation.DIALOG_VIEW, None)
+            st.rerun()
 
 
 #: Emitted once per render via `st.html`, scoped under `.st-key-app_shell` so
@@ -246,13 +254,14 @@ _SHELL_CSS = """
 /* The account action is intentionally flat in the export. It gains a quiet
    background only on hover; the large pill used previously was not present
    in the supplied design. */
-.st-key-app_shell_row > .st-key-app_shell_account_open {
+.st-key-app_shell_row > .st-key-app_shell_account_menu {
   margin-left: -10px;
   padding-left: 18px;
   border-left: 1px solid #e6e6ea;
 }
 
-.st-key-app_shell [data-testid="stButton"] button {
+.st-key-app_shell [data-testid="stButton"] button,
+.st-key-app_shell [data-testid="stPopoverButton"] {
   height: 28px;
   min-height: 28px;
   gap: 8px;
@@ -265,7 +274,8 @@ _SHELL_CSS = """
   font-weight: 400;
 }
 
-.st-key-app_shell [data-testid="stButton"] button:hover {
+.st-key-app_shell [data-testid="stButton"] button:hover,
+.st-key-app_shell [data-testid="stPopoverButton"]:hover {
   border: 0;
   background: #f1f1f4;
   color: #17171b;
@@ -274,7 +284,7 @@ _SHELL_CSS = """
 /* Match the exported account avatar: a compact green circle with the MB
    initials. The surrounding label remains truthful to this app's shared-access
    model instead of copying the prototype's invented organisation name. */
-.st-key-app_shell_account_open button::before {
+.st-key-app_shell_account_menu [data-testid="stPopoverButton"]::before {
   content: "MB";
   display: inline-flex;
   width: 19px;
@@ -290,19 +300,97 @@ _SHELL_CSS = """
   letter-spacing: .02em;
 }
 
-.st-key-app_shell_account_open button::after {
+.st-key-app_shell_account_menu [data-testid="stPopoverButton"]::after {
   content: "▾";
   color: #a8a8b2;
   font-size: 9px;
   line-height: 1;
   transform-origin: center;
+  transition: transform .12s;
 }
 
-/* Mobile keeps the account action and all four destinations reachable without
+.st-key-app_shell_account_menu [data-testid="stPopoverButton"][aria-expanded="true"]::after {
+  transform: rotate(180deg);
+}
+
+.st-key-app_shell_account_menu [data-testid="stIconMaterial"] {
+  display: none !important;
+}
+
+/* The export opens a 224px account menu first; Team and Einstellungen then
+   open the corresponding organisation preview. The marker keeps these portal
+   styles from affecting the saved-search popover elsewhere in the app. */
+div[data-testid="stPopoverBody"]:has(.scope-account-menu) {
+  width: 224px !important;
+  min-width: 224px !important;
+  max-width: 224px !important;
+  padding: 5px !important;
+  border: 1px solid #e4e4ea;
+  border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(23, 23, 27, .10);
+}
+
+div[data-testid="stPopoverBody"]:has(.scope-account-menu)
+  [data-testid="stVerticalBlock"] {
+  gap: 0;
+}
+
+.scope-account-menu {
+  padding: 9px 10px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #f2f2f5;
+}
+
+.scope-account-menu-title {
+  color: #17171b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.scope-account-menu-caption {
+  margin-top: 2px;
+  color: #9a9aa6;
+  font-size: 11px;
+}
+
+div[data-testid="stPopoverBody"]:has(.scope-account-menu)
+  [data-testid="stButton"] button {
+  width: 100%;
+  height: 30px;
+  min-height: 30px;
+  justify-content: flex-start;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #3a3a44;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+div[data-testid="stPopoverBody"]:has(.scope-account-menu)
+  [data-testid="stButton"] button > div {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+div[data-testid="stPopoverBody"]:has(.scope-account-menu)
+  [data-testid="stButton"] button:hover {
+  border: 0;
+  background: #f5f5f7;
+}
+
+.scope-account-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: #f2f2f5;
+}
+
+/* Narrow mobile keeps the account action and all four destinations reachable without
    letting five intrinsic-width Streamlit children turn into four tall rows.
    Brand + account share the first row; navigation gets the second; the data
    stamp is available on wider screens where it does not compete for space. */
-@media (max-width: 960px) {
+@media (max-width: 720px) {
   .st-key-app_shell {
     position: sticky;
     margin: -12px -14px 0;
@@ -322,7 +410,7 @@ _SHELL_CSS = """
     flex: 0 0 auto !important;
   }
 
-  .st-key-app_shell_row > .st-key-app_shell_account_open {
+  .st-key-app_shell_row > .st-key-app_shell_account_menu {
     order: 2;
     margin-left: 0;
     padding-left: 0;
