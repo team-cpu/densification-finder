@@ -153,11 +153,8 @@ class ShellHeaderRegressionTest(unittest.TestCase):
         self.assertIn(expected_display, banner)
         self.assertIn("gap:5px", banner)
 
-    def test_the_header_names_no_person(self):
-        """The prototype's chip shows "M. Brunner · Hochbau AG" because it
-        mocks up a multi-user product. This application has one shared
-        password and no accounts, so a name there would belong to nobody and
-        would imply a login that does not exist."""
+    def test_the_header_uses_truthful_empty_organisation_identity(self):
+        """An empty install must not seed the prototype's fictional identity."""
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=60
         ).run()
@@ -172,7 +169,7 @@ class ShellHeaderRegressionTest(unittest.TestCase):
             body for body in app.get("html")
             if ".st-key-app_shell" in body.proto.body
         ).proto.body
-        self.assertIn('content: "MB"', css)
+        self.assertIn('content: "GZ"', css)
         self.assertIn('content: "▾"', css)
         self.assertIn("color: #a8a8b2", css)
         self.assertIn("font-size: 9px", css)

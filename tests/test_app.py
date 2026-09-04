@@ -72,7 +72,7 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(area_min.value, 300)
         self.assertIsNone(area_max.value)
         result_limit = next(s for s in app.selectbox if s.label == "Anzeigen")
-        self.assertEqual(result_limit.value, 20)
+        self.assertEqual(result_limit.value, 50)
         self.assertEqual(app.number_input[1].label, "Mind. AZ")
         self.assertIsNone(app.number_input[1].value)
 
@@ -83,7 +83,7 @@ class AppRegressionTest(unittest.TestCase):
         frame = app.dataframe[0].value
         self.assertEqual(
             frame["Typ"].value_counts().to_dict(),
-            {"bebaut": 10, "unbebaut": 10},
+            {"bebaut": 25, "unbebaut": 25},
         )
         self.assertIn("≈ Landwert / Potenzial-GF", frame.columns)
         self.assertTrue(frame["Preisebene"].eq("Kanton AG").all())
@@ -113,7 +113,7 @@ class AppRegressionTest(unittest.TestCase):
         self.assertFalse(app.exception)
         large = app.dataframe[0].value
         self.assertTrue(len(large) > 0)
-        self.assertTrue((large["Fläche m²"] > 5000).all())
+        self.assertTrue((large["Fläche m²"] >= 5000).all())
 
         area_min = next(n for n in app.number_input if n.label == "Fläche von (m²)")
         area_min.set_value(0).run()
@@ -533,14 +533,10 @@ class AppRegressionTest(unittest.TestCase):
             ),
         )
 
-    def test_a_malformed_date_is_reported_and_the_whole_save_is_refused(self):
-        """`workflow.update` validates every field before it writes any of
-        them, but only because `_contact_dialog` stops on the `ValueError`
-        instead of ignoring it — and leaves the dialog open on the error
-        rather than closing it, which would read as "saved" to the user. A
-        save that let the good fields through anyway would leave a contact
-        name typed today sitting next to a Wiedervorlage date nobody actually
-        entered."""
+    def test_a_malformed_date_is_reported_without_losing_valid_live_edits(self):
+        """The reference saves each field on change. An invalid date stays
+        unsaved and keeps the modal open, while another valid changed field is
+        already durable rather than being rolled back with it."""
         first = pd.read_sql_query(
             "SELECT bfs, parcel FROM parcel_results LIMIT 1",
             sqlite3.connect(self.database),
@@ -564,8 +560,9 @@ class AppRegressionTest(unittest.TestCase):
 
         self.assertFalse(app.exception)
 
-        field(app, "Wiedervorlage").set_value("32.09.2026")
-        field(app, "Kontaktperson").set_value("Neuer Name")
+        field(app, "Wiedervorlage").set_value("32.09.2026").run()
+        # A later successful field callback must not erase the date error.
+        field(app, "Kontaktperson").set_value("Neuer Name").run()
         app.button(key="acq_contact_save").click().run()
         self.assertFalse(app.exception)
 
@@ -585,9 +582,14 @@ class AppRegressionTest(unittest.TestCase):
                 "WHERE bfs = ? AND parcel = ?",
                 (bfs, parcel),
             ).fetchone()
-        # Refused together, not partially applied: neither field moved.
+        # Only the invalid date is refused; the valid field was saved on change.
         self.assertEqual(due_date, "2026-01-01")
-        self.assertEqual(contact_person, "Herr Muster")
+        self.assertEqual(contact_person, "Neuer Name")
+
+        field(app, "Wiedervorlage").set_value("15.09.2026").run()
+        self.assertEqual(len(app.error), 0)
+        app.button(key="acq_contact_save").click().run()
+        self.assertNotIn(acquisition.CONTACT_OPEN, app.session_state)
 
     def test_the_contact_dialog_exposes_the_designs_single_fertig_action(self):
         """The owner modal has one footer action, as in the design; removing

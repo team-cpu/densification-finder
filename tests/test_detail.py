@@ -230,6 +230,7 @@ class DetailViewTest(unittest.TestCase):
         self.assertIn("Resultierende Wohneinheiten", potential_markup(app))
         self.assertIn("C · Residualwert-Rechnung", calculation_header_markup(app))
         self.assertIn("Rechtliche Grundlagen &amp; Quellen", reference_card_markup(app))
+        self.assertIn('detail-reference-card--legal" open', reference_card_markup(app))
         self.assertIn("Regulatorische Änderungen", regulation_card_markup(app))
         labels = {n.label for n in app.number_input}
         self.assertIn("Ausnutzungsreserve aBGF m²", labels)

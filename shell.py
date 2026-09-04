@@ -38,6 +38,8 @@ what was checked instead (the container key and style block are present in
 """
 from __future__ import annotations
 
+from html import escape
+
 import pandas as pd
 import streamlit as st
 
@@ -65,21 +67,6 @@ _BRAND_HTML = """\
 #: `flex:1` to the wrong element (see `_SHELL_CSS`).
 _SPACER_HTML = '<div class="normiq-shell-spacer"></div>'
 
-#: What the chip says, and why it does not say a name. The prototype shows a
-#: signed-in person — "M. Brunner · Hochbau AG" — because it mocks up a
-#: multi-user product. This application has no such thing: `gate()` is one
-#: shared password, and its docstring records that as a decision rather than an
-#: omission ("deliberately not a login: the brief describes a single-user
-#: internal tool"). Carrying the prototype's person across would put a name on
-#: screen that belongs to nobody and implies an account system that does not
-#: exist. The slot is kept so the shell matches the design; what fills it is
-#: true.
-#:
-#: The chip now opens the same first-level menu as the export. Its Team and
-#: Einstellungen entries lead to the truthful previews in `organisation.py`.
-_ACCOUNT_LABEL = "Gemeinsamer Zugang"
-
-
 def _data_as_of_html(data_as_of: str) -> str:
     """The data-as-of stamp, with an explicit label/value gap."""
     return f"""\
@@ -91,15 +78,30 @@ def _data_as_of_html(data_as_of: str) -> str:
 
 
 def _account_chip() -> None:
-    """The export's account dropdown, backed only by features that exist."""
+    """The export's account dropdown, backed by persistent organisation data."""
+    summary = organisation.account_summary()
+    # CSS pseudo-elements supply the compact avatar and the right-aligned team
+    # count. Values are reduced to digits/letters by `account_summary`, then
+    # escaped again here before entering a style string.
+    initials = escape(str(summary["initials"]))
+    member_count = int(summary["member_count"])
+    st.html(
+        "<style>"
+        ".st-key-app_shell_account_menu [data-testid='stPopoverButton']::before"
+        f'{{content:"{initials}"}}'
+        "div[data-testid='stPopoverBody']:has(.scope-account-menu) "
+        ".st-key-app_shell_account_team button::after"
+        f'{{content:"{member_count}";margin-left:auto;color:#9a9aa6;font-size:10.5px}}'
+        "</style>"
+    )
     with st.popover(
-        _ACCOUNT_LABEL,
+        str(summary["label"]),
         key="app_shell_account_menu",
     ):
         st.html(
             '<div class="scope-account-menu">'
-            '<div class="scope-account-menu-title">Gemeinsamer Zugang</div>'
-            '<div class="scope-account-menu-caption">Keine Benutzerkonten aktiv</div>'
+            f'<div class="scope-account-menu-title">{escape(str(summary["title"]))}</div>'
+            f'<div class="scope-account-menu-caption">{escape(str(summary["caption"]))}</div>'
             '</div>'
         )
         if st.button("Team", key="app_shell_account_team", width="stretch"):
@@ -281,11 +283,10 @@ _SHELL_CSS = """
   color: #17171b;
 }
 
-/* Match the exported account avatar: a compact green circle with the MB
-   initials. The surrounding label remains truthful to this app's shared-access
-   model instead of copying the prototype's invented organisation name. */
+/* Match the exported account avatar. `_account_chip` overrides the truthful
+   initials per render once an organisation/self member has been configured. */
 .st-key-app_shell_account_menu [data-testid="stPopoverButton"]::before {
-  content: "MB";
+  content: "GZ";
   display: inline-flex;
   width: 19px;
   height: 19px;

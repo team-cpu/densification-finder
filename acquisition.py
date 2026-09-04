@@ -242,6 +242,13 @@ div[data-testid="stDialog"]:has(.scope-contact-modal)
   opacity: 1 !important;
 }
 
+.st-key-contact_modal_body [class*="st-key-acq_contact_phone_"] input,
+.st-key-contact_modal_body [class*="st-key-acq_contact_last_"] input,
+.st-key-contact_modal_body [class*="st-key-acq_contact_due_"] input {
+  font-family: "IBM Plex Mono", monospace !important;
+  font-variant-numeric: tabular-nums;
+}
+
 .st-key-contact_modal_footer {
   min-height: 59px;
   padding: 14px 20px !important;
@@ -893,6 +900,22 @@ def _contact_date_storage(value) -> str:
 
 def _close_contact_dialog() -> None:
     st.session_state.pop(CONTACT_OPEN, None)
+    st.session_state.pop("acq_contact_errors", None)
+
+
+def _save_contact_field(key, db, field_name, widget_key, *, is_date=False):
+    """Persist one owner-modal field as soon as its widget changes."""
+    value = st.session_state.get(widget_key, "")
+    if is_date:
+        value = _contact_date_storage(value)
+    errors = dict(st.session_state.get("acq_contact_errors", {}))
+    try:
+        WF.update([key], db=db, **{field_name: value})
+    except ValueError as error:
+        errors[field_name] = str(error)
+    else:
+        errors.pop(field_name, None)
+    st.session_state["acq_contact_errors"] = errors
 
 
 @st.dialog(
@@ -903,10 +926,9 @@ def _close_contact_dialog() -> None:
 def _contact_dialog(row, key, db):
     """Render the one open lead in the design's compact two-column modal.
 
-    The fields remain a single atomic save: if either date is malformed,
-    workflow validation rejects every edit and leaves the dialog open. That
-    safety is retained even though the surrounding presentation now mirrors
-    the exported owner card rather than Streamlit's tall default form.
+    Like the design export, each field is saved when it changes; ``Fertig``
+    only closes the modal. Python still validates every changed value and an
+    invalid date leaves both the field and the dialog visible with an error.
     """
     status_code = str(row.get("contact_status", WF.DEFAULT_CONTACT_STATUS))
     status_label = WF.CONTACT_STATUS_LABELS.get(
@@ -932,66 +954,96 @@ def _contact_dialog(row, key, db):
 
     with st.container(key="contact_modal_body"):
         first_row = st.columns(2)
-        owner_name = first_row[0].text_input(
+        owner_key = f"acq_contact_owner_{slug}"
+        first_row[0].text_input(
             "Eigentümerschaft",
             value=str(row["owner_name"]),
             max_chars=200,
-            key=f"acq_contact_owner_{slug}",
+            placeholder="z. B. Erbengemeinschaft Weber",
+            key=owner_key,
+            on_change=_save_contact_field,
+            args=(key, db, "owner_name", owner_key),
         )
-        contact_person = first_row[1].text_input(
+        person_key = f"acq_contact_person_{slug}"
+        first_row[1].text_input(
             "Kontaktperson",
             value=str(row["contact_person"]),
             max_chars=200,
             placeholder="Name, Funktion",
-            key=f"acq_contact_person_{slug}",
+            key=person_key,
+            on_change=_save_contact_field,
+            args=(key, db, "contact_person", person_key),
         )
 
         second_row = st.columns(2)
-        phone = second_row[0].text_input(
+        phone_key = f"acq_contact_phone_{slug}"
+        second_row[0].text_input(
             "Telefon",
             value=str(row["phone"]),
             max_chars=50,
-            placeholder="+41 …",
-            key=f"acq_contact_phone_{slug}",
+            placeholder="+41 ...",
+            key=phone_key,
+            on_change=_save_contact_field,
+            args=(key, db, "phone", phone_key),
         )
-        email = second_row[1].text_input(
+        email_key = f"acq_contact_email_{slug}"
+        second_row[1].text_input(
             "E-Mail",
             value=str(row["email"]),
             max_chars=200,
             placeholder="name@domain.ch",
-            key=f"acq_contact_email_{slug}",
+            key=email_key,
+            on_change=_save_contact_field,
+            args=(key, db, "email", email_key),
         )
 
         third_row = st.columns(2)
-        last_contact = third_row[0].text_input(
+        last_key = f"acq_contact_last_{slug}"
+        third_row[0].text_input(
             "Letzter Kontakt",
             value=_contact_date_display(row["last_contact"]),
             max_chars=10,
             placeholder="TT.MM.JJJJ",
-            key=f"acq_contact_last_{slug}",
+            key=last_key,
+            on_change=_save_contact_field,
+            args=(key, db, "last_contact", last_key),
+            kwargs={"is_date": True},
         )
-        due_date = third_row[1].text_input(
+        due_key = f"acq_contact_due_{slug}"
+        third_row[1].text_input(
             "Wiedervorlage",
             value=_contact_date_display(row["due_date"]),
             max_chars=10,
             placeholder="TT.MM.JJJJ",
-            key=f"acq_contact_due_{slug}",
+            key=due_key,
+            on_change=_save_contact_field,
+            args=(key, db, "due_date", due_key),
+            kwargs={"is_date": True},
         )
 
         fourth_row = st.columns(2)
-        next_step = fourth_row[0].text_input(
+        next_key = f"acq_contact_next_{slug}"
+        fourth_row[0].text_input(
             "Nächster Schritt",
             value=str(row["next_step"]),
             max_chars=300,
-            key=f"acq_contact_next_{slug}",
+            placeholder="Was ist zu tun?",
+            key=next_key,
+            on_change=_save_contact_field,
+            args=(key, db, "next_step", next_key),
         )
-        note = fourth_row[1].text_input(
+        note_key = f"acq_contact_note_{slug}"
+        fourth_row[1].text_input(
             "Notiz",
             value=str(row["note"]),
             max_chars=1000,
-            key=f"acq_contact_note_{slug}",
+            placeholder="Interne Notiz",
+            key=note_key,
+            on_change=_save_contact_field,
+            args=(key, db, "note", note_key),
         )
-        error_slot = st.empty()
+        for error in st.session_state.get("acq_contact_errors", {}).values():
+            st.error(error)
 
     with st.container(
         key="contact_modal_footer",
@@ -1001,31 +1053,12 @@ def _contact_dialog(row, key, db):
         gap="small",
     ):
         st.html(
-            '<span class="scope-contact-footer-note">Mit «Fertig» speichern. '
+            '<span class="scope-contact-footer-note">Änderungen werden sofort übernommen. '
             "Kontaktstufe per Drag &amp; Drop im Board ändern.</span>"
         )
-        save_clicked = st.button(
-            "Fertig", key="acq_contact_save", type="primary"
-        )
+        close_clicked = st.button("Fertig", key="acq_contact_save", type="primary")
 
-    if save_clicked:
-        try:
-            WF.update(
-                [key],
-                owner_name=owner_name,
-                contact_person=contact_person,
-                phone=phone,
-                email=email,
-                last_contact=_contact_date_storage(last_contact),
-                due_date=_contact_date_storage(due_date),
-                next_step=next_step,
-                note=note,
-                db=db,
-            )
-        except ValueError as error:
-            error_slot.error(str(error))
-            return
-        st.toast("Kontaktdaten gespeichert.")
+    if close_clicked and not st.session_state.get("acq_contact_errors"):
         _close_contact_dialog()
         st.rerun()
 

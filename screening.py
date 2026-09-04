@@ -29,8 +29,8 @@ SQM_PER_UNIT = EC.SQM_PER_UNIT
 
 # The brief's two-step approach: rank broadly, then pay for ÖREB only on the
 # head of the list.
-SHORTLIST = 50
-RESULT_LIMITS = (5, 10, 20, 25, 50)
+SHORTLIST = 100
+RESULT_LIMITS = (25, 50, 100)
 
 # The committed result database was generated with this cascade boundary. A
 # control outside it would look interactive while returning exactly the same
@@ -1163,7 +1163,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     query = query_area.text_input(
         "Parzellen-Nr. suchen",
         key="screening_query",
-        placeholder="z. B. 1284",
+        placeholder="z. B. HO 1284",
         icon=":material/search:",
     )
 
@@ -1280,7 +1280,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             key="screening_top_n",
             label_visibility="collapsed",
             help=f"Maximal {SHORTLIST}: Nur diese Shortlist wird ÖREB-geprüft.",
-            **_initial_widget_value("screening_top_n", index=2),
+            **_initial_widget_value("screening_top_n", index=1),
         )
     final = shortlist[shortlist["_hard"] == ""].head(int(top_n))
 

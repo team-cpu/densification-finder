@@ -51,6 +51,36 @@ decisions live in `parcel_workflow`, separate from calculated results, so a
 cascade recompute cannot erase them. On Railway they share the same
 persistent SQLite volume as the ÖREB cache.
 
+Owner/contact fields save individually on change (blur or Enter). **Fertig**
+closes the dialog; it is not a batch-save button. Invalid fields are not written
+and remain marked until corrected, without discarding other valid edits.
+
+## Organisation and settings
+
+The account menu opens **Team** and **Einstellungen**. Organisation details,
+planned member roles, pending invitations and setting preferences persist in
+`organisation_profile` and `organisation_members` on the same SQLite volume.
+Schema changes are additive and do not reseed parcel results or lead decisions.
+
+This remains a single-organisation, shared-password application, not a personal
+account system. Invitations are recorded but no email is sent. Roles do not yet
+enforce permissions; the 2FA, digest, email reminder and calculation-sharing
+switches store preferences only. The dialogs explicitly describe these limits.
+No fictitious users, subscriptions or licensed datasets are seeded from the
+design example. Do not use these settings as security controls.
+
+## Tests
+
+Install `requirements-dev.txt` into the local virtual environment, then run:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -q
+```
+
+The extra PDF reader is for export assertions only and is not installed in the
+production image. For browser tests that edit data, set `DENSIFICATION_DB` to a
+temporary copy; do not write UAT contacts or invitations into the committed seed.
+
 ## Running it
 
 ```bash

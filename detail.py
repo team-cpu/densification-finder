@@ -501,7 +501,7 @@ def _reference_card_html(extract, zone_rows, notes):
         created = f" · Stand {escape(_text(extract['created'])[:10])}"
 
     return (
-        '<details class="detail-reference-card detail-reference-card--legal">'
+        '<details class="detail-reference-card detail-reference-card--legal" open>'
         '<summary><span class="detail-reference-summary-copy">'
         '<span class="detail-reference-summary-title">Rechtliche Grundlagen &amp; Quellen</span>'
         f'<span class="detail-reference-summary-meta">{escape(meta)}</span>'

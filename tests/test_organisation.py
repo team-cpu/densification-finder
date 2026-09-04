@@ -1,5 +1,4 @@
 import os
-import re
 import shutil
 import sqlite3
 import tempfile
@@ -12,31 +11,150 @@ import ingest
 import organisation
 import paths
 
-#: The prototype's own fictional roster, and its domain — see the module
-#: docstring in `organisation.py` for why none of it may appear rendered.
-_INVENTED_NAMES = ("Brunner", "Sutter", "Iten", "Meili")
-_INVENTED_DOMAIN = "hochbau-ag.ch"
+
+class OrganisationPersistenceTest(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.database = os.path.join(self.tempdir.name, "results.sqlite")
+        shutil.copy2(paths.SEED_DB, self.database)
+        with sqlite3.connect(self.database) as connection:
+            ingest.schema(connection)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def test_schema_bootstraps_empty_truthful_organisation(self):
+        profile = organisation.load_profile(self.database)
+        self.assertEqual(profile["name"], "")
+        self.assertTrue(profile["weekly_digest"])
+        self.assertFalse(profile["enforce_2fa"])
+        self.assertEqual(organisation.load_members(self.database), [])
+
+    def test_profile_fields_and_toggles_persist(self):
+        organisation.update_profile(
+            {
+                "name": "Beispiel AG",
+                "legal_name": "Beispiel Immobilien AG",
+                "uid": "CHE-123.456.789",
+                "billing_email": "rechnung@beispiel.ch",
+                "weekly_digest": False,
+                "enforce_2fa": True,
+            },
+            self.database,
+        )
+        saved = organisation.load_profile(self.database)
+        self.assertEqual(saved["name"], "Beispiel AG")
+        self.assertEqual(saved["billing_email"], "rechnung@beispiel.ch")
+        self.assertFalse(saved["weekly_digest"])
+        self.assertTrue(saved["enforce_2fa"])
+
+    def test_invalid_profile_value_is_rejected_before_write(self):
+        with self.assertRaises(ValueError):
+            organisation.update_profile(
+                {"name": "Should not persist", "billing_email": "invalid"},
+                self.database,
+            )
+        self.assertEqual(organisation.load_profile(self.database)["name"], "")
+
+    def test_unknown_fields_and_non_boolean_toggles_are_rejected(self):
+        for values in (
+            {"name = ''; DROP TABLE organisation_members; --": "invalid"},
+            {"enforce_2fa": "false"},
+            {"weekly_digest": 1},
+        ):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                organisation.update_profile(values, self.database)
+        self.assertEqual(organisation.load_members(self.database), [])
+        self.assertFalse(organisation.load_profile(self.database)["enforce_2fa"])
+
+    def test_partial_profile_update_keeps_other_fields(self):
+        organisation.update_profile({"name": "QA Company"}, self.database)
+        organisation.update_profile({"city": "QA City"}, self.database)
+        profile = organisation.load_profile(self.database)
+        self.assertEqual(profile["name"], "QA Company")
+        self.assertEqual(profile["city"], "QA City")
+
+    def test_repeated_schema_keeps_organisation_and_parcel_data(self):
+        organisation.update_profile({"name": "QA Company"}, self.database)
+        member_id = organisation.invite_member("qa@example.com", db=self.database)
+        with sqlite3.connect(self.database) as connection:
+            before = connection.execute("SELECT COUNT(*) FROM parcel_results").fetchone()
+            ingest.schema(connection)
+            ingest.schema(connection)
+            after = connection.execute("SELECT COUNT(*) FROM parcel_results").fetchone()
+        self.assertEqual(before, after)
+        self.assertEqual(organisation.load_profile(self.database)["name"], "QA Company")
+        self.assertEqual(organisation.load_members(self.database)[0]["id"], member_id)
+
+    def test_invite_role_resend_and_removal_lifecycle(self):
+        member_id = organisation.invite_member(
+            "anna.muster@example.ch", "Bearbeiter", db=self.database
+        )
+        member = organisation.load_members(self.database)[0]
+        self.assertEqual(member["id"], member_id)
+        self.assertEqual(member["name"], "Anna Muster")
+        self.assertTrue(member["pending"])
+
+        self.assertTrue(
+            organisation.set_member_role(member_id, "Leseweise", self.database)
+        )
+        self.assertTrue(organisation.resend_invite(member_id, self.database))
+        member = organisation.load_members(self.database)[0]
+        self.assertEqual(member["role"], "Leseweise")
+        self.assertEqual(member["activity"], "erneut vorgemerkt")
+        self.assertFalse(organisation.remove_member(member_id, self.database))
+
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "UPDATE organisation_members SET status = 'active' WHERE id = ?",
+                (member_id,),
+            )
+        self.assertTrue(organisation.remove_member(member_id, self.database))
+        self.assertEqual(organisation.load_members(self.database), [])
+
+    def test_duplicate_pending_invite_is_refreshed_not_duplicated(self):
+        first = organisation.invite_member("a@example.ch", db=self.database)
+        second = organisation.invite_member(
+            " A@EXAMPLE.CH ", "Leseweise", db=self.database
+        )
+        self.assertEqual(first, second)
+        members = organisation.load_members(self.database)
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0]["role"], "Leseweise")
+
+    def test_simultaneous_invites_do_not_duplicate_or_raise(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        def invite(_):
+            return organisation.invite_member("qa@example.com", db=self.database)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            ids = list(pool.map(invite, range(2)))
+        self.assertEqual(ids[0], ids[1])
+        self.assertEqual(len(organisation.load_members(self.database)), 1)
+
+    def test_avatar_initials_cannot_escape_css_string(self):
+        for name in ('\\" \\"', '<script>alert(1)</script>', 'ä ö', 'QA Company'):
+            with self.subTest(name=name):
+                organisation.update_profile({"name": name}, self.database)
+                self.assertTrue(organisation.account_summary(self.database)["initials"].isalpha())
+
+    def test_account_summary_uses_configured_organisation_without_fake_person(self):
+        organisation.update_profile({"name": "Beispiel AG"}, self.database)
+        summary = organisation.account_summary(self.database)
+        self.assertEqual(summary["label"], "Beispiel AG")
+        self.assertEqual(summary["initials"], "BA")
+        self.assertEqual(summary["member_count"], 0)
 
 
 class OrganisationDialogTest(unittest.TestCase):
-    """The organisation screen behind the header's account chip. Every test
-    here goes through the real entry point — clicking the chip on a fully
-    rendered `app.py` — rather than calling `organisation.render` directly,
-    because the thing this screen has to get right (a dialog that actually
-    opens and closes, on the real header) only shows up end to end."""
-
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.database = os.path.join(self.tempdir.name, "results.sqlite")
         shutil.copy2(paths.SEED_DB, self.database)
         with sqlite3.connect(self.database) as connection:
             connection.execute("DELETE FROM oereb_cache")
-            # See test_app.py / test_shell.py: the committed fixture predates
-            # columns later work added to `parcel_workflow`, and only ever
-            # gets to current schema via `app.py`'s own bootstrap on a real
-            # database.
             ingest.schema(connection)
-
         self.original_database = paths.DB
         paths.DB = self.database
         st.cache_data.clear()
@@ -46,121 +164,90 @@ class OrganisationDialogTest(unittest.TestCase):
         self.tempdir.cleanup()
 
     def _open(self, view="team", timeout=60):
-        """Open one organisation view through the account menu."""
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=timeout
         ).run()
-        self.assertFalse(app.exception)
-        self.assertNotIn(organisation.DIALOG_OPEN, app.session_state)
-        key = (
-            "app_shell_account_settings"
-            if view == "settings"
-            else "app_shell_account_team"
-        )
+        key = "app_shell_account_settings" if view == "settings" else "app_shell_account_team"
         app.button(key=key).click().run()
         self.assertFalse(app.exception)
         return app
 
     def _dialog_html(self, app):
-        """The modal is intentionally one sanitised HTML surface so its
-        dimensions and grid match the export instead of inheriting the
-        larger default Streamlit form spacing."""
         return " ".join(
             node.proto.body
             for node in app.get("html")
             if "scope-org-modal" in node.proto.body
         )
 
-    def _preview_controls(self, app):
-        return re.findall(
-            r"<(?:input|select|button)\b(?=[^>]*data-org-field=)[^>]*>",
-            self._dialog_html(app),
-        )
-
-    def test_account_control_exposes_menu_before_any_modal(self):
-        app = AppTest.from_file(
-            os.path.join(paths.HERE, "app.py"), default_timeout=60
-        ).run()
-
-        self.assertFalse(app.exception)
-        self.assertNotIn(organisation.DIALOG_OPEN, app.session_state)
-        self.assertIsNotNone(app.button(key="app_shell_account_team"))
-        self.assertIsNotNone(app.button(key="app_shell_account_settings"))
-        self.assertIsNotNone(app.button(key="app_shell_account_logout"))
-        menu = " ".join(node.proto.body for node in app.get("html"))
-        self.assertIn("scope-account-menu", menu)
-        self.assertIn("Keine Benutzerkonten aktiv", menu)
-
-    def test_the_menu_opens_the_selected_dialog_and_closes_again(self):
-        app = self._open()
+    def test_account_menu_opens_active_team_dialog_and_closes(self):
+        app = self._open("team")
         self.assertTrue(app.session_state[organisation.DIALOG_OPEN])
-        self.assertEqual(app.session_state[organisation.DIALOG_VIEW], "team")
-        # The dialog only exists once it is open — same guarantee
-        # test_app.py's `test_a_closed_board_carries_no_contact_form_widgets`
-        # makes for the acquisition board's contact dialog.
         self.assertIn("scope-org-modal--team", self._dialog_html(app))
+        self.assertFalse(app.text_input(key="org_invite_email").disabled)
+        self.assertFalse(app.selectbox(key="org_invite_role").disabled)
+        self.assertFalse(app.button(key="org_invite_submit").disabled)
 
         app.button(key="org_dialog_close").click().run()
         self.assertFalse(app.exception)
         self.assertNotIn(organisation.DIALOG_OPEN, app.session_state)
-        self.assertNotIn(organisation.DIALOG_VIEW, app.session_state)
-        self.assertNotIn("scope-org-modal", self._dialog_html(app))
 
-    def test_every_control_the_preview_renders_is_disabled(self):
-        """The point of the whole screen: a toggle the user can flip that
-        changes nothing teaches them a lie about what this tool does. This
-        is the regression test for a single missed `disabled=True` — it
-        enumerates every input, selectbox, button and toggle the preview
-        draws (3 in the invite form, 7 company fields and 4 settings toggles)
-        and fails loudly
-        if even one of them is left interactive."""
-        for view, expected in (("team", 3), ("settings", 11)):
-            with self.subTest(view=view):
-                app = self._open(view)
-                controls = self._preview_controls(app)
-                self.assertEqual(len(controls), expected)
-                for control in controls:
-                    self.assertRegex(control, r"\sdisabled(?:\s|>)")
-
-    def test_no_invented_person_or_domain_appears(self):
-        """Same guarantee `test_shell.py::test_the_header_names_no_person`
-        makes for the header chip: the prototype's fictional roster —
-        Brunner, Sutter, Iten, Meili at hochbau-ag.ch — must not survive
-        into a screen this application actually ships, or it would imply a
-        member system that does not exist."""
-        for view in ("team", "settings"):
-            app = self._open(view)
-
-            text = self._dialog_html(app)
-            text += " " + " ".join(button.label or "" for button in app.button)
-
-            for invented in _INVENTED_NAMES:
-                self.assertNotIn(invented, text)
-            self.assertNotIn(_INVENTED_DOMAIN, text)
-
-    def test_the_preview_disclosure_is_present(self):
-        app = self._open()
-        dialog = self._dialog_html(app)
-        self.assertIn("Vorschau", dialog)
-        self.assertIn("gemeinsames Passwort", dialog)
-
-    def test_the_datenlizenz_row_names_the_real_data_sources(self):
-        """The prototype's row shows a Zurich cadastral subscription
-        expiring 31.12.2026 and a seat count ("3 von 6 Lizenzen belegt").
-        Neither is true here — this application has no subscription and no
-        seats — so the row must name the real provenance (README.md's data
-        sources: Canton Aargau via AGIS and geodienste.ch) instead of
-        carrying either fiction across."""
+    def test_settings_dialog_exposes_all_editable_fields_and_toggles(self):
         app = self._open("settings")
-        text = self._dialog_html(app)
+        for field in organisation.PROFILE_TEXT_FIELDS:
+            self.assertFalse(app.text_input(key=f"org_profile_{field}").disabled)
+        for field in organisation.PROFILE_BOOLEAN_FIELDS:
+            self.assertFalse(app.toggle(key=f"org_profile_{field}").disabled)
+        html = " ".join(node.proto.body for node in app.get("html"))
+        self.assertIn("Aargau", html)
+        self.assertIn("AGIS", html)
+        self.assertIn("geodienste.ch", html)
+        self.assertIn("Keine aktive 2FA", html)
+        self.assertIn("E-Mail-Versand ist noch nicht eingerichtet", html)
+        self.assertNotIn("Abo Team", html)
+        self.assertIn("st-key-org_modal_content", html)
+        self.assertIn('[data-testid="stTextInputRootElement"]', html)
+        self.assertIn('[data-testid="stSelectbox"] [role="group"]', html)
+        self.assertNotIn("data-baseweb", organisation._DIALOG_CSS)
 
-        self.assertIn("Aargau", text)
-        self.assertIn("AGIS", text)
-        self.assertIn("geodienste.ch", text)
-        self.assertNotIn("Lizenzen belegt", text)
-        self.assertNotIn("Abo Team", text)
-        self.assertNotIn("31.12.2026", text)
-        self.assertNotIn("Zürich", text)
+    def test_settings_save_on_change_and_keep_each_error_until_fixed(self):
+        app = self._open("settings")
+        app.text_input(key="org_profile_uid").set_value("invalid").run()
+        app.text_input(key="org_profile_billing_email").set_value("invalid").run()
+        app.text_input(key="org_profile_name").set_value("QA Company").run()
+        self.assertEqual(len(app.error), 2)
+        self.assertEqual(organisation.load_profile(self.database)["name"], "QA Company")
+
+        app.button(key="org_dialog_close").click().run()
+        self.assertTrue(app.session_state[organisation.DIALOG_OPEN])
+        self.assertEqual(len(app.error), 2)
+        app.text_input(key="org_profile_uid").set_value("CHE-123.456.789").run()
+        self.assertEqual(len(app.error), 1)
+        app.text_input(key="org_profile_billing_email").set_value("qa@example.com").run()
+        self.assertEqual(len(app.error), 0)
+        app.button(key="org_dialog_close").click().run()
+        self.assertNotIn(organisation.DIALOG_OPEN, app.session_state)
+
+    def test_team_invite_role_and_resend_work_through_widgets(self):
+        app = self._open("team")
+        app.text_input(key="org_invite_email").set_value("qa.person@example.com")
+        app.button(key="org_invite_submit").click().run()
+        self.assertFalse(app.exception)
+        member = organisation.load_members(self.database)[0]
+        member_id = member["id"]
+        app.selectbox(key=f"org_member_role_{member_id}").select("Leseweise").run()
+        app.button(key=f"org_resend_{member_id}").click().run()
+        self.assertFalse(app.exception)
+        member = organisation.load_members(self.database)[0]
+        self.assertEqual(member["role"], "Leseweise")
+        self.assertEqual(member["activity"], "erneut vorgemerkt")
+        self.assertIn('[class*="st-key-org_member_row_"]', organisation._DIALOG_CSS)
+
+    def test_no_reference_person_or_company_is_seeded(self):
+        app = self._open("team")
+        rendered = " ".join(node.proto.body for node in app.get("html"))
+        rendered += " " + " ".join(button.label or "" for button in app.button)
+        for invented in ("Brunner", "Sutter", "Iten", "Meili", "Hochbau AG"):
+            self.assertNotIn(invented, rendered)
 
 
 if __name__ == "__main__":

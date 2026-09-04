@@ -177,6 +177,38 @@ SAVED_SEARCH_COLUMNS = [
     ("created_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
 ]
 
+# Organisation data belongs to the application, not to a parcel import.  It is
+# kept in the same persistent SQLite file so Team/Einstellungen survive both a
+# cascade recompute and a container redeploy.  The single profile row is keyed
+# explicitly instead of relying on "first row wins" semantics.
+ORGANISATION_PROFILE_COLUMNS = [
+    ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+    ("name", "TEXT NOT NULL DEFAULT ''"),
+    ("legal_name", "TEXT NOT NULL DEFAULT ''"),
+    ("street", "TEXT NOT NULL DEFAULT ''"),
+    ("postcode", "TEXT NOT NULL DEFAULT ''"),
+    ("city", "TEXT NOT NULL DEFAULT ''"),
+    ("uid", "TEXT NOT NULL DEFAULT ''"),
+    ("billing_email", "TEXT NOT NULL DEFAULT ''"),
+    ("weekly_digest", "INTEGER NOT NULL DEFAULT 1"),
+    ("due_reminders", "INTEGER NOT NULL DEFAULT 1"),
+    ("enforce_2fa", "INTEGER NOT NULL DEFAULT 0"),
+    ("shared_calculations", "INTEGER NOT NULL DEFAULT 1"),
+    ("updated_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+]
+
+ORGANISATION_MEMBER_COLUMNS = [
+    ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+    ("name", "TEXT NOT NULL DEFAULT ''"),
+    ("email", "TEXT NOT NULL UNIQUE"),
+    ("role", "TEXT NOT NULL DEFAULT 'Bearbeiter'"),
+    ("status", "TEXT NOT NULL DEFAULT 'pending'"),
+    ("activity", "TEXT NOT NULL DEFAULT '—'"),
+    ("is_self", "INTEGER NOT NULL DEFAULT 0"),
+    ("created_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+    ("updated_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+]
+
 
 def _column_definitions(columns):
     return ",\n            ".join(
@@ -300,6 +332,8 @@ def schema(con):
     oereb_cols = _column_definitions(OEREB_COLUMNS)
     workflow_cols = _column_definitions(WORKFLOW_COLUMNS)
     saved_search_cols = _column_definitions(SAVED_SEARCH_COLUMNS)
+    organisation_profile_cols = _column_definitions(ORGANISATION_PROFILE_COLUMNS)
+    organisation_member_cols = _column_definitions(ORGANISATION_MEMBER_COLUMNS)
     statuses = ", ".join(f"'{status}'" for status in WF.CONTACT_STATUS_LABELS)
     con.executescript(
         f"""
@@ -337,6 +371,19 @@ def schema(con):
             {saved_search_cols},
             PRIMARY KEY (name)
         );
+        CREATE TABLE IF NOT EXISTS organisation_profile (
+            {organisation_profile_cols},
+            CHECK (weekly_digest IN (0, 1)),
+            CHECK (due_reminders IN (0, 1)),
+            CHECK (enforce_2fa IN (0, 1)),
+            CHECK (shared_calculations IN (0, 1))
+        );
+        CREATE TABLE IF NOT EXISTS organisation_members (
+            {organisation_member_cols},
+            CHECK (role IN ('Inhaber', 'Bearbeiter', 'Leseweise')),
+            CHECK (status IN ('active', 'pending')),
+            CHECK (is_self IN (0, 1))
+        );
         """
     )
     _add_missing_columns(con, "parcel_results", COLUMNS)
@@ -344,6 +391,11 @@ def schema(con):
     _add_missing_columns(con, "oereb_cache", OEREB_COLUMNS)
     _add_missing_columns(con, "parcel_workflow", WORKFLOW_COLUMNS)
     _add_missing_columns(con, "saved_searches", SAVED_SEARCH_COLUMNS)
+    _add_missing_columns(con, "organisation_profile", ORGANISATION_PROFILE_COLUMNS)
+    _add_missing_columns(con, "organisation_members", ORGANISATION_MEMBER_COLUMNS)
+    con.execute(
+        "INSERT OR IGNORE INTO organisation_profile (id, name) VALUES (1, '')"
+    )
     # After widening, because the copy carries whichever columns the widened
     # table has; before the indexes, because DROP TABLE takes its indexes with
     # it and the CREATE INDEX statements below put them back.
@@ -358,6 +410,10 @@ def schema(con):
     )
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_workflow_hidden ON parcel_workflow(hidden)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_org_member_status "
+        "ON organisation_members(status)"
     )
     con.commit()
 

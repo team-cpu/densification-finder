@@ -1,0 +1,3 @@
+-r requirements.txt
+# PDF extraction assertions only; not installed by the production Dockerfile.
+pypdf==6.16.1
