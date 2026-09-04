@@ -124,6 +124,29 @@ def _account_chip() -> None:
             st.rerun()
 
 
+#: Shared form surfaces, including controls mounted in popover/dialog portals.
+#: Streamlit uses secondaryBackgroundColor for these wrappers by default. Keep
+#: that theme token for neutral chrome, but make editable fields white like the
+#: reference. Only backgrounds change: sizing, focus rings and disabled styling
+#: still belong to the individual widget/page.
+_INPUT_CSS = """
+<style>
+[data-testid="stTextInputRootElement"]:has(input:enabled),
+[data-testid="stNumberInputContainer"]:has(input:enabled),
+[data-testid="stSelectbox"] [role="group"]:has(input:enabled),
+[data-testid="stTextArea"] textarea:enabled {
+  background-color: #fff !important;
+}
+/* Input fields can have their own theme paint on top of the white wrapper. */
+[data-testid="stTextInputRootElement"] input:enabled,
+[data-testid="stNumberInputContainer"] input:enabled,
+[data-testid="stSelectbox"] [role="group"] input:enabled {
+  background-color: transparent !important;
+}
+</style>
+"""
+
+
 #: Emitted once per render via `st.html`, scoped under `.st-key-app_shell` so
 #: none of it can leak onto `screening.py`/`merkliste.py`/`detail.py`/
 #: `acquisition.py`, which draw their own scoped blocks the same way
@@ -499,6 +522,7 @@ def header(data_as_of: str) -> str:
     it has to run on a later script run than the click that requested it.
     """
     with st.container(key="app_shell"):
+        st.html(_INPUT_CSS)
         st.html(_SHELL_CSS)
         with st.container(
             key="app_shell_row", horizontal=True, gap=28, vertical_alignment="center"

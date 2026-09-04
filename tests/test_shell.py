@@ -104,6 +104,24 @@ class ShellHeaderRegressionTest(unittest.TestCase):
                 any("Scope" in body for body in bodies),
                 f"wordmark missing on {page}",
             )
+            self.assertIn(
+                shell._INPUT_CSS.strip(), [body.strip() for body in bodies],
+                f"shared editable input surfaces missing on {page}",
+            )
+
+    def test_shared_input_colors_do_not_override_disabled_or_focus_styles(self):
+        css = shell._INPUT_CSS
+        for selector in (
+            '[data-testid="stTextInputRootElement"]:has(input:enabled)',
+            '[data-testid="stNumberInputContainer"]:has(input:enabled)',
+            '[data-testid="stSelectbox"] [role="group"]:has(input:enabled)',
+            '[data-testid="stTextArea"] textarea:enabled',
+        ):
+            self.assertIn(selector, css)
+        self.assertIn("background-color: #fff !important", css)
+        self.assertNotIn("border:", css)
+        self.assertNotIn("outline:", css)
+        self.assertNotIn("box-shadow:", css)
 
     def test_the_shell_container_and_style_block_are_present(self):
         """`app.py` used to draw a bare `st.title`; this is the regression
