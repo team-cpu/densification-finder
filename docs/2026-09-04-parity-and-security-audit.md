@@ -8,14 +8,14 @@ dialog changes. **This is an incremental implementation, not 100% parity.**
 
 | Area | Result | Evidence |
 | --- | --- | --- |
-| Team | Persistent pending invitations, duplicate handling, role changes and re-queue action; no fictitious members | Organisation persistence/widget tests; populated local dialog inspected |
+| Team | Persistent pending invitations, duplicate handling, role changes and re-queue action; no fictitious members; stale dialogs cannot overwrite another session's role update on rerender | Organisation persistence/widget tests, including cross-session role regression; populated local dialog inspected |
 | Einstellungen | Company fields and four preference values persist; each field validates independently | Widget tests, 31px fields/compact labels inspected in browser |
 | Dialog layout | React Aria selectors replace obsolete BaseWeb selectors; dynamic member rows sized correctly; only Settings body scrolls | Browser inspection at 1159 × 863; Close and Fertig remain visible |
 | Owner/contact modal | Each valid field saves on blur/Enter; Fertig closes; invalid fields remain reported until corrected | Widget regression tests; local owner change read back from temporary SQLite before closing |
 | Data migration | Additive organisation tables, repeated schema initialization preserves existing rows | Migration/persistence tests |
 | Screening | 25/50/100 result limits, default 50; reference parcel placeholder | App regression tests and browser |
 | Analyse | Legal sources expanded initially, matching the reference | Detail tests and browser |
-| Regression | Navigation, calculations, exports, saved searches, shortlist and board event validation remain covered | 215 tests passed in 61.035s |
+| Regression | Navigation, calculations, exports, saved searches, shortlist and board event validation remain covered | 216 tests passed in 61.920s |
 
 Local browser testing uses a temporary database, not the committed seed or the
 production volume. Test contacts/invitations must not be shipped.
@@ -56,7 +56,7 @@ fallback report instead.
 
 ### Commands and evidence
 
-- `python -m unittest discover -s tests -q`: 215 tests, OK. Includes password
+- `python -m unittest discover -s tests -q`: 216 tests, OK. Includes password
   gate, forged component intent, schema preservation, validation and PDF tests.
 - `git diff --check`: clean.
 - `gitleaks detect --no-git --redact --no-banner --source . --max-target-megabytes 5`:
@@ -71,6 +71,9 @@ fallback report instead.
   no High/Critical findings; three pre-existing Medium findings and one Low
   finding in ingestion, triaged below. New organisation SQL uses bound values
   and a static UPDATE statement; concurrent invitations use `BEGIN IMMEDIATE`.
+- Follow-up `bandit -q organisation.py`: clean after changing role writes to
+  explicit widget callbacks. Role widgets reload the latest database value on
+  rerender instead of writing stale session values back to storage.
 
 ### Findings and disposition
 

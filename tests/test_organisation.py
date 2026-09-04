@@ -249,6 +249,16 @@ class OrganisationDialogTest(unittest.TestCase):
         for invented in ("Brunner", "Sutter", "Iten", "Meili", "Hochbau AG"):
             self.assertNotIn(invented, rendered)
 
+    def test_stale_dialog_does_not_overwrite_another_sessions_role_change(self):
+        member_id = organisation.invite_member("qa@example.com", db=self.database)
+        app = self._open("team")
+        self.assertEqual(app.selectbox(key=f"org_member_role_{member_id}").value, "Bearbeiter")
+        organisation.set_member_role(member_id, "Leseweise", self.database)
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertEqual(organisation.load_members(self.database)[0]["role"], "Leseweise")
+        self.assertEqual(app.selectbox(key=f"org_member_role_{member_id}").value, "Leseweise")
+
 
 if __name__ == "__main__":
     unittest.main()

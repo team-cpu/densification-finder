@@ -373,6 +373,17 @@ def _initials(name: object) -> str:
     return "".join(char for char in (initials or fallback) if char.isalpha()) or "GZ"
 
 
+def _save_member_role(member_id: int, widget_key: str, db: str | None) -> None:
+    """Write only on user change, never from a stale widget during a rerender."""
+    try:
+        changed = set_member_role(member_id, st.session_state[widget_key], db)
+    except ValueError as error:
+        st.session_state["org_error"] = str(error)
+    else:
+        if not changed:
+            st.session_state["org_error"] = "Mitglied nicht mehr verfügbar oder nicht editierbar."
+
+
 def _render_team(db: str | None) -> None:
     members = load_members(db)
     with st.container(key="org_team_body"):
@@ -424,15 +435,15 @@ def _render_team(db: str | None) -> None:
                             f'<div class="scope-org-member-email">{escape(str(member["email"]))}</div></div>'
                         )
                         st.html(f'<span class="scope-org-member-activity">{escape(str(member["activity"]))}</span>')
-                        selected = ROLE_OPTIONS.index(str(member["role"]))
-                        new_role = st.selectbox(
-                            "Rolle", ROLE_OPTIONS, index=selected,
-                            key=f"org_member_role_{member_id}",
+                        role_key = f"org_member_role_{member_id}"
+                        st.session_state[role_key] = str(member["role"])
+                        st.selectbox(
+                            "Rolle", ROLE_OPTIONS,
+                            key=role_key,
                             label_visibility="collapsed", disabled=bool(member["is_self"]),
+                            on_change=_save_member_role,
+                            args=(member_id, role_key, db),
                         )
-                        if new_role != member["role"]:
-                            set_member_role(member_id, new_role, db)
-                            st.rerun()
                         if member["pending"]:
                             if st.button("Erneut senden", key=f"org_resend_{member_id}"):
                                 resend_invite(member_id, db)
