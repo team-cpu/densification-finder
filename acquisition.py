@@ -504,6 +504,9 @@ _ACQUISITION_INTRO = """
   display: flex;
   justify-content: flex-end;
 }
+.st-key-acq_header [data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"] {
+  align-items: flex-end;
+}
 .st-key-acq_header [data-testid="stDownloadButton"] button {
   width: auto;
   height: 30px;
@@ -542,6 +545,9 @@ _ACQUISITION_INTRO = """
   .st-key-acq_header [data-testid="stColumn"] { min-width: 100%; }
   .st-key-acq_header [data-testid="stColumn"]:last-child [data-testid="stDownloadButton"] {
     justify-content: flex-start;
+  }
+  .st-key-acq_header [data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"] {
+    align-items: flex-start;
   }
 }
 </style>
@@ -584,7 +590,15 @@ _DUE_CSS = """
   background: #fbfbfc;
 }
 .st-key-acq_due_title [data-testid="stHorizontalBlock"] { align-items: center; }
-.st-key-acq_due_title [data-testid="stCaptionContainer"] { text-align: right; }
+.st-key-acq_due_title [data-testid="stCaptionContainer"] {
+  text-align: right; color: #b0b0b8;
+  font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;
+}
+.acq-due-heading { display: flex; align-items: center; gap: 10px; }
+.acq-due-title { color: #8a8a94; font-size: 10px; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase; }
+.acq-due-count { display: inline-flex; padding: 2px 8px; border-radius: 20px;
+  background: #fdf5e7; color: #8a5a12; font-size: 10.5px; font-weight: 500; }
 [class*="st-key-acq_due_row_"] {
   padding: 8px 0;
   border-bottom: 1px solid #f0f0f3;
@@ -658,9 +672,12 @@ def _render_overdue(shortlist, today):
         with st.container(key="acq_due_title"):
             due_heading, due_today = st.columns([4, 1])
             due_heading.markdown(
-                f"**Fällige Wiedervorlagen** · {overdue_count} offen"
+                '<div class="acq-due-heading">'
+                '<span class="acq-due-title">Fällige Wiedervorlagen</span>'
+                f'<span class="acq-due-count">{overdue_count} offen</span></div>',
+                unsafe_allow_html=True,
             )
-            due_today.caption(f"Heute · {escape(str(today))}")
+            due_today.caption(f"Heute {_contact_date_display(today)}")
 
         # `due_items` orders overdue leads first, so the first `overdue_count`
         # positions are exactly the overdue ones — a position check against that

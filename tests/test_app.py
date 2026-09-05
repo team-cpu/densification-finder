@@ -445,7 +445,7 @@ class AppRegressionTest(unittest.TestCase):
 
         self.assertFalse(app.exception)
         text = " ".join(element.value for element in app.markdown)
-        self.assertIn("Fällige Wiedervorlagen** · 0 offen", text)
+        self.assertIn('class="acq-due-count">0 offen', text)
         self.assertFalse(
             any(
                 str(widget.key or "").startswith("due_contact_")
@@ -938,7 +938,7 @@ class AppRegressionTest(unittest.TestCase):
         self.assertFalse(app.exception)
 
         text = " ".join(element.value for element in app.markdown)
-        self.assertIn("Fällige Wiedervorlagen** · 1 offen", text)
+        self.assertIn('class="acq-due-count">1 offen', text)
 
         due_buttons = [
             widget

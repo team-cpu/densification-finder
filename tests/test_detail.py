@@ -1,5 +1,6 @@
 import datetime
 import io
+import json
 import os
 import re
 import shutil
@@ -8,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 import streamlit as st
 from streamlit.testing.v1 import AppTest
@@ -102,6 +104,15 @@ def result_markup(app):
         if getattr(element, "type", "") == "html"
         and 'class="detail-result-grid"' in str(getattr(element.proto, "body", ""))
     )
+
+
+def calculation_component(app):
+    return next(e for e in app.get("component_instance")
+                if e.proto.component_name.endswith("scope_calculation_table"))
+
+
+def calculation_markup(app):
+    return json.loads(calculation_component(app).proto.json_args)["html"]
 
 
 def facts_markup(app):
@@ -349,11 +360,11 @@ class DetailViewTest(unittest.TestCase):
         its longest line, about seventy characters of arithmetic, wrapped the
         step names and pushed the table into its own sideways scroll."""
         app = self.open_detail()
-        boxed = [m.value for column in app.columns for m in column.markdown
-                 if 'class="calc"' in m.value]
+        boxed = [e for column in app.columns for e in column.get("component_instance")
+                 if e.proto.component_name.endswith("scope_calculation_table")]
         self.assertEqual(boxed, [], "the calculation is back inside a column")
         # …and it is still on the page at all.
-        self.assertTrue(any('class="calc"' in m.value for m in app.markdown))
+        self.assertIn('class="calc"', calculation_markup(app))
         # Assumptions are preserved inside the prototype's legal/source card.
         self.assertIn("Annahmen &amp; Benchmarks", reference_card_markup(app))
 
@@ -489,7 +500,7 @@ class DetailViewTest(unittest.TestCase):
         tooltip not to be a second copy that can go stale. It is rendered from
         the rule that computed the number."""
         app = self.open_detail()
-        body = " ".join(m.value for m in app.markdown)
+        body = calculation_markup(app)
         self.assertIn("verkaufsflaeche * verkaufspreis", body)
         self.assertIn("potenzial_gf * baukosten_pro_m2", body)
         self.assertIn('class="calc__name"', body)
@@ -508,6 +519,60 @@ class DetailViewTest(unittest.TestCase):
         # detail's own title for the open parcel does.
         titles = [t.value for t in app.title]
         self.assertEqual(titles, ["Parzelle 574"])
+
+    def test_manual_amount_event_updates_screen_pdf_and_reset_once(self):
+        app = self.open_detail()
+        before = float(result_attribute(app, "data-residual"))
+        price = next(n for n in app.number_input if n.label == "Verkaufspreis CHF/m²")
+        price.set_value(9000).run()
+        calculated = float(result_attribute(app, "data-residual"))
+        event = {"eventId": "manual-cost-1", "type": "override", "parcel": self.pid,
+                 "field": "baukosten", "value": "CHF 1’000’000"}
+        render_component = detail.UI.calculation_table
+
+        def render_with_event(html, **kwargs):
+            render_component(html, **kwargs)
+            return event
+
+        with patch.object(detail.UI, "calculation_table", side_effect=render_with_event):
+            with patch.object(report, "build", wraps=report.build) as build_pdf:
+                app.run()
+                self.assertFalse(app.exception)
+                screen_value = float(result_attribute(app, "data-residual"))
+                steps = build_pdf.call_args.kwargs["steps"]
+                self.assertEqual(screen_value, E.land_value(steps))
+                self.assertGreater(screen_value, calculated)
+                self.assertGreater(calculated, before)
+                self.assertEqual(next(s.value for s in steps if s.key == "baukosten"),
+                                 -1_000_000)
+                self.assertIn("Manuell überschrieben", calculation_markup(app))
+                # Read actual generated PDF bytes, not only the report arguments.
+                from pypdf import PdfReader
+                pdf = report.build(**build_pdf.call_args.kwargs)
+                text = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(pdf)).pages)
+                self.assertIn("Manuell überschrieben", text)
+                self.assertIn(E.chf(screen_value), text)
+            # Components retain their last event. Reset must not apply it again.
+            reset = next(b for b in app.button if b.label == "1 überschrieben · zurücksetzen")
+            reset.click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(float(result_attribute(app, "data-residual")), calculated)
+            self.assertEqual(app.session_state[detail.OWN_STORE]["sale"], 9000)
+            self.assertNotIn(self.pid, app.session_state[detail.OVERRIDE_STORE])
+
+    def test_manual_overrides_stay_with_the_parcel_and_standardwerte_clears_them(self):
+        app = self.open_detail()
+        baseline = result_attribute(app, "data-residual")
+        app.session_state[detail.OVERRIDE_STORE] = {
+            self.pid: {"reserve": 0}, "another-parcel": {"baukosten": 123},
+        }
+        app.run()
+        self.assertNotEqual(result_attribute(app, "data-residual"), baseline)
+        next(b for b in app.button if b.label == "Standardwerte").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(result_attribute(app, "data-residual"), baseline)
+        self.assertEqual(app.session_state[detail.OVERRIDE_STORE],
+                         {"another-parcel": {"baukosten": 123}})
 
     def test_back_returns_to_the_list(self):
         app = self.open_detail()
@@ -817,6 +882,41 @@ class DetailEdgeCaseTest(unittest.TestCase):
             self.assertEqual(len(app.number_input), 0)
         finally:
             del os.environ["APP_PASSWORD"]
+
+
+class CalculationEventTest(unittest.TestCase):
+    def test_valid_edits_and_clear_are_isolated_to_the_current_parcel(self):
+        state = {detail.OVERRIDE_STORE: {"other": {"reserve": 0}}}
+        event = {"type": "override", "parcel": "current", "field": "baukosten",
+                 "value": "−1’234,50"}
+        self.assertTrue(detail.apply_calculation_event(event, "current", state))
+        self.assertEqual(state[detail.OVERRIDE_STORE],
+                         {"other": {"reserve": 0}, "current": {"baukosten": 1234.5}})
+        self.assertTrue(detail.apply_calculation_event(dict(event, value=""), "current", state))
+        self.assertEqual(state[detail.OVERRIDE_STORE]["current"], {})
+        self.assertEqual(state[detail.OVERRIDE_STORE]["other"], {"reserve": 0})
+
+    def test_forged_or_invalid_event_does_not_mutate_state(self):
+        valid = {"type": "override", "parcel": "current", "field": "baukosten",
+                 "value": "100"}
+        for event in (None, [], dict(valid, parcel="other"), dict(valid, type="delete")):
+            state = {}
+            self.assertFalse(detail.apply_calculation_event(event, "current", state))
+            self.assertEqual(state, {})
+        for event in (dict(valid, field="landwert"), dict(valid, value="bad"),
+                      dict(valid, value=float("nan")), dict(valid, field=["baukosten"])):
+            state = {}
+            with self.assertRaises(ValueError):
+                detail.apply_calculation_event(event, "current", state)
+            self.assertEqual(state, {})
+
+    def test_editable_renderer_escapes_labels_and_retains_decimal_amounts(self):
+        step = E.Step('<img src=x onerror="alert(1)">', 'x < 2', -123.45,
+                      key="baukosten")
+        html = detail._calculation_table([step], editable=True)
+        self.assertNotIn("<img", html)
+        self.assertIn("&lt;img", html)
+        self.assertIn('data-value="123.45"', html)
 
 
 class DataSheetTest(unittest.TestCase):

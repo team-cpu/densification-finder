@@ -22,7 +22,9 @@ The result is the residual value of the ADDITIONAL floor area only. It is not a
 valuation of the parcel: the existing building keeps a value of its own, which
 this deliberately does not estimate.
 """
+import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Optional
 
@@ -213,6 +215,44 @@ class Step:
     kind: str = "cost"
     #: The expression as written in `PATH`, symbols and all.
     expr: str = ""
+    key: str = ""
+    overridden: bool = False
+
+
+OVERRIDE_KEYS = frozenset(rule.key for rule in PATH if rule.effect in ("+", "−"))
+MAX_OVERRIDE = 1_000_000_000_000
+
+
+def validate_overrides(overrides: Mapping[str, float] | None) -> dict[str, float]:
+    """Only finite CHF amounts for editable rows can enter the calculation."""
+    if overrides is None:
+        return {}
+    if not isinstance(overrides, Mapping):
+        raise ValueError("Ungültige manuelle Beträge.")
+    clean = {}
+    for key, amount in overrides.items():
+        if not isinstance(key, str) or key not in OVERRIDE_KEYS:
+            raise ValueError("Diese Position kann nicht überschrieben werden.")
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+            raise ValueError("Bitte einen gültigen CHF-Betrag eingeben.")
+        if not 0 <= amount <= MAX_OVERRIDE or not math.isfinite(amount):
+            raise ValueError("Der Betrag muss zwischen 0 und 1’000’000’000’000 CHF liegen.")
+        clean[key] = float(amount)
+    return clean
+
+
+def parse_override(raw: str) -> float | None:
+    """Swiss grouping/CHF are accepted; empty restores the calculated value."""
+    if not isinstance(raw, str) or len(raw) > 100:
+        raise ValueError("Bitte einen gültigen CHF-Betrag eingeben.")
+    value = re.sub(r"CHF", "", raw, flags=re.IGNORECASE)
+    value = re.sub(r"[’'\s]", "", value).replace("−", "-").replace(",", ".")
+    if not value:
+        return None
+    if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", value):
+        raise ValueError("Bitte einen gültigen CHF-Betrag eingeben.")
+    amount = abs(float(value))
+    return validate_overrides({"baukosten": amount})["baukosten"]
 
 
 def chf(value: Optional[float]) -> str:
@@ -249,7 +289,7 @@ def substitute(expr: str, values: dict) -> str:
     return _NAME.sub(swap, expr)
 
 
-def evaluate(inputs: dict) -> list[Step]:
+def evaluate(inputs: dict, overrides: Mapping[str, float] | None = None) -> list[Step]:
     """Run `PATH` over the given inputs.
 
     The expressions are evaluated rather than reimplemented, which is the whole
@@ -258,19 +298,25 @@ def evaluate(inputs: dict) -> list[Step]:
     values computed so far, so a rule can reach a previous rule and nothing else.
     """
     values = dict(inputs)
+    manual = validate_overrides(overrides)
     steps = []
     for rule in PATH:
         value = eval(rule.expr, {"__builtins__": {}}, values)  # noqa: S307 — our own literals
+        overridden = rule.key in manual
+        if overridden:
+            value = manual[rule.key]
         values[rule.key] = value
         kind = {"+": "revenue", "=": "result", "": "area"}.get(rule.effect, "cost")
         steps.append(Step(
             label=("− " if rule.effect == "−" else "= " if rule.effect == "=" else "")
                   + rule.label,
-            formula=substitute(rule.expr, values),
+            formula="Manuell überschrieben" if overridden else substitute(rule.expr, values),
             value=-value if rule.effect == "−" else value,
             unit=rule.unit,
             kind=kind,
-            expr=rule.expr,
+            expr="" if overridden else rule.expr,
+            key=rule.key,
+            overridden=overridden,
         ))
     return steps
 
@@ -286,6 +332,7 @@ def residual(
     financing_pct: float,
     reserve_pct: float,
     demolish: bool = True,
+    overrides: Mapping[str, float] | None = None,
 ) -> list[Step]:
     """The path from floor-area potential to residual land value.
 
@@ -308,7 +355,7 @@ def residual(
         "abbruch": 1 if demolish else 0,
         "finanzierung_prozent": financing_pct,
         "reserve_prozent": reserve_pct,
-    })
+    }, overrides=overrides)
 
 
 def land_value(steps: list[Step]) -> float:

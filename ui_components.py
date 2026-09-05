@@ -24,6 +24,14 @@ _SCREENING_TABLE = components.declare_component(
 _ACQUISITION_BOARD = components.declare_component(
     "scope_acquisition_board", path=str(_ROOT / "acquisition_board")
 )
+_CALCULATION_TABLE = components.declare_component(
+    "scope_calculation_table", path=str(_ROOT / "calculation_table")
+)
+
+
+def calculation_table(html: str, *, parcel: str, key: str):
+    """Only escaped, server-rendered table markup; frontend returns edit intent."""
+    return _CALCULATION_TABLE(html=html, parcel=parcel, key=key, default=None)
 
 
 def merkliste_table(rows: list[dict], *, key: str):

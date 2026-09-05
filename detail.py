@@ -32,6 +32,7 @@ import navigation
 import report
 import paths
 import workflow as WF
+import ui_components as UI
 
 #: Which parcel the app is showing, or absent for the list view. The whole
 #: navigation is this one key: the brief asks for a conditional view rather
@@ -690,6 +691,7 @@ def _links(row):
 #: their own figures.
 STORE = "parcel_assumptions"   # {parcel: {name: value}}
 OWN_STORE = "own_assumptions"  # {name: value}, for the whole session
+OVERRIDE_STORE = "calculation_overrides"  # {parcel: {rule_key: CHF magnitude}}
 
 OWN = ("unit", "sale", "share", "build", "ancillary", "demolition", "financing",
        "reserve")
@@ -725,9 +727,30 @@ def forget(pid):
     scope they were set in."""
     st.session_state.pop(OWN_STORE, None)
     st.session_state.get(STORE, {}).pop(pid, None)
+    st.session_state.get(OVERRIDE_STORE, {}).pop(pid, None)
     for key in [k for k in st.session_state
                 if str(k).startswith(f"{pid}::") or str(k).startswith("own::")]:
         del st.session_state[key]
+
+
+def apply_calculation_event(event, pid, state=None):
+    """Validate a single edit against the open parcel, before changing state."""
+    target = st.session_state if state is None else state
+    if not isinstance(event, dict) or event.get("parcel") != pid:
+        return False
+    if event.get("type") != "override":
+        return False
+    key = event.get("field")
+    if not isinstance(key, str) or key not in E.OVERRIDE_KEYS:
+        raise ValueError("Diese Position kann nicht überschrieben werden.")
+    value = E.parse_override(event.get("value"))
+    manual = dict(target.get(OVERRIDE_STORE, {}).get(pid, {}))
+    if value is None:
+        manual.pop(key, None)
+    else:
+        manual[key] = value
+    target.setdefault(OVERRIDE_STORE, {})[pid] = manual
+    return True
 
 
 #: Two things the layout has to say that the words on the page cannot.
@@ -891,10 +914,12 @@ PAGE_CSS = """
       color:#7a6533; font-size:11.5px; line-height:16px; text-wrap:pretty; }
   .st-key-inputs_c { gap:0; overflow:hidden; margin:0 0 20px; padding:0;
       border:1px solid #eaeaee; border-radius:9px; background:#fff; }
-  .st-key-inputs_c_header { gap:0 !important; padding:12px 16px !important;
-      border-bottom:1px solid #f0f0f3; }
-  .st-key-inputs_c_header > [data-testid="stHorizontalBlock"] {
-      align-items:center; gap:12px; }
+  .st-key-inputs_c_header { gap:10px !important; padding:12px 16px !important;
+      border-bottom:1px solid #f0f0f3; align-items:center; flex-wrap:nowrap !important; }
+  .st-key-inputs_c_header > [data-testid="stElementContainer"] {
+      width:auto !important; flex:0 0 auto !important; }
+  .st-key-inputs_c_header > [data-testid="stElementContainer"]:first-child {
+      flex:1 1 0 !important; margin-right:auto; min-width:180px; }
   .detail-calculation-title { color:#8a8a94; font-size:10px; font-weight:600;
       line-height:12px; letter-spacing:.1em; text-transform:uppercase; }
   .detail-calculation-meta { display:flex; align-items:center;
@@ -905,6 +930,9 @@ PAGE_CSS = """
       color:#77777f; font-size:11.5px; font-weight:400; white-space:nowrap; }
   .st-key-inputs_c_header [data-testid="stButton"] button:hover {
       border:0; background:none; color:#17171b; }
+  .st-key-inputs_c_header [class*="st-key-"][class*="overrides-reset"] button {
+      padding:0 9px; border:1px solid #cfe0de; border-radius:20px;
+      background:#f2f7f6; color:#143a37; font-size:10.5px; }
   .st-key-inputs_c_body { gap:14px !important; padding:16px !important;
       border-bottom:1px solid #f0f0f3; }
   .st-key-inputs_c_body > [data-testid="stHorizontalBlock"] { gap:16px; }
@@ -1063,8 +1091,9 @@ PAGE_CSS = """
         flex-wrap:wrap; }
     [data-testid="stHorizontalBlock"]:has(.st-key-facts_a)
         > [data-testid="stColumn"] { min-width:100%; }
-    .st-key-inputs_c_header > [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
-    .st-key-inputs_c_header [data-testid="stColumn"] { min-width:auto; }
+    .st-key-inputs_c_header { flex-wrap:wrap !important; }
+    .st-key-inputs_c_header > [data-testid="stElementContainer"]:first-child {
+        flex-basis:100% !important; }
     .st-key-inputs_c_body > [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
     .st-key-inputs_c_body > [data-testid="stHorizontalBlock"]
         > [data-testid="stColumn"] { min-width:calc(50% - 8px); }
@@ -1105,11 +1134,20 @@ CALC_CSS = """
   table.calc tr.calc__sqm th { color:#77777f; font-size:12px; font-weight:400; }
   table.calc tr.calc__sqm td.calc__formula { color:#b0b0b8; }
   table.calc tr.calc__sqm td.calc__amount { color:#4a4a54; font-size:12px; }
+  .calc__edit { display:inline-block; padding:2px 6px; margin:-2px -6px;
+      border:0; border-bottom:1px dashed #d8d8de; border-radius:4px;
+      background:transparent; color:inherit; font:inherit; cursor:text; }
+  .calc__edit--overridden { background:#e8f0ef;
+      box-shadow:inset 0 -1px 0 #1c4e4a; border-bottom-color:transparent; }
+  .calc__edit:focus-visible { outline:2px solid #1c4e4a; outline-offset:2px; }
+  .calc__cost .calc__amount { color:#8a4a44; }
 
   span.calc__name { position:relative; border-bottom:1px dotted #b0b0b8;
       cursor:help; outline-offset:3px; }
   span.calc__tip { position:absolute; left:0; top:calc(100% + .45rem); z-index:9999;
-      display:none; white-space:pre; padding:.6rem .75rem; border-radius:4px;
+      display:none; white-space:pre-wrap; width:max-content;
+      max-width:min(680px,calc(100vw - 32px)); overflow-wrap:anywhere;
+      padding:.6rem .75rem; border-radius:4px;
       font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
       font-size:12.5px; line-height:1.5; letter-spacing:0; font-weight:400;
       background:#101014; color:#e9e6df; border:1px solid rgba(255,255,255,.18);
@@ -1118,6 +1156,8 @@ CALC_CSS = """
   span.calc__name:focus span.calc__tip,
   span.calc__name:focus-within span.calc__tip { display:block; }
   span.calc__tip b { color:#ff8a7a; font-weight:600; }
+  table.calc tr:nth-last-child(-n+4) span.calc__tip {
+      top:auto; bottom:calc(100% + .45rem); }
 </style>
 """
 
@@ -1131,13 +1171,13 @@ def _tooltip(step):
               else f"CHF {E.chf(step.value)}")
     return (
         f"<b>{escape(step.label.lstrip('−= ').strip())}</b>\n"
-        f"  = {escape(step.expr)}\n"
-        f"  = {escape(step.formula)}\n"
+        + (f"  = {escape(step.expr)}\n" if step.expr else "")
+        + f"  = {escape(step.formula)}\n"
         f"  = {escape(amount)}"
     )
 
 
-def _calculation_table(steps, parcel_area=None, per_m2=None):
+def _calculation_table(steps, parcel_area=None, per_m2=None, *, editable=False):
     """Render the formula path in the compact table used by the prototype."""
     rows = []
     result = next((step for step in steps if step.kind == "result"), None)
@@ -1148,13 +1188,23 @@ def _calculation_table(steps, parcel_area=None, per_m2=None):
             else f"CHF {E.chf(step.value)}"
         ).replace("-", "−")
         label = step.label.lstrip("−= ").strip()
+        amount_markup = escape(amount)
+        if editable and step.key in E.OVERRIDE_KEYS:
+            modifier = " calc__edit--overridden" if step.overridden else ""
+            amount_markup = (
+                f'<button type="button" class="calc__edit{modifier}" '
+                f'data-field="{escape(step.key)}" data-value="{abs(step.value):.15g}" '
+                f'aria-label="{escape(label)}: Betrag bearbeiten" '
+                'title="Klicken zum Überschreiben">'
+                f'{escape(amount.removeprefix("CHF "))}</button>'
+            )
         rows.append(
             f'<tr class="calc__row calc__{escape(step.kind)}">'
             f'<th scope="row"><span class="calc__name" tabindex="0">'
             f'{escape(label)}'
             f'<span class="calc__tip">{_tooltip(step)}</span></span></th>'
             f'<td class="calc__formula">{escape(step.formula)}</td>'
-            f'<td class="calc__amount">{escape(amount)}</td></tr>'
+            f'<td class="calc__amount">{amount_markup}</td></tr>'
         )
 
     if result is not None:
@@ -1411,21 +1461,28 @@ def page(parcels, cache, price_of, db=None):
     # ── Block C ─────────────────────────────────────────────────────────────
     calculation_panel = st.container(key="inputs_c")
     with calculation_panel:
-        with st.container(key="inputs_c_header"):
-            calculation_title, calculation_meta, calculation_reset = st.columns(
-                [5, 2.2, 1.1], vertical_alignment="center"
-            )
-            calculation_title.html(
+        with st.container(key="inputs_c_header", horizontal=True,
+                          vertical_alignment="center", gap="small"):
+            st.html(
                 '<span class="detail-calculation-title">'
                 'C · Residualwert-Rechnung</span>'
             )
-            calculation_meta.html(
+            st.html(
                 '<div class="detail-calculation-meta">'
                 '<span class="detail-edit-pill">Editierbar</span>'
                 '<span class="detail-calculation-hint">'
-                'Eingaben direkt editierbar</span></div>'
+                'Beträge direkt anklickbar</span></div>'
             )
-            if calculation_reset.button(
+            manual = st.session_state.get(OVERRIDE_STORE, {}).get(pid, {})
+            if manual:
+                if st.button(
+                    f"{len(manual)} überschrieben · zurücksetzen",
+                    key=f"{pid}::overrides-reset",
+                    width="content",
+                ):
+                    st.session_state.get(OVERRIDE_STORE, {}).pop(pid, None)
+                    st.rerun()
+            if st.button(
                 "Standardwerte", key=f"{pid}::calculation-defaults"
             ):
                 forget(pid)
@@ -1501,6 +1558,7 @@ def page(parcels, cache, price_of, db=None):
         financing_pct=financing,
         reserve_pct=reserve,
         demolish=bool(demolish),
+        overrides=st.session_state.get(OVERRIDE_STORE, {}).get(pid, {}),
     )
     land = E.land_value(steps)
     per_m2 = E.per_square_metre(steps, float(row["area"]))
@@ -1530,10 +1588,22 @@ def page(parcels, cache, price_of, db=None):
     # assumption cannot be adjusted if only the result is visible. Hovering a
     # step name shows the expression behind it, symbols and all — read off the
     # rule that computed the number, so the two cannot drift apart.
-    calculation_panel.markdown(
-        _calculation_table(steps, float(row["area"]), per_m2),
-        unsafe_allow_html=True,
-    )
+    with calculation_panel:
+        event = UI.consume_event(
+            UI.calculation_table(
+                _calculation_table(steps, float(row["area"]), per_m2, editable=True),
+                parcel=pid, key=f"{pid}::calculation-table",
+            ),
+            f"calculation:{pid}",
+        )
+        if event:
+            try:
+                changed = apply_calculation_event(event, pid)
+            except ValueError as error:
+                st.error(str(error))
+            else:
+                if changed:
+                    st.rerun()
 
     # ── The result bar ──────────────────────────────────────────────────────
     # Written last, drawn first. The warning belongs here rather than beside the

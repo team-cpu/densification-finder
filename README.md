@@ -295,6 +295,15 @@ change because they clicked a different row — while **potential and demolition
 belong to the parcel and stay with it for the session. Keeping the first group per
 parcel would mean retyping seven numbers on every lead.
 
+CHF amounts in the calculation table can also be overridden directly: click an
+amount, then use Enter or leave the field to save; Escape cancels. Swiss grouping,
+CHF prefixes and decimal commas are accepted. Emptying the field restores its
+formula. Overrides are isolated to the current parcel for this session; dependent
+costs, the result strip and the PDF all use the same effective amounts. The green
+override reset clears only these amounts; **Standardwerte** also restores the
+input assumptions. This does not change Philipp's reserve-on-costs or unit-count
+formulas (explicitly reconfirmed by the user on 2026-09-05).
+
 ## Layout
 
     app.py          the interface: filters, Run button, ranked table

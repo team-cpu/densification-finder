@@ -129,6 +129,55 @@ class ResidualValueTest(unittest.TestCase):
         self.assertEqual(E.chf(-1500.4), "-1’500")
         self.assertEqual(E.chf(None), "—")
 
+    def test_manual_construction_recalculates_dependent_costs(self):
+        steps = E.residual(**self.BASE, overrides={"baukosten": 2_000_000})
+        by_key = {s.key: s for s in steps}
+        self.assertEqual(by_key["baukosten"].value, -2_000_000)
+        self.assertEqual(by_key["baunebenkosten"].value, -300_000)
+        self.assertEqual(by_key["finanzierung"].value, -69_900)
+        self.assertEqual(by_key["reserve"].value, -359_985)
+        self.assertEqual(E.land_value(steps), 3_640_115)
+        self.assertEqual(by_key["baukosten"].formula, "Manuell überschrieben")
+        self.assertEqual(by_key["baukosten"].expr, "")
+        self.assertTrue(by_key["baukosten"].overridden)
+        self.assertFalse(by_key["reserve"].overridden)
+        self.assertIn("2’000’000", by_key["baunebenkosten"].formula)
+
+    def test_multiple_manual_rows_and_zero_still_add_up(self):
+        steps = E.residual(**self.BASE, overrides={
+            "verkaufserloes": 2_000_000, "baukosten": 1_000_000,
+            "baunebenkosten": 0, "reserve": 10_000,
+        })
+        by_key = {s.key: s.value for s in steps}
+        self.assertEqual(by_key["baunebenkosten"], 0)
+        self.assertEqual(by_key["finanzierung"], -30_900)
+        self.assertEqual(by_key["reserve"], -10_000)
+        self.assertEqual(E.land_value(steps), 929_100)
+        self.assertEqual(sum(s.value for s in steps if s.kind in ("cost", "revenue")),
+                         E.land_value(steps))
+        self.assertEqual(E.residual(**self.BASE, overrides={}), E.residual(**self.BASE))
+
+    def test_manual_amounts_validate_without_changing_the_formula_model(self):
+        for bad in ([], {"landwert": 1}, {"verkaufsflaeche": 1},
+                    {"baukosten": -1}, {"baukosten": True}, {"baukosten": "100"},
+                    {"baukosten": float("nan")}, {"baukosten": float("inf")},
+                    {"baukosten": 10 ** 1000}):
+            with self.subTest(bad=type(bad)):
+                with self.assertRaises(ValueError):
+                    E.residual(**self.BASE, overrides=bad)
+
+    def test_parse_manual_swiss_amounts_and_clear(self):
+        for raw, amount in (("CHF −1’234’567", 1_234_567),
+                            ("1'234,50", 1234.5), (" 0 ", 0),
+                            ("+1 234.5", 1234.5), ("", None), ("  ", None)):
+            with self.subTest(raw=raw):
+                self.assertEqual(E.parse_override(raw), amount)
+        for raw in (None, 123, "NaN", "Infinity", "12xyz", "1e8", "1.2.3",
+                    "1000000000001", "1" * 101, "<script>"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError):
+                    E.parse_override(raw)
+
 
 if __name__ == "__main__":
     unittest.main()

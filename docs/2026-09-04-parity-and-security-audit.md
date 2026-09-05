@@ -30,13 +30,12 @@ production volume. Test contacts/invitations must not be shipped.
   recipients and delivery/acceptance workflow are still required.
 - The calculation-sharing toggle stores a preference only. Calculation inputs
   remain session-scoped; it does not enforce per-user visibility.
-- Clicking a CHF amount to manually override an individual calculation row
-  (reference lines 737–744, 1151–1204) is not implemented. Inputs above the table
-  do recalculate the result, but the table remains read-only.
+- CHF row overrides were implemented in the 2026-09-05 follow-up below.
 - The production model deliberately retains Philipp's confirmed **reserve on
   costs**, whereas the HTML mock uses developer profit on revenue. Unit counts
   also use the existing floor-area model, not the mock's saleable-area rounding.
-  Changing this requires an explicit calculation-model decision, not a CSS fix.
+  The user explicitly chose to retain Philipp's model on 2026-09-05; this is an
+  approved difference, not outstanding implementation work.
 - Actual Aargau data, public sources and benchmark provenance are retained.
   Mock Zurich subscriptions, 2026 licensed prices, regulatory examples and
   noise-exclusion data are not invented. Additional sources/licenses are needed
@@ -112,3 +111,50 @@ untracked videos and temporary UAT data. Do not set `DENSIFICATION_RESEED` for
 this release. Rolling back application code leaves the additive organisation
 tables intact; no destructive database rollback is required. A successful
 deployment must be checked against its commit and health status separately.
+
+## Follow-up — 2026-09-05
+
+The user confirmed **keep Philipp's formulas** and **no login/email service is
+available**. No account provider was provisioned, and the existing password gate
+and pending-invitation metadata model remain unchanged.
+
+Implemented:
+
+- Click-to-edit CHF rows with Enter/blur save, Escape cancel, and empty-value
+  restore. Unchanged rounded input does not silently alter precise calculations.
+- Manual values are finite, bounded and allowlisted on the server; a component
+  event cannot edit another parcel or the calculated total. Overrides remain
+  per-parcel/session. Dependent costs, result strip and generated PDF share the
+  same calculation path, with manual rows identified explicitly.
+- Individual-override reset and Standardwerte reset; consumed component events
+  cannot reapply old edits after reset. Header actions stay inline on desktop;
+  bottom-row tooltips open upward and wrap within narrow viewports.
+- Merkliste's five status colours/pill spacing match the reference; the actual
+  medium-weight monospace font is loaded for Landwert amounts.
+- Akquisition's export is right-aligned on desktop. The follow-up header uses
+  the reference's count chip, compact title and Swiss-formatted current date.
+
+Verification:
+
+- `python -m unittest discover -s tests -q`: **226 tests passed in 65.220s**
+  after the final source changes. Includes override propagation, zero/multiple
+  overrides, malformed events, parcel isolation, stale-event reset, unchanged
+  Philipp formulas and actual PDF text/value assertions.
+- JavaScript syntax checked for both changed component documents; Python import
+  and compile checks passed; `git diff --check` clean.
+- Browser UAT on a temporary database: all four tabs opened; owner, Team and
+  Einstellungen dialogs checked. Manual costs changed downstream costs and the
+  result in one edit; Escape, invalid input, empty-field blur and reset tested.
+  No-change Enter produced no override. Layout checked at 1159 × 863 and editor/
+  tooltip at 736 × 863; browser viewport restored afterward.
+- Targeted Bandit scan: no findings in `acquisition.py`, `detail.py` or
+  `ui_components.py`. One pre-existing Medium B307 in `economics.evaluate`: only
+  static, source-controlled PATH expressions are evaluated with empty builtins.
+  Neither component input nor override keys can supply an expression; the new
+  inputs are validated numbers. This does not extend the previous full security
+  gate to new authentication/email functionality.
+
+Remaining gaps listed above still apply, except the now-implemented CHF editing
+and the explicitly approved formula difference. This release is not a claim of
+100% identity with the mock or working personal accounts, email delivery or 2FA.
+No production workflow data, seed data, schema or dependencies changed.
