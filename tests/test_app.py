@@ -13,6 +13,7 @@ import ingest
 import merkliste
 import navigation
 import paths
+import screening
 import searches
 import workflow
 
@@ -22,6 +23,12 @@ def field(app, label):
     the acquisition-board tests address one instead of relying on the
     form's field order."""
     return next(w for w in app.text_input if w.label == label)
+
+
+def area(app, label):
+    """The same, for the two fields that are text areas: Adresse and Notizen
+    are blocks of text that grow, not one-liners."""
+    return next(w for w in app.text_area if w.label == label)
 
 
 class AppRegressionTest(unittest.TestCase):
@@ -76,9 +83,10 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(app.number_input[1].label, "Mind. AZ")
         self.assertIsNone(app.number_input[1].value)
 
-        # The Kanton selector sits ahead of Grundstückstyp in the control row,
-        # so it is selectbox[0]; Grundstückstyp moved to selectbox[1].
-        app.selectbox[1].select("Alle").run()
+        # Addressed by label: the filter row's selectbox order shifts whenever
+        # a control changes shape (Gemeinde became one of them).
+        parcel_type = next(s for s in app.selectbox if s.label == "Objekttyp")
+        parcel_type.select("Alle").run()
         self.assertFalse(app.exception)
         frame = app.dataframe[0].value
         self.assertEqual(
@@ -104,9 +112,10 @@ class AppRegressionTest(unittest.TestCase):
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=30
         ).run()
-        # The Kanton selector sits ahead of Grundstückstyp in the control row,
-        # so it is selectbox[0]; Grundstückstyp moved to selectbox[1].
-        app.selectbox[1].select("Alle").run()
+        # Addressed by label: the filter row's selectbox order shifts whenever
+        # a control changes shape (Gemeinde became one of them).
+        parcel_type = next(s for s in app.selectbox if s.label == "Objekttyp")
+        parcel_type.select("Alle").run()
 
         area_min = next(n for n in app.number_input if n.label == "Fläche von (m²)")
         area_min.set_value(5000).run()
@@ -130,9 +139,10 @@ class AppRegressionTest(unittest.TestCase):
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=30
         ).run()
-        # The Kanton selector sits ahead of Grundstückstyp in the control row,
-        # so it is selectbox[0]; Grundstückstyp moved to selectbox[1].
-        app.selectbox[1].select("Unbebaut").run()
+        # Addressed by label: the filter row's selectbox order shifts whenever
+        # a control changes shape (Gemeinde became one of them).
+        parcel_type = next(s for s in app.selectbox if s.label == "Objekttyp")
+        parcel_type.select("Unbebaut").run()
         self.assertFalse(app.exception)
         top = app.dataframe[0].value.iloc[0]
         self.assertEqual(top["Gemeinde"], "Rheinfelden")
@@ -322,6 +332,81 @@ class AppRegressionTest(unittest.TestCase):
             "the unavailable cantons are not named",
         )
 
+    def test_the_gemeinde_filter_picks_one_municipality(self):
+        """The design's Gemeinde control is a single select whose first entry
+        is "Alle Gemeinden" — not a multiselect whose chips outgrow the 30px
+        field the row is built around. Picking one municipality has to narrow
+        the table to it and leave every other filter alone."""
+        app = self.screening()
+
+        gemeinde = next(w for w in app.selectbox if w.label == "Gemeinde")
+        self.assertEqual(gemeinde.value, screening.ALL_MUNICIPALITIES)
+        self.assertEqual(gemeinde.options[0], screening.ALL_MUNICIPALITIES)
+
+        shown = app.dataframe[0].value
+        municipality = str(shown["Gemeinde"].iloc[0])
+        app = gemeinde.set_value(municipality).run()
+
+        self.assertFalse(app.exception)
+        narrowed = app.dataframe[0].value
+        self.assertTrue(len(narrowed) > 0)
+        self.assertEqual(set(narrowed["Gemeinde"]), {municipality})
+        self.assertTrue(len(narrowed) <= len(shown))
+
+    def test_zuruecksetzen_clears_the_chosen_municipality(self):
+        """Zurücksetzen has to put the Gemeinde control back to "Alle
+        Gemeinden", not just drop the filter behind it. Passing an explicit
+        `index` to this keyed selectbox left the browser showing the old
+        municipality while the results were already unfiltered — a control
+        that lies about what it is filtering."""
+        app = self.screening()
+
+        gemeinde = next(w for w in app.selectbox if w.label == "Gemeinde")
+        municipality = str(app.dataframe[0].value["Gemeinde"].iloc[0])
+        app = gemeinde.set_value(municipality).run()
+        self.assertEqual(
+            next(w for w in app.selectbox if w.label == "Gemeinde").value,
+            municipality,
+        )
+
+        app = next(b for b in app.button if b.label == "Zurücksetzen").click().run()
+
+        self.assertFalse(app.exception)
+        for label, key in (
+            ("Kanton", "screening_canton"),
+            ("Gemeinde", "screening_municipality"),
+            ("Anzeigen", "screening_top_n"),
+        ):
+            self.assertEqual(
+                next(w for w in app.selectbox if w.label == label).value,
+                screening.RESET_DEFAULTS[key],
+                f"{label} did not return to its default",
+            )
+        self.assertTrue(
+            len(set(app.dataframe[0].value["Gemeinde"])) > 1,
+            "the reset table is still limited to one municipality",
+        )
+
+    def test_a_search_saved_as_a_list_of_municipalities_still_applies(self):
+        """Searches stored before the single select kept a list. Reading one
+        back must not hand the selectbox a list it cannot show — keep the
+        first municipality the data still has, and say what was dropped."""
+        parcels = pd.DataFrame({"municipality": ["Aarau", "Brugg"], "az": [0.5, 0.6]})
+
+        values, skipped = screening._valid_search_values(
+            parcels, {"screening_municipality": ["Brugg", "Weggezogen"]}
+        )
+        self.assertEqual(values["screening_municipality"], "Brugg")
+        self.assertEqual(skipped, ["Gemeinde"])
+
+        values, skipped = screening._valid_search_values(
+            parcels, {"screening_municipality": screening.ALL_MUNICIPALITIES}
+        )
+        self.assertEqual(
+            values["screening_municipality"], screening.ALL_MUNICIPALITIES
+        )
+        self.assertEqual(skipped, [])
+
     def test_the_csv_export_carries_the_shown_rows(self):
         import io
         from unittest.mock import patch
@@ -409,26 +494,33 @@ class AppRegressionTest(unittest.TestCase):
 
         self.assertFalse(app.exception)
         text = " ".join(element.value for element in app.markdown)
-        self.assertIn("Im Gespräch", text)
-        # Due in 2020 and today is not: the overdue list must have drawn.
-        # The follow-up list is a row of widgets now, not a dataframe with a
-        # `Wiedervorlage` column, so its presence is read off the row's own
-        # `Eigentümer` button and next-step text instead.
-        self.assertIn("Fällige Wiedervorlagen", text)
-        due_buttons = [
-            widget
-            for widget in app.button
-            if str(widget.key or "").startswith("due_contact_")
-        ]
-        self.assertEqual(len(due_buttons), 1)
-        self.assertIn("Zweitgespräch vereinbaren", text)
+        # The stage label lives inside the board component now, so the check
+        # is on the data the component is handed, not on server-rendered text.
+        # The card itself is the only place a lead appears now — the Fällige-
+        # Wiedervorlagen list above it was dropped, so nothing else can be
+        # standing in for a board that failed to draw.
+        parcels = pd.read_sql_query(
+            "SELECT * FROM parcel_results", sqlite3.connect(self.database)
+        )
+        cards = acquisition.board_data(
+            acquisition.leads(parcels, workflow.load(self.database), "saved"),
+            lambda row: None,
+            "2026-09-07",
+        )
+        in_discussion = next(
+            stage for stage in cards if stage["code"] == "in_discussion"
+        )
+        self.assertEqual(len(in_discussion["cards"]), 1)
+        self.assertEqual(
+            in_discussion["cards"][0]["next"], "Zweitgespräch vereinbaren"
+        )
+        self.assertTrue(in_discussion["cards"][0]["overdue"])
+        self.assertNotIn("Fällige Wiedervorlagen", text)
 
-    def test_the_acquisition_overview_stays_visible_when_nothing_is_due(self):
-        """The design keeps the follow-up card present with a truthful zero.
-
-        Dropping the whole section when the query is empty makes an empty desk
-        indistinguishable from a rendering regression and shifts the board up.
-        """
+    def test_the_acquisition_page_is_the_board_and_nothing_above_it(self):
+        """The Fällige-Wiedervorlagen strip is gone by request. What has to
+        stay is everything that hung off the same page: the export, the board
+        and the footer."""
         first = pd.read_sql_query(
             "SELECT bfs, parcel FROM parcel_results LIMIT 1",
             sqlite3.connect(self.database),
@@ -445,11 +537,13 @@ class AppRegressionTest(unittest.TestCase):
 
         self.assertFalse(app.exception)
         text = " ".join(element.value for element in app.markdown)
-        self.assertIn('class="acq-due-count">0 offen', text)
-        self.assertFalse(
-            any(
-                str(widget.key or "").startswith("due_contact_")
-                for widget in app.button
+        self.assertNotIn("Fällige Wiedervorlagen", text)
+        self.assertNotIn("offen", text)
+        self.assertTrue(
+            any(widget.key == "acq_contacts_csv" for widget in app.button)
+            or any(
+                getattr(widget, "label", "") == "Kontaktliste exportieren"
+                for widget in app.get("download_button")
             )
         )
         html = " ".join(element.proto.body for element in app.get("html"))
@@ -511,15 +605,19 @@ class AppRegressionTest(unittest.TestCase):
         self.assertFalse(app.exception)
 
         field(app, "Kontaktperson").set_value("Frau Meier")
-        field(app, "Telefon").set_value("+41 79 000 00 00")
-        field(app, "Wiedervorlage").set_value("15.09.2026")
-        field(app, "Notiz").set_value("Rückruf nächste Woche vereinbart.")
+        # Typed as digits; stored grouped, which is the point of the formatter.
+        field(app, "Telefon").set_value("0790000000")
+        field(app, "Letzter Kontakt").set_value("15.09.2026")
+        area(app, "Adresse").set_value(
+            "Frau Meier\nLandstrasse 10B\n4313 Möhlin"
+        )
+        area(app, "Notizen").set_value("Rückruf nächste Woche vereinbart.")
         app.button(key="acq_contact_save").click().run()
         self.assertFalse(app.exception)
 
         with sqlite3.connect(self.database) as connection:
             row = connection.execute(
-                "SELECT contact_person, phone, due_date, note "
+                "SELECT contact_person, phone, last_contact, owner_address, note "
                 "FROM parcel_workflow WHERE bfs = ? AND parcel = ?",
                 (bfs, parcel),
             ).fetchone()
@@ -527,8 +625,9 @@ class AppRegressionTest(unittest.TestCase):
             row,
             (
                 "Frau Meier",
-                "+41 79 000 00 00",
+                "079 000 00 00",
                 "2026-09-15",
+                "Frau Meier\nLandstrasse 10B\n4313 Möhlin",
                 "Rückruf nächste Woche vereinbart.",
             ),
         )
@@ -546,7 +645,7 @@ class AppRegressionTest(unittest.TestCase):
         workflow.set_saved(key, True, self.database)
         workflow.update(
             key,
-            due_date="2026-01-01",
+            last_contact="2026-01-01",
             contact_person="Herr Muster",
             db=self.database,
         )
@@ -560,7 +659,7 @@ class AppRegressionTest(unittest.TestCase):
 
         self.assertFalse(app.exception)
 
-        field(app, "Wiedervorlage").set_value("32.09.2026").run()
+        field(app, "Letzter Kontakt").set_value("32.09.2026").run()
         # A later successful field callback must not erase the date error.
         field(app, "Kontaktperson").set_value("Neuer Name").run()
         app.button(key="acq_contact_save").click().run()
@@ -569,7 +668,7 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(len(app.error), 1)
         self.assertEqual(
             app.error[0].value,
-            "due_date must be an ISO date (YYYY-MM-DD) or empty",
+            "last_contact must be an ISO date (YYYY-MM-DD) or empty",
         )
         # A refused save must not look like a closed, successful one.
         self.assertEqual(
@@ -577,16 +676,16 @@ class AppRegressionTest(unittest.TestCase):
         )
 
         with sqlite3.connect(self.database) as connection:
-            due_date, contact_person = connection.execute(
-                "SELECT due_date, contact_person FROM parcel_workflow "
+            last_contact, contact_person = connection.execute(
+                "SELECT last_contact, contact_person FROM parcel_workflow "
                 "WHERE bfs = ? AND parcel = ?",
                 (bfs, parcel),
             ).fetchone()
         # Only the invalid date is refused; the valid field was saved on change.
-        self.assertEqual(due_date, "2026-01-01")
+        self.assertEqual(last_contact, "2026-01-01")
         self.assertEqual(contact_person, "Neuer Name")
 
-        field(app, "Wiedervorlage").set_value("15.09.2026").run()
+        field(app, "Letzter Kontakt").set_value("15.09.2026").run()
         self.assertEqual(len(app.error), 0)
         app.button(key="acq_contact_save").click().run()
         self.assertNotIn(acquisition.CONTACT_OPEN, app.session_state)
@@ -848,146 +947,6 @@ class AppRegressionTest(unittest.TestCase):
         self.assertNotIn(
             "Keine Parzelle", " ".join(element.value for element in app.info)
         )
-
-    def test_the_due_lists_eigentuemer_button_opens_that_rows_own_lead(self):
-        """A button wired to the first lead in the shortlist, rather than the
-        one on its own row, would still pass with a single overdue lead on
-        the list — this needs two, both overdue, so clicking the second row
-        and getting the first row's owner back is a visible failure."""
-        rows = pd.read_sql_query(
-            "SELECT bfs, parcel FROM parcel_results LIMIT 2",
-            sqlite3.connect(self.database),
-        )
-        keys = [(int(r.bfs), str(r.parcel)) for r in rows.itertuples()]
-        workflow.set_saved(keys, True, self.database)
-        workflow.update(
-            [keys[0]], due_date="2020-01-01", owner_name="Erste Eigentümerin",
-            db=self.database,
-        )
-        workflow.update(
-            [keys[1]], due_date="2020-02-02", owner_name="Zweite Eigentümerin",
-            db=self.database,
-        )
-        bfs, parcel = keys[1]
-        slug = f"{bfs}_{parcel}"
-
-        app = AppTest.from_file(
-            os.path.join(paths.HERE, "app.py"), default_timeout=60
-        )
-        app.session_state[navigation.PAGE] = "Akquisition"
-        app.run()
-
-        app.button(key=f"due_contact_{slug}").click().run()
-        self.assertFalse(app.exception)
-
-        self.assertEqual(
-            app.session_state[acquisition.CONTACT_OPEN], f"{bfs}:{parcel}"
-        )
-        self.assertEqual(
-            field(app, "Eigentümerschaft").value, "Zweite Eigentümerin"
-        )
-
-    def test_the_due_lists_analyse_button_opens_that_rows_parcel(self):
-        """Mirrors `test_opening_a_lead_from_the_board_lands_on_analyse` for
-        the follow-up list's own copy of the button — the list is a second
-        place a lead can be opened from, with its own widget key, so it needs
-        its own proof that key actually opens the right parcel."""
-        first = pd.read_sql_query(
-            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
-            sqlite3.connect(self.database),
-        ).iloc[0]
-        bfs, parcel = int(first["bfs"]), str(first["parcel"])
-        workflow.set_saved([(bfs, parcel)], True, self.database)
-        workflow.update([(bfs, parcel)], due_date="2020-01-01", db=self.database)
-        slug = f"{bfs}_{parcel}"
-
-        app = AppTest.from_file(
-            os.path.join(paths.HERE, "app.py"), default_timeout=60
-        )
-        app.session_state[navigation.PAGE] = "Akquisition"
-        app.run()
-
-        app.button(key=f"due_open_{slug}").click().run()
-        self.assertFalse(app.exception)
-        self.assertEqual(app.session_state["acq_page"], "Analyse")
-        self.assertEqual(
-            app.session_state["selected_parcel_id"], f"{bfs}:{parcel}"
-        )
-
-    def test_the_due_list_tints_only_overdue_rows_and_counts_only_them(self):
-        """The badge and the tint are the two things telling "late" from
-        "merely scheduled" apart on this list; both used to come from one
-        `Styler` call over a dataframe, so this proves neither guarantee was
-        lost now that the rows are drawn as separate widgets."""
-        rows = pd.read_sql_query(
-            "SELECT bfs, parcel FROM parcel_results LIMIT 2",
-            sqlite3.connect(self.database),
-        )
-        keys = [(int(r.bfs), str(r.parcel)) for r in rows.itertuples()]
-        workflow.set_saved(keys, True, self.database)
-        # One overdue, one not — due_items shows both, but only the first
-        # counts toward the badge and should carry the tint.
-        workflow.update([keys[0]], due_date="2020-01-01", db=self.database)
-        workflow.update([keys[1]], due_date="2099-01-01", db=self.database)
-
-        app = AppTest.from_file(
-            os.path.join(paths.HERE, "app.py"), default_timeout=60
-        )
-        app.session_state[navigation.PAGE] = "Akquisition"
-        app.run()
-        self.assertFalse(app.exception)
-
-        text = " ".join(element.value for element in app.markdown)
-        self.assertIn('class="acq-due-count">1 offen', text)
-
-        due_buttons = [
-            widget
-            for widget in app.button
-            if str(widget.key or "").startswith("due_contact_")
-        ]
-        self.assertEqual(len(due_buttons), 2)
-
-        tinted = [m for m in app.markdown if "#fdf5e7" in m.value]
-        self.assertEqual(len(tinted), 1)
-        self.assertIn("2020-01-01", tinted[0].value)
-        self.assertNotIn("2099-01-01", tinted[0].value)
-
-
-    def test_a_hand_edited_due_date_cannot_inject_markup(self):
-        """The tinted date is the one field on a follow-up row interpolated
-        into markup rather than written through `st.write`. `workflow.update`
-        would refuse this value, but the database is a file on a volume that
-        can be edited by hand, so the row must defend itself rather than trust
-        a validator in another module."""
-        first = pd.read_sql_query(
-            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
-            sqlite3.connect(self.database),
-        ).iloc[0]
-        bfs, parcel = int(first["bfs"]), str(first["parcel"])
-        workflow.set_saved([(bfs, parcel)], True, self.database)
-        # Written straight past the validation `workflow.update` would apply.
-        with sqlite3.connect(self.database) as connection:
-            connection.execute(
-                "UPDATE parcel_workflow SET due_date = ? "
-                "WHERE bfs = ? AND parcel = ?",
-                ("2020-01-01<img src=x onerror=alert(1)>", bfs, parcel),
-            )
-
-        app = AppTest.from_file(
-            os.path.join(paths.HERE, "app.py"), default_timeout=60
-        )
-        app.session_state[navigation.PAGE] = "Akquisition"
-        app.run()
-
-        self.assertFalse(app.exception)
-        # The date still sorts as overdue, so it takes the tinted branch — the
-        # one that builds markup. Only that branch is asserted here: the plain
-        # cells go through `st.write`, whose element value is the markdown
-        # source Streamlit escapes when it renders, not markup it emits.
-        tinted = [m.value for m in app.markdown if "#fdf5e7" in m.value]
-        self.assertEqual(len(tinted), 1)
-        self.assertNotIn("<img src=x", tinted[0])
-        self.assertIn("&lt;img src=x", tinted[0])
 
 if __name__ == "__main__":
     unittest.main()

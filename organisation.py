@@ -384,27 +384,40 @@ def _save_member_role(member_id: int, widget_key: str, db: str | None) -> None:
             st.session_state["org_error"] = "Mitglied nicht mehr verfügbar oder nicht editierbar."
 
 
+def _submit_invite(db: str | None) -> None:
+    """Clear a successful invite before Streamlit recreates the input widget."""
+    try:
+        invite_member(
+            st.session_state.get("org_invite_email", ""),
+            st.session_state.get("org_invite_role", "Bearbeiter"),
+            db=db,
+        )
+    except ValueError as error:
+        st.session_state["org_error"] = str(error)
+    else:
+        st.session_state.pop("org_error", None)
+        st.session_state["org_invite_email"] = ""
+        st.session_state["org_invite_success"] = True
+
+
 def _render_team(db: str | None) -> None:
     members = load_members(db)
     with st.container(key="org_team_body"):
         with st.container(key="org_invite", horizontal=True, vertical_alignment="bottom"):
-            email = st.text_input(
+            st.text_input(
                 "E-Mail-Adresse", placeholder="name@firma.ch", key="org_invite_email",
                 label_visibility="collapsed", max_chars=200,
             )
-            role = st.selectbox(
+            st.selectbox(
                 "Rolle", ROLE_OPTIONS, index=1, key="org_invite_role",
                 label_visibility="collapsed",
             )
-            if st.button("Einladen", key="org_invite_submit", type="primary"):
-                try:
-                    invite_member(email, role, db=db)
-                except ValueError as error:
-                    st.session_state["org_error"] = str(error)
-                else:
-                    st.session_state.pop("org_error", None)
-                    st.toast("Einladung als offen gespeichert.")
-                    st.rerun()
+            st.button(
+                "Einladen", key="org_invite_submit", type="primary",
+                on_click=_submit_invite, args=(db,),
+            )
+        if st.session_state.pop("org_invite_success", False):
+            st.toast("Einladung als offen gespeichert.")
         if error := st.session_state.pop("org_error", None):
             st.error(error)
 

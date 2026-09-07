@@ -19,6 +19,7 @@ open. They are deliberately not persisted — the brief calls that a separate
 task, and a half-built table of saved analyses is worse than none.
 """
 import json
+from functools import partial
 from html import escape
 
 import pandas as pd
@@ -30,6 +31,7 @@ import formatting as F
 import links as L
 import navigation
 import report
+import source_downloads
 import paths
 import workflow as WF
 import ui_components as UI
@@ -385,7 +387,8 @@ def _detail_facts_html(row, cache, price_ref, extract=None):
     )
 
 
-def _potential_result_html(row, potential, unit_size, possible):
+def _potential_result_html(row, potential, unit_size, possible, *, demolish,
+                           demolition_step):
     """Render block B's calculated part in the prototype's compact layout."""
     units = "—" if possible is None else f"{possible:.1f}"
     formula = "—"
@@ -394,12 +397,24 @@ def _potential_result_html(row, potential, unit_size, possible):
 
     replacement_note = ""
     existing = float(row.get("existing") or 0)
-    if existing > 0:
-        replacement_note = (
-            '<div class="detail-replacement-note">Ersatzneubau geprüft: '
-            f'bestehendes Volumen von {E.chf(existing)} m² aBGF wird ersetzt, '
-            'Abbruchkosten in Block C berücksichtigt.</div>'
-        )
+    if existing > 0 or demolition_step.overridden:
+        if existing > 0 and demolish:
+            decision = (f'Ersatzneubau geprüft: bestehendes Volumen von '
+                        f'{E.chf(existing)} m² aBGF wird ersetzt. ')
+        elif existing > 0:
+            decision = (f'Kein Ersatzneubau ausgewählt: bestehendes Volumen von '
+                        f'{E.chf(existing)} m² aBGF bleibt erhalten. ')
+        else:
+            decision = 'Kein bestehendes Gebäude erfasst. '
+        if demolition_step.overridden:
+            cost_note = (f'Abbruchkosten in Block C manuell auf CHF '
+                         f'{E.chf(abs(demolition_step.value))} gesetzt.')
+        elif demolition_step.value != 0:
+            cost_note = 'Abbruchkosten in Block C berücksichtigt.'
+        else:
+            cost_note = 'Keine Abbruchkosten in Block C angesetzt.'
+        replacement_note = ('<div class="detail-replacement-note">'
+                            f'{decision}{cost_note}</div>')
 
     return (
         '<div class="detail-potential-result" '
@@ -517,7 +532,8 @@ def _reference_card_html(extract, zone_rows, notes):
 
 def _regulation_card_html(row, edicts, own, own_note, *, loading=False, error=""):
     """Current regulation news in the prototype's second compact card."""
-    municipality = escape(_text(row.get("municipality")))
+    place = _text(row.get("municipality"))
+    municipality = escape(place)
     if loading:
         meta = "wird geladen"
     elif error:
@@ -560,7 +576,13 @@ def _regulation_card_html(row, edicts, own, own_note, *, loading=False, error=""
                 'OEREBlex keine gültige Rechtsvorschrift verzeichnet.</div>'
             )
 
-        for edict in edicts[:3]:
+        # Only this municipality's own entries. The feed is canton-wide and
+        # sorted by date, so "the three newest" were three other municipalities'
+        # building regulations — under a heading that promises changes for this
+        # parcel, that is not merely noise but wrong. Everything else stays one
+        # click away in the fold below.
+        local = [e for e in edicts if e.municipality == place and e != own]
+        for edict in local[:3]:
             href = _safe_href(edict.document)
             action = (
                 f'<a class="detail-reference-action" href="{href}" target="_blank" '
@@ -573,13 +595,20 @@ def _regulation_card_html(row, edicts, own, own_note, *, loading=False, error=""
                 f'<div class="detail-reference-title">{escape(edict.municipality)} · '
                 f'{escape(edict.label)}</div><div class="detail-reference-detail">'
                 'Rechtsvorschrift in Kraft</div></div>'
-                '<span class="detail-regulation-impact detail-regulation-impact--neutral">Kanton</span>'
+                '<span class="detail-regulation-impact detail-regulation-impact--neutral">Gemeinde</span>'
                 f'<div class="detail-reference-actions">{action}</div></div>'
             )
+        if own and not local:
+            rows.append(
+                '<div class="detail-reference-empty">Keine weiteren Änderungen '
+                f'für {municipality} verzeichnet.</div>'
+            )
 
-        if len(edicts) > 3:
+        shown = set(local[:3]) | ({own} if own else set())
+        elsewhere = [e for e in edicts if e not in shown]
+        if elsewhere:
             remaining = []
-            for edict in edicts[3:]:
+            for edict in elsewhere:
                 href = _safe_href(edict.document)
                 document = (
                     f' · <a href="{href}" target="_blank" rel="noopener noreferrer">Dokument</a>'
@@ -595,7 +624,8 @@ def _regulation_card_html(row, edicts, own, own_note, *, loading=False, error=""
                 )
             rows.append(
                 '<details class="detail-regulation-more"><summary>Alle '
-                f'{len(edicts)} Änderungen</summary><ul>{"".join(remaining)}</ul></details>'
+                f'{len(edicts)} Änderungen im Kanton</summary>'
+                f'<ul>{"".join(remaining)}</ul></details>'
             )
 
     note = f'<div class="detail-regulation-note">{escape(own_note)}</div>' if own_note else ""
@@ -722,15 +752,16 @@ def _remember(pid, name, value):
 
 
 def forget(pid):
-    """Back to the published benchmarks. The economic assumptions were set for
-    the session rather than for this parcel, so they are cleared in the same
-    scope they were set in."""
-    st.session_state.pop(OWN_STORE, None)
-    st.session_state.get(STORE, {}).pop(pid, None)
+    """Reset C's benchmarks and this parcel's overrides, keeping B's inputs.
+
+    Rates are shared across the session, as before. Potential, unit size and
+    the parcel's replacement decision are independent of a cost-rate reset.
+    """
+    rates = set(OWN) - {"unit"}
+    for name in rates:
+        st.session_state.get(OWN_STORE, {}).pop(name, None)
+        st.session_state.pop(_widget_key(pid, name), None)
     st.session_state.get(OVERRIDE_STORE, {}).pop(pid, None)
-    for key in [k for k in st.session_state
-                if str(k).startswith(f"{pid}::") or str(k).startswith("own::")]:
-        del st.session_state[key]
 
 
 def apply_calculation_event(event, pid, state=None):
@@ -1005,6 +1036,14 @@ PAGE_CSS = """
   .detail-reference-card { margin:0 0 12px; border:1px solid #eaeaee;
       border-radius:9px; background:#fff; overflow:hidden; }
   .detail-reference-stack { display:block; }
+  .st-key-detail_references { gap:0 !important; }
+  .st-key-detail_legal { position:relative; gap:0 !important; }
+  .st-key-detail_legal .detail-reference-card > summary { padding-right:164px; }
+  .st-key-detail_sources_download { position:absolute; top:8px; right:16px;
+      width:max-content !important; }
+  .st-key-detail_sources_download button { min-height:27px; height:27px;
+      padding:0 10px; border-radius:5px; font-size:11.5px; }
+  .st-key-detail_sources_download button p { font-size:11.5px; }
   .detail-reference-card--regulations { margin-bottom:0; }
   .detail-reference-card > summary { display:flex; align-items:center;
       justify-content:space-between; gap:12px; min-height:44px; padding:0 16px;
@@ -1456,7 +1495,7 @@ def page(parcels, cache, price_of, db=None):
                 'Marktübliche 3.5-Zi-Wohnung</div>'
             )
             possible = E.units(potential, unit_size)
-            st.html(_potential_result_html(row, potential, unit_size, possible))
+            potential_result = st.empty()
 
     # ── Block C ─────────────────────────────────────────────────────────────
     calculation_panel = st.container(key="inputs_c")
@@ -1562,6 +1601,10 @@ def page(parcels, cache, price_of, db=None):
     )
     land = E.land_value(steps)
     per_m2 = E.per_square_metre(steps, float(row["area"]))
+    potential_result.html(_potential_result_html(
+        row, potential, unit_size, possible, demolish=bool(demolish),
+        demolition_step=next(step for step in steps if step.key == "abbruchkosten"),
+    ))
 
     used = [
         ("sale_price_chf_m2", sale_price, "Verkaufspreis CHF/m²"),
@@ -1589,6 +1632,9 @@ def page(parcels, cache, price_of, db=None):
     # step name shows the expression behind it, symbols and all — read off the
     # rule that computed the number, so the two cannot drift apart.
     with calculation_panel:
+        error_key = f"_calculation_error_{pid}"
+        if message := st.session_state.pop(error_key, None):
+            st.error(message)
         event = UI.consume_event(
             UI.calculation_table(
                 _calculation_table(steps, float(row["area"]), per_m2, editable=True),
@@ -1598,12 +1644,13 @@ def page(parcels, cache, price_of, db=None):
         )
         if event:
             try:
-                changed = apply_calculation_event(event, pid)
+                apply_calculation_event(event, pid)
             except ValueError as error:
-                st.error(str(error))
-            else:
-                if changed:
-                    st.rerun()
+                st.session_state[error_key] = str(error)
+            # Acknowledge rejected/ignored intents too, so the frontend queue
+            # cannot get stuck behind an invalid edit. The consumed id prevents
+            # the retained component value from being applied twice.
+            st.rerun()
 
     # ── The result bar ──────────────────────────────────────────────────────
     # Written last, drawn first. The warning belongs here rather than beside the
@@ -1672,13 +1719,27 @@ def page(parcels, cache, price_of, db=None):
         loading=not have_news,
         error=news_error if have_news else "",
     )
-    st.html(
-        '<div class="detail-reference-stack">'
-        + legal_card
-        + regulation_card
-        + f'<p class="detail-final-note">{escape(FINAL_NOTE)}</p>'
-        + '</div>'
-    )
+    with st.container(key="detail_references"):
+        with st.container(key="detail_legal"):
+            st.html(legal_card)
+            sources = source_downloads.references(extract)
+            st.download_button(
+                "Alle herunterladen",
+                data=partial(source_downloads.build_archive, sources),
+                file_name="rechtsgrundlagen.zip",
+                mime="application/zip",
+                key="detail_sources_download",
+                on_click="ignore",
+                disabled=not sources,
+                help=("ZIP mit abrufbaren PDFs und Quellenverzeichnis. Webseiten "
+                      "und nicht abrufbare PDFs werden darin gekennzeichnet."),
+            )
+        st.html(
+            '<div class="detail-reference-stack">'
+            + regulation_card
+            + f'<p class="detail-final-note">{escape(FINAL_NOTE)}</p>'
+            + '</div>'
+        )
     if not have_news or news_status != "done":
         # The compact card keeps the same non-blocking refresh behaviour as the
         # old open list: it fills itself without requiring an unrelated click.

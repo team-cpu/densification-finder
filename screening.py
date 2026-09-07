@@ -62,6 +62,11 @@ CANTONS = (
 
 PARCEL_TYPES = ("Alle", "Bebaut", "Unbebaut")
 
+#: The Gemeinde filter's "no municipality chosen" option. The design's
+#: control is a single select whose first entry carries this label, so it
+#: is a real option value rather than an empty selection.
+ALL_MUNICIPALITIES = "Alle Gemeinden"
+
 #: Every widget key the filter row owns. One list, not three: the reset
 #: button clears exactly these, a saved search captures exactly these, and
 #: applying one restores exactly these — three separate copies would drift,
@@ -75,6 +80,18 @@ FILTER_KEYS = (
     "screening_hide_transport", "screening_top_n", "screening_min_age",
     "screening_canton",
 )
+
+#: The controls a popped key does not put back in the browser. Streamlit keeps
+#: the last choice the frontend sent for these selectboxes, so after
+#: Zurücksetzen the box goes on displaying a value the run has already dropped —
+#: a filter that lies about what it is filtering. Assigning the default pushes
+#: the cleared value to the browser as well. Same defaults the widgets use on a
+#: fresh session, in one place so the two cannot drift.
+RESET_DEFAULTS = {
+    "screening_canton": CANTONS[0],
+    "screening_municipality": ALL_MUNICIPALITIES,
+    "screening_top_n": RESULT_LIMITS[1],
+}
 
 #: Human labels for the "these values no longer exist" report `_apply_pending_
 #: search` leaves behind — keyed by widget, not by database column, since
@@ -899,7 +916,7 @@ def _valid_search_values(parcels, filters):
 
     A saved search can outlive the data it was drawn from — a municipality
     disappears from the current run, the AZ range narrows on a fresh cascade —
-    and Streamlit's option-constrained widgets (multiselect, selectbox and a
+    and Streamlit's option-constrained widgets (selectbox and a
     bounded number_input) raise `StreamlitAPIException`
     outright when handed a `session_state` value outside their current
     domain, rather than clamping it themselves. So the check has to happen
@@ -935,14 +952,16 @@ def _valid_search_values(parcels, filters):
         if key not in FILTER_KEYS:
             continue  # a search saved by an older or newer release
         if key == "screening_municipality":
-            # Partial application, not all-or-nothing: the municipalities
-            # still in the data are exactly as usable as they were when the
-            # search was saved, and dropping the whole filter because one
-            # neighbour merged away would lose more than it protects.
-            kept = [m for m in (value or []) if m in municipalities]
-            if len(kept) != len(value or []):
+            # Two shapes reach this branch: the single municipality the current
+            # control stores, and the list every search saved before it became a
+            # single select. Keep the first entry the data still knows rather
+            # than dropping the filter outright, and report whatever was lost.
+            stored = value if isinstance(value, (list, tuple)) else [value]
+            stored = [m for m in stored if m and m != ALL_MUNICIPALITIES]
+            kept = [m for m in stored if m in municipalities]
+            if len(kept) != len(stored):
                 skipped.append(_FILTER_LABELS[key])
-            values[key] = kept
+            values[key] = kept[0] if kept else ALL_MUNICIPALITIES
             continue
         if key == "screening_canton":
             ok = value in CANTONS
@@ -1053,6 +1072,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         for key in FILTER_KEYS:
             st.session_state.pop(key, None)
         st.session_state.pop("screening_area", None)
+        st.session_state.update(RESET_DEFAULTS)
         st.rerun()
 
     # The prototype deliberately uses two readable filter rows instead of one
@@ -1063,11 +1083,14 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     numeric = numeric_box.columns(3)
     c0, c4, c5 = primary
     c1, c2, c3 = numeric
+    # Keyed-only, for the reason spelled out at the Gemeinde selectbox below:
+    # an explicit `index` here leaves Zurücksetzen displaying the canton that
+    # was chosen while the run behind it is already back on Aargau. "Aargau" is
+    # the first option, so it is the default either way.
     canton = c0.selectbox(
         "Kanton",
         CANTONS,
         key="screening_canton",
-        **_initial_widget_value("screening_canton", index=0),
     )
     if canton != "Aargau":
         st.warning("Für diesen Kanton liegen noch keine Daten vor.")
@@ -1120,11 +1143,16 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         )
     area_upper = float("inf") if area_max is None else area_max
     municipalities = sorted(parcels["municipality"].dropna().unique())
-    chosen = c4.multiselect(
+    # No `index=`: passing one to a keyed selectbox that also carries a
+    # session_state value leaves Zurücksetzen showing the old municipality
+    # while the results behind it are already unfiltered. Keyed-only is what
+    # Objekttyp below does, and its reset is correct — the sentinel first
+    # option is the default, and a restored saved search still wins because
+    # `_apply_pending_search` writes session_state before this runs.
+    chosen = c4.selectbox(
         "Gemeinde",
-        municipalities,
+        (ALL_MUNICIPALITIES, *municipalities),
         key="screening_municipality",
-        placeholder="Alle Gemeinden",
     )
     parcel_type = c5.selectbox(
         "Objekttyp",
@@ -1208,8 +1236,8 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             # at the fourth decimal keeps an entered 0.8 equal to stored 0.800 while
             # not turning this exact-value field into an undocumented range filter.
             out = out[(out["az"] - float(ziffer)).abs() < 0.0005]
-        if chosen:
-            out = out[out["municipality"].isin(chosen)]
+        if chosen != ALL_MUNICIPALITIES:
+            out = out[out["municipality"] == chosen]
         if parcel_type == "Bebaut":
             out = out[out["buildings"] > 0]
         elif parcel_type == "Unbebaut":

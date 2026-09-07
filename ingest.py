@@ -163,6 +163,7 @@ WORKFLOW_COLUMNS = [
     ("next_step", "TEXT NOT NULL DEFAULT ''"),
     ("note", "TEXT NOT NULL DEFAULT ''"),
     ("contact_person", "TEXT NOT NULL DEFAULT ''"),
+    ("owner_address", "TEXT NOT NULL DEFAULT ''"),
     ("phone", "TEXT NOT NULL DEFAULT ''"),
     ("email", "TEXT NOT NULL DEFAULT ''"),
 ]

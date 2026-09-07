@@ -23,9 +23,17 @@
   const root = document.getElementById('root');
   let current = {html:'', parcel:''};
   let editor = null;
+  let refreshing = false;
+  let pending = [];
+  let inFlight = null;
   let lastHeight = 0;
   function send(type, data={}) {
     window.parent.postMessage({isStreamlitMessage:true, type, ...data}, '*');
+  }
+  function sendNextEdit() {
+    if (inFlight || pending.length === 0) return;
+    inFlight = pending.shift();
+    send('streamlit:setComponentValue', {value:inFlight, dataType:'json'});
   }
   function height() {
     requestAnimationFrame(() => {
@@ -43,14 +51,23 @@
   }
   function startEdit(button) {
     if (editor && !editor.finish(true)) return;
-    const cell = button.parentElement;
+    let cell = button.parentElement;
+    const field = button.dataset.field;
+    const parcel = current.parcel;
     const input = document.createElement('input');
     input.className = 'calc__input';
     input.type = 'text';
     input.inputMode = 'decimal';
     input.maxLength = 100;
-    const initialValue = button.classList.contains('calc__edit--overridden')
-      ? button.dataset.value : String(Math.round(Number(button.dataset.value)));
+    const queuedEdit = pending.slice().reverse().find(intent =>
+      intent.field === field && intent.parcel === parcel);
+    const latestEdit = queuedEdit || (inFlight?.field === field && inFlight.parcel === parcel
+      ? inFlight : null);
+    // Reopening a row before its response arrives must show the latest intent,
+    // including an empty clear, rather than the older server-rendered amount.
+    const initialValue = latestEdit ? latestEdit.value
+      : button.classList.contains('calc__edit--overridden')
+        ? button.dataset.value : String(Math.round(Number(button.dataset.value)));
     input.value = initialValue;
     input.setAttribute('aria-label', button.getAttribute('aria-label'));
     const error = document.createElement('div');
@@ -74,22 +91,45 @@
       // Merely opening/closing a rounded display must not change the precise
       // computed amount or create an accidental manual override.
       if (commit && input.value !== initialValue) {
-        send('streamlit:setComponentValue', {
-          value:{eventId:crypto.randomUUID(),type:'override',parcel:current.parcel,
-            field:button.dataset.field,value:input.value}, dataType:'json'
-        });
+        // Streamlit retains only the latest component value. Wait for Python
+        // to acknowledge each intent before publishing the next rapid edit.
+        pending.push({eventId:crypto.randomUUID(),type:'override',parcel,
+          field,value:input.value});
+        sendNextEdit();
       }
       height();
       return true;
     }
-    editor = {finish};
+    editor = {
+      field,
+      finish,
+      snapshot() {
+        return {focused:document.activeElement === input, start:input.selectionStart,
+          end:input.selectionEnd, direction:input.selectionDirection};
+      },
+      restore(nextButton, selection) {
+        // Keep the actual input (including its draft and validation state), but
+        // restore the latest server button when editing ends. Do not replace
+        // initialValue: an untouched, rounded draft must never create an override.
+        button = nextButton;
+        cell = button.parentElement;
+        input.setAttribute('aria-label', button.getAttribute('aria-label'));
+        cell.replaceChildren(input, error);
+        if (selection.focused) {
+          input.focus({preventScroll:true});
+          input.setSelectionRange(selection.start, selection.end, selection.direction);
+        }
+      }
+    };
     input.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === 'Escape') {
         event.preventDefault();
         finish(event.key === 'Enter', true);
       }
     });
-    input.addEventListener('blur', () => finish(true));
+    input.addEventListener('blur', () => {
+      if (!refreshing) finish(true);
+    });
     input.addEventListener('input', () => {
       input.removeAttribute('aria-invalid');
       error.textContent = '';
@@ -101,15 +141,39 @@
     height();
   }
   function render(args) {
+    if (args.parcel !== current.parcel) {
+      pending = [];
+      inFlight = null;
+    } else if (inFlight && args.acknowledged_event_id === inFlight.eventId) {
+      inFlight = null;
+      sendNextEdit();
+    }
+    // A valid edit can leave the displayed amount unchanged (or be rejected).
+    // Consume its acknowledgement even when no HTML needs to be replaced.
     if (editor && args.html === current.html && args.parcel === current.parcel) return;
-    if (editor) editor.finish(false);
+    const activeEditor = editor && args.parcel === current.parcel ? editor : null;
+    const selection = activeEditor?.snapshot();
+    if (editor && !activeEditor) editor.finish(false);
     current = args;
     // This markup comes exclusively from Python's escaped table renderer.
     // User text is never inserted here or interpolated into an event handler.
-    root.innerHTML = typeof args.html === 'string' ? args.html : '';
-    root.querySelectorAll('button[data-field]').forEach(button => {
-      button.addEventListener('click', () => startEdit(button));
-    });
+    // A prior edit can return from Python while the next amount is being typed.
+    // Rebind that draft to the refreshed row instead of committing/cancelling it.
+    refreshing = true;
+    try {
+      root.innerHTML = typeof args.html === 'string' ? args.html : '';
+      let activeButton = null;
+      root.querySelectorAll('button[data-field]').forEach(button => {
+        button.addEventListener('click', () => startEdit(button));
+        if (button.dataset.field === activeEditor?.field) activeButton = button;
+      });
+      if (activeEditor) {
+        if (activeButton) activeEditor.restore(activeButton, selection);
+        else activeEditor.finish(false);
+      }
+    } finally {
+      refreshing = false;
+    }
     height();
   }
   window.addEventListener('message', event => {

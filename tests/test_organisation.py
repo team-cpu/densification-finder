@@ -232,6 +232,7 @@ class OrganisationDialogTest(unittest.TestCase):
         app.text_input(key="org_invite_email").set_value("qa.person@example.com")
         app.button(key="org_invite_submit").click().run()
         self.assertFalse(app.exception)
+        self.assertEqual(app.text_input(key="org_invite_email").value, "")
         member = organisation.load_members(self.database)[0]
         member_id = member["id"]
         app.selectbox(key=f"org_member_role_{member_id}").select("Leseweise").run()
@@ -241,6 +242,36 @@ class OrganisationDialogTest(unittest.TestCase):
         self.assertEqual(member["role"], "Leseweise")
         self.assertEqual(member["activity"], "erneut vorgemerkt")
         self.assertIn('[class*="st-key-org_member_row_"]', organisation._DIALOG_CSS)
+
+    def test_invalid_invite_keeps_input_until_corrected(self):
+        app = self._open("team")
+        app.text_input(key="org_invite_email").set_value("invalid-address")
+        app.selectbox(key="org_invite_role").select("Leseweise")
+        app.button(key="org_invite_submit").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(len(app.error), 1)
+        self.assertEqual(app.text_input(key="org_invite_email").value, "invalid-address")
+        self.assertEqual(app.selectbox(key="org_invite_role").value, "Leseweise")
+        self.assertEqual(organisation.load_members(self.database), [])
+
+        app.text_input(key="org_invite_email").set_value("qa.first@example.com")
+        app.button(key="org_invite_submit").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(len(app.error), 0)
+        self.assertEqual(app.text_input(key="org_invite_email").value, "")
+        self.assertEqual(app.selectbox(key="org_invite_role").value, "Leseweise")
+        self.assertTrue(app.session_state[organisation.DIALOG_OPEN])
+
+        app.text_input(key="org_invite_email").set_value("qa.second@example.com")
+        app.button(key="org_invite_submit").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.text_input(key="org_invite_email").value, "")
+        members = organisation.load_members(self.database)
+        self.assertEqual([member["email"] for member in members], [
+            "qa.first@example.com", "qa.second@example.com",
+        ])
+        self.assertTrue(all(member["pending"] for member in members))
+        self.assertTrue(all(member["role"] == "Leseweise" for member in members))
 
     def test_no_reference_person_or_company_is_seeded(self):
         app = self._open("team")

@@ -1,5 +1,6 @@
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -27,6 +28,9 @@ class ComponentAssetTest(unittest.TestCase):
         self.assertIn("draggable=true", html)
         self.assertIn("dragstart", html)
         self.assertIn("streamlit:setComponentValue", html)
+        # Every card carries the way into the owner sheet, under Analyse.
+        self.assertIn("emit('owner',row)", html)
+        self.assertIn("owner-action", html)
         self.assertNotIn("https://unpkg.com", html)
 
     def test_merkliste_is_a_local_action_table(self):
@@ -38,6 +42,9 @@ class ComponentAssetTest(unittest.TestCase):
 
         self.assertIn("Eigentümer", html)
         self.assertIn("Analyse", html)
+        self.assertIn("['Parz.-Nr.','']", html)
+        self.assertIn("row.parcel", html)
+        self.assertIn("['Von Merkliste entfernen','remove']", html)
         self.assertIn("streamlit:setComponentValue", html)
         self.assertNotIn("https://unpkg.com", html)
 
@@ -51,7 +58,7 @@ class ComponentAssetTest(unittest.TestCase):
         self.assertIn("Nicht interessant", html)
         self.assertIn("Analyse", html)
         self.assertIn("['AZ','num']", html)
-        self.assertIn("['Auszug',row.links?.oereb]", html)
+        self.assertIn("['ÖREB',row.links?.oereb]", html)
         self.assertNotIn("['Google',row.links?.google]", html)
         self.assertIn("row.saved?'Gemerkt':'Merken'", html)
         self.assertIn("Als «nicht interessant» markiert", html)
@@ -68,6 +75,36 @@ class ComponentAssetTest(unittest.TestCase):
 
 
 class EventConsumptionTest(unittest.TestCase):
+    def test_calculation_acknowledges_only_the_consumed_event_for_its_parcel(self):
+        state = {}
+        event = {"eventId": "event-1", "type": "override"}
+        ui_components.consume_event(event, "calculation:parcel-a", state)
+        with (
+            patch.object(ui_components.st, "session_state", state),
+            patch.object(ui_components, "_CALCULATION_TABLE") as component,
+        ):
+            ui_components.calculation_table(
+                "<table></table>", parcel="parcel-a", key="calc-a"
+            )
+            component.assert_called_once_with(
+                html="<table></table>", parcel="parcel-a", key="calc-a", default=None,
+                acknowledged_event_id="event-1",
+            )
+            component.reset_mock()
+            ui_components.calculation_table(
+                "<table></table>", parcel="parcel-b", key="calc-b"
+            )
+            self.assertIsNone(component.call_args.kwargs["acknowledged_event_id"])
+
+    def test_calculation_does_not_send_a_non_string_acknowledgement(self):
+        state = {"_component_event_calculation:parcel-a": {"eventId": "invalid"}}
+        with (
+            patch.object(ui_components.st, "session_state", state),
+            patch.object(ui_components, "_CALCULATION_TABLE") as component,
+        ):
+            ui_components.calculation_table("", parcel="parcel-a", key="calc-a")
+            self.assertIsNone(component.call_args.kwargs["acknowledged_event_id"])
+
     def test_one_component_event_is_consumed_once(self):
         state = {}
         event = {"eventId": "event-1", "type": "move"}

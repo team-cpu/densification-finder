@@ -1,9 +1,14 @@
+import os
+import sqlite3
+import tempfile
 import unittest
 
 import pandas as pd
 
+import ingest
 import merkliste
 import navigation
+import workflow as WF
 
 
 def shortlist_frame(rows):
@@ -31,8 +36,8 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(summary["land_value"], 30000.0)
 
     def test_in_dialog_counts_only_the_stages_that_are_conversations(self):
-        """Neither an untouched lead nor a refusal is a dialogue; counting
-        either would make the tile read as progress that has not happened."""
+        """A letter sent is not a live conversation; only discussions and
+        agreed meetings count as dialogues in the design."""
         leads = shortlist_frame(
             [
                 (4001, "1", 100.0, 1.0, "not_contacted"),
@@ -45,7 +50,7 @@ class SummaryTest(unittest.TestCase):
 
         summary = merkliste.summary(leads, land_value=lambda row: 0.0)
 
-        self.assertEqual(summary["in_dialog"], 3)
+        self.assertEqual(summary["in_dialog"], 2)
 
     def test_an_empty_shortlist_reports_zeroes_rather_than_raising(self):
         summary = merkliste.summary(shortlist_frame([]), land_value=lambda row: 0.0)
@@ -99,6 +104,23 @@ class ComponentRowsTest(unittest.TestCase):
         self.assertEqual(payload[0]["status"], "Im Gespräch")
         self.assertEqual(payload[0]["owner"], "Muster AG")
         self.assertEqual(payload[0]["landValue"], "1’250’000")
+        self.assertEqual(payload[0]["lastContact"], "01.09.2026")
+        self.assertEqual(rows.iloc[0]["last_contact"], "2026-09-01")
+
+    def test_absent_workflow_fields_use_dashes_without_truncating_notes(self):
+        note = "Eigentümerschaft kontaktiert. " * 12
+        rows = pd.DataFrame([{
+            "bfs": 4001, "parcel": "1", "address": "Teststrasse 1",
+            "municipality": "Aarau", "delta": 750.0,
+            "contact_status": "not_contacted", "last_contact": None,
+            "owner_name": "", "note": note,
+        }])
+        row = merkliste.table_rows(rows, lambda row: None)[0]
+        self.assertEqual(row["lastContact"], "—")
+        self.assertEqual(row["owner"], "—")
+        self.assertEqual(row["note"], note)
+        rows["note"] = ""
+        self.assertEqual(merkliste.table_rows(rows, lambda row: None)[0]["note"], "—")
 
     def test_row_events_cannot_name_a_parcel_outside_the_shortlist(self):
         leads = pd.DataFrame({"bfs": [4001], "parcel": ["1"]})
@@ -122,6 +144,52 @@ class ComponentRowsTest(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(state["selected_parcel_id"], "4001:1")
         self.assertEqual(state[navigation.PENDING], "Analyse")
+
+
+class RemoveFromShortlistTest(unittest.TestCase):
+    """The row action Philipp asked for: a way off the Merkliste from the
+    Merkliste itself. Before this the only way back out was to find the parcel
+    again in the screening list and toggle Gemerkt there."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.database = os.path.join(self.tempdir.name, "results.sqlite")
+        with sqlite3.connect(self.database) as connection:
+            ingest.schema(connection)
+        WF.update(
+            [(4001, "1")], saved=True, contact_status="in_discussion",
+            note="Rückruf vereinbart", db=self.database,
+        )
+
+    def stored(self):
+        rows = WF.load(self.database)
+        return rows[(rows["bfs"] == 4001) & (rows["parcel"] == "1")].iloc[0]
+
+    def test_remove_clears_the_shortlist_flag_and_keeps_the_history(self):
+        leads = pd.DataFrame({"bfs": [4001], "parcel": ["1"]})
+
+        handled = merkliste.handle_table_event(
+            {"type": "remove", "bfs": 4001, "parcel": "1"}, leads, {},
+            db=self.database,
+        )
+
+        self.assertTrue(handled)
+        row = self.stored()
+        self.assertEqual(int(row["saved"]), 0)
+        self.assertEqual(row["contact_status"], "in_discussion")
+        self.assertEqual(row["note"], "Rückruf vereinbart")
+
+    def test_remove_cannot_name_a_parcel_outside_the_shortlist(self):
+        leads = pd.DataFrame({"bfs": [4001], "parcel": ["1"]})
+
+        handled = merkliste.handle_table_event(
+            {"type": "remove", "bfs": 9999, "parcel": "2"}, leads, {},
+            db=self.database,
+        )
+
+        self.assertFalse(handled)
+        self.assertEqual(int(self.stored()["saved"]), 1)
 
 
 if __name__ == "__main__":

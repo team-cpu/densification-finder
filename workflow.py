@@ -36,6 +36,7 @@ DEFAULT_CONTACT_STATUS = "not_contacted"
 #: accident cannot put a document into a database column.
 TEXT_LIMITS = {
     "owner_name": 200,
+    "owner_address": 300,
     "contact_person": 200,
     "phone": 50,
     "email": 200,
@@ -88,9 +89,9 @@ def load(db: str | None = None) -> pd.DataFrame:
     """
     with sqlite3.connect(db or paths.DB) as connection:
         return pd.read_sql_query(
-            "SELECT bfs, parcel, saved, hidden, owner_name, contact_status, "
-            "due_date, last_contact, next_step, note, contact_person, "
-            "phone, email, updated_at "
+            "SELECT bfs, parcel, saved, hidden, owner_name, owner_address, "
+            "contact_status, due_date, last_contact, next_step, note, "
+            "contact_person, phone, email, updated_at "
             "FROM parcel_workflow",
             connection,
         )
@@ -102,6 +103,7 @@ def update(
     saved: bool | None = None,
     hidden: bool | None = None,
     owner_name: str | None = None,
+    owner_address: str | None = None,
     contact_status: str | None = None,
     due_date: str | None = None,
     last_contact: str | None = None,
@@ -128,6 +130,7 @@ def update(
     # the other fields of the same save applied.
     text = {
         "owner_name": owner_name,
+        "owner_address": owner_address,
         "next_step": next_step,
         "note": note,
         "contact_person": contact_person,

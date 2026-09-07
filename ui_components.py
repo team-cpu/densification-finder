@@ -30,8 +30,12 @@ _CALCULATION_TABLE = components.declare_component(
 
 
 def calculation_table(html: str, *, parcel: str, key: str):
-    """Only escaped, server-rendered table markup; frontend returns edit intent."""
-    return _CALCULATION_TABLE(html=html, parcel=parcel, key=key, default=None)
+    """Render escaped markup and acknowledge consumed edits to prevent coalescing."""
+    acknowledged = st.session_state.get(f"_component_event_calculation:{parcel}")
+    return _CALCULATION_TABLE(
+        html=html, parcel=parcel, key=key, default=None,
+        acknowledged_event_id=acknowledged if isinstance(acknowledged, str) else None,
+    )
 
 
 def merkliste_table(rows: list[dict], *, key: str):

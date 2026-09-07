@@ -266,7 +266,7 @@ class DetailViewTest(unittest.TestCase):
         app = self.open_detail()
         wait_for_news()
         app.run()
-        self.assertIn("OEREBlex Aargau", regulation_card_markup(app))
+        self.assertIn("Diese Parzelle", regulation_card_markup(app))
 
         # Age the cache past its TTL and make the replacement fetch hang, so
         # the render under test is the one that re-arms.
@@ -284,7 +284,8 @@ class DetailViewTest(unittest.TestCase):
 
         self.assertFalse(app.exception)
         self.assertTrue(started.wait(5), "the refetch never started")
-        self.assertIn("OEREBlex Aargau", regulation_card_markup(app))
+        self.assertIn("Diese Parzelle", regulation_card_markup(app))
+        self.assertIn("Änderungen im Kanton", regulation_card_markup(app))
         self.assertNotIn("wird geladen", regulation_card_markup(app))
 
     def test_the_reference_cards_are_native_folded_disclosures(self):
@@ -411,6 +412,26 @@ class DetailViewTest(unittest.TestCase):
         # would race the next test's reset.
         wait_for_news()
 
+    def test_only_this_municipality_is_listed_as_a_change(self):
+        """The feed is canton-wide and sorted by date, so the three newest
+        entries were three other municipalities' building regulations —
+        presented under "changes for this parcel". A neighbour's BNO is not a
+        change to this parcel's law; it belongs in the fold, not on top."""
+        app = self.open_detail()
+        wait_for_news()
+        app.run()
+
+        body = regulation_card_markup(app)
+        listed, _, folded = body.partition('<details class="detail-regulation-more"')
+        self.assertIn(self.municipality, listed)
+        for stranger in ("Gipf-Oberfrick", "Dintikon", "Möhlin"):
+            if stranger == self.municipality:
+                continue
+            self.assertNotIn(
+                stranger, listed, f"{stranger} is listed as a change to this parcel"
+            )
+            self.assertIn(stranger, folded, f"{stranger} vanished from the fold")
+
     def test_block_e_shows_a_loading_state_then_the_edicts(self):
         """The other half of the fix, not just its speed: the placeholder has
         to actually say something ("Wird geladen …"), and the real content has
@@ -432,14 +453,14 @@ class DetailViewTest(unittest.TestCase):
         self.assertFalse(app.exception)
 
         self.assertIn("wird geladen", regulation_card_markup(app))
-        self.assertNotIn("OEREBlex Aargau", regulation_card_markup(app))
+        self.assertNotIn("Änderungen im Kanton", regulation_card_markup(app))
 
         wait_for_news()
         app.run()
         self.assertFalse(app.exception)
 
         body = regulation_card_markup(app)
-        self.assertIn("OEREBlex Aargau", body)
+        self.assertIn("Änderungen im Kanton", body)
         self.assertIn("Gipf-Oberfrick", body)
         self.assertNotIn("wird geladen", body)
 
@@ -650,6 +671,84 @@ class DetailViewTest(unittest.TestCase):
         self.assertFalse(app.exception)
         price = next(n for n in app.number_input if n.label == "Verkaufspreis CHF/m²")
         self.assertEqual(price.value, E.BENCHMARKS["sale_price_chf_m2"].value)
+
+    def test_c_reset_keeps_b_inputs_and_other_parcel_state(self):
+        app = self.open_detail()
+        next(n for n in app.number_input if n.label == "Ausnutzungsreserve aBGF m²").set_value(1200.0).run()
+        next(n for n in app.number_input if n.label == "Ø Wohnungsgrösse m²").set_value(100.0).run()
+        next(n for n in app.number_input if n.label == "Verkaufspreis CHF/m²").set_value(9999.0).run()
+        app.session_state[detail.STORE]["other"] = {"gf": 789, "demolish": False}
+        app.session_state[detail.OVERRIDE_STORE] = {self.pid: {"reserve": 0}, "other": {"baukosten": 123}}
+        app.run()
+        next(b for b in app.button if b.label == "Standardwerte").click().run()
+        self.assertFalse(app.exception)
+        values = {n.label: n.value for n in app.number_input}
+        self.assertEqual(values["Ausnutzungsreserve aBGF m²"], 1200.0)
+        self.assertEqual(values["Ø Wohnungsgrösse m²"], 100.0)
+        self.assertEqual(values["Verkaufspreis CHF/m²"], E.BENCHMARKS["sale_price_chf_m2"].value)
+        self.assertEqual(app.session_state[detail.STORE]["other"], {"gf": 789, "demolish": False})
+        self.assertEqual(app.session_state[detail.OVERRIDE_STORE], {"other": {"baukosten": 123}})
+
+    def test_demolition_note_follows_checkbox_and_manual_cost(self):
+        with sqlite3.connect(self.database) as con:
+            con.execute("UPDATE parcel_results SET existing=107, buildings=1 WHERE bfs=? AND parcel=?", (self.bfs, self.parcel))
+        app = self.open_detail()
+        self.assertIn("wird ersetzt", potential_markup(app))
+        self.assertIn("Abbruchkosten in Block C berücksichtigt", potential_markup(app))
+        next(c for c in app.checkbox if c.label == "Bestehendes Gebäude abbrechen").uncheck().run()
+        self.assertFalse(app.exception)
+        self.assertIn("bleibt erhalten", potential_markup(app))
+        self.assertIn("Keine Abbruchkosten", potential_markup(app))
+        self.assertNotIn("wird ersetzt", potential_markup(app))
+        app.session_state[detail.OVERRIDE_STORE] = {self.pid: {"abbruchkosten": 2500}}
+        app.run()
+        self.assertIn("manuell auf CHF 2’500 gesetzt", potential_markup(app))
+        self.assertNotIn("Keine Abbruchkosten", potential_markup(app))
+        app.session_state[detail.OVERRIDE_STORE] = {self.pid: {"abbruchkosten": 0}}
+        app.run()
+        self.assertIn("manuell auf CHF 0 gesetzt", potential_markup(app))
+        next(b for b in app.button if b.label == "Standardwerte").click().run()
+        self.assertIn("bleibt erhalten", potential_markup(app))
+        self.assertIn("Keine Abbruchkosten", potential_markup(app))
+
+    def test_source_archive_is_lazy_and_available_beside_legal_sources(self):
+        sources = (detail.source_downloads.Source(
+            "Bau- und Nutzungsordnung", "https://oereblex.ag.ch/api/attachments/1038",
+        ),)
+        with patch.object(detail.source_downloads, "build_archive") as build, \
+             patch.object(detail.source_downloads, "references", return_value=sources) as refs:
+            app = self.open_detail()
+            self.assertFalse(app.exception)
+            build.assert_not_called()
+            downloads = [e for e in app.main if e.type == "download_button"]
+            archive = next(e for e in downloads if e.proto.label == "Alle herunterladen")
+            self.assertTrue(archive.proto.deferred_file_id)
+            self.assertFalse(archive.proto.disabled)
+            refs.return_value = ()
+            app.run()
+            archive = next(e for e in app.main
+                           if e.type == "download_button" and e.proto.label == "Alle herunterladen")
+            self.assertTrue(archive.proto.disabled)
+            build.assert_not_called()
+
+    def test_invalid_amount_is_reported_and_acknowledged_once(self):
+        app = self.open_detail()
+        before = result_attribute(app, "data-residual")
+        event = {"eventId": "invalid-amount", "type": "override", "parcel": self.pid,
+                 "field": "baukosten", "value": "not-a-number"}
+        render_component = detail.UI.calculation_table
+
+        def render_with_event(html, **kwargs):
+            render_component(html, **kwargs)
+            return event
+
+        with patch.object(detail.UI, "calculation_table", side_effect=render_with_event):
+            app.run()
+            self.assertFalse(app.exception)
+            self.assertEqual(result_attribute(app, "data-residual"), before)
+            self.assertEqual(len(app.error), 1)
+            args = json.loads(calculation_component(app).proto.json_args)
+            self.assertEqual(args["acknowledged_event_id"], "invalid-amount")
 
     def test_auf_merkliste_saves_the_open_parcel(self):
         """The button this test protects: reading a parcel's analysis and

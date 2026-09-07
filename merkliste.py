@@ -16,10 +16,9 @@ import navigation
 import ui_components as UI
 import workflow as WF
 
-#: Stages that count as a live conversation. Neither an untouched lead nor a
-#: refusal is one, and counting either would report progress that has not
-#: happened.
-IN_DIALOG = ("contacted", "in_discussion", "meeting_scheduled")
+#: Sending a letter alone does not establish a conversation. Match the HTML's
+#: live-dialogue count, excluding untouched, merely contacted and declined leads.
+IN_DIALOG = ("in_discussion", "meeting_scheduled")
 
 
 _PAGE_CSS = """
@@ -205,15 +204,19 @@ def table_rows(ordered: pd.DataFrame, land_value) -> list[dict]:
                     row["contact_status"],
                     WF.CONTACT_STATUS_LABELS[WF.DEFAULT_CONTACT_STATUS],
                 ),
-                "lastContact": ACQ._or_dash(row["last_contact"]),
+                "lastContact": ACQ._or_dash(
+                    ACQ._contact_date_display(row["last_contact"])
+                ),
                 "owner": ACQ._or_dash(row["owner_name"]),
-                "note": str(row["note"]).strip(),
+                "note": ACQ._or_dash(row["note"]),
             }
         )
     return rows
 
 
-def handle_table_event(event: dict, leads: pd.DataFrame, state=None) -> bool:
+def handle_table_event(
+    event: dict, leads: pd.DataFrame, state=None, *, db: str | None = None
+) -> bool:
     """Validate and apply one row action returned by the component.
 
     A component can post arbitrary JSON, so the parcel must still exist in the
@@ -238,6 +241,13 @@ def handle_table_event(event: dict, leads: pd.DataFrame, state=None) -> bool:
     if event.get("type") == "analyse":
         target[detail.SELECTED] = f"{bfs}:{parcel}"
         navigation.go_to("Analyse", target)
+        return True
+    if event.get("type") == "remove":
+        # Only the shortlist flag. The contact history, the note and the stage
+        # the lead reached stay on the row: taking a parcel off the list is not
+        # the same as never having worked it, and re-merking it should not come
+        # back blank.
+        WF.set_saved([(bfs, parcel)], False, db=db)
         return True
     return False
 
@@ -299,7 +309,7 @@ def page(parcels, decisions, db, price_of):
         table_rows(ordered, land_value), key="merkliste_design_table"
     )
     event = UI.consume_event(event, "merkliste")
-    if event is not None and handle_table_event(event, leads):
+    if event is not None and handle_table_event(event, leads, db=db):
         st.rerun()
 
     ACQ._render_open_contact_dialog(leads, db)

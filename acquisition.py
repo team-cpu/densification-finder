@@ -10,7 +10,7 @@ is still on its card; what the user works through day to day is the stage.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from html import escape
 
 import pandas as pd
@@ -68,6 +68,21 @@ div[data-testid="stDialog"]:has(.scope-contact-modal) > div {
   padding: 64px 24px !important;
   overflow-y: auto !important;
   background: rgba(23, 23, 27, .28) !important;
+}
+
+/* Streamlit's own input chatter — "Press Enter to apply · 26/200" — is drawn
+   over the field in this modal and is not part of the design. The length caps
+   it announces are enforced in `workflow._text` either way. */
+div[data-testid="stDialog"]:has(.scope-contact-modal)
+  [data-testid="InputInstructions"] {
+  display: none !important;
+}
+
+/* Notes and address grow with their text instead of scrolling inside a fixed
+   box; the dialog is a flow layout, so the modal grows with them. */
+div[data-testid="stDialog"]:has(.scope-contact-modal) textarea {
+  field-sizing: content;
+  max-height: 40vh;
 }
 
 div[data-testid="stDialog"]:has(.scope-contact-modal) section[role="dialog"] {
@@ -190,7 +205,8 @@ div[data-testid="stDialog"]:has(.scope-contact-modal)
   min-width: 0 !important;
 }
 
-.st-key-contact_modal_body [data-testid="stTextInput"] label {
+.st-key-contact_modal_body [data-testid="stTextInput"] label,
+.st-key-contact_modal_body [data-testid="stTextArea"] label {
   min-height: 12px !important;
   height: 12px !important;
   margin: 0 0 6px !important;
@@ -204,12 +220,39 @@ div[data-testid="stDialog"]:has(.scope-contact-modal)
 
 .st-key-contact_modal_body [data-testid="stTextInput"] label span,
 .st-key-contact_modal_body [data-testid="stTextInput"] label [data-testid="stMarkdownContainer"],
-.st-key-contact_modal_body [data-testid="stTextInput"] label p {
+.st-key-contact_modal_body [data-testid="stTextInput"] label p,
+.st-key-contact_modal_body [data-testid="stTextArea"] label span,
+.st-key-contact_modal_body [data-testid="stTextArea"] label [data-testid="stMarkdownContainer"],
+.st-key-contact_modal_body [data-testid="stTextArea"] label p {
   color: inherit !important;
   font-size: 10px !important;
   font-weight: 600 !important;
   line-height: 12px !important;
   letter-spacing: .07em !important;
+}
+
+/* The two text areas carry the same frame as the one-line fields; only their
+   height is free, so a long note grows the box (and the modal) downwards.
+   Streamlit's `height=` argument sizes the wrappers, which would otherwise cap
+   the box no matter what the textarea itself does — hence `auto` on all three. */
+.st-key-contact_modal_body [data-testid="stTextArea"],
+.st-key-contact_modal_body [data-testid="stTextArea"]
+  [data-testid="stTextAreaRootElement"] {
+  height: auto !important;
+}
+
+.st-key-contact_modal_body [data-testid="stTextArea"] textarea {
+  height: auto !important;
+  field-sizing: content;
+  min-height: 60px !important;
+  padding: 8px 10px !important;
+  border: 1px solid #e2e2e8 !important;
+  border-radius: 6px !important;
+  background: #fff !important;
+  color: #17171b !important;
+  font-size: 12.5px !important;
+  line-height: 1.45 !important;
+  resize: none !important;
 }
 
 .st-key-contact_modal_body [data-testid="stTextInput"]
@@ -350,30 +393,6 @@ def overdue(shortlist: pd.DataFrame, today: str) -> pd.DataFrame:
     )
 
 
-def due_items(
-    shortlist: pd.DataFrame, today: str, limit: int = DUE_PREVIEW
-) -> pd.DataFrame:
-    """The follow-up preview: overdue leads first, then dated leads not yet
-    due, each group earliest first, capped at `limit` rows.
-
-    Ported from the design prototype's `dueItems`: overdue leads concatenated
-    with not-yet-due dated leads (declined and undated leads excluded from
-    both), then sliced to four. Showing only the overdue rows told the user
-    what is already late but nothing about what is coming, so the desk looked
-    clear the moment the last overdue lead was cleared even with a wall of
-    follow-ups due next week.
-    """
-    if shortlist.empty:
-        return shortlist
-    late = overdue(shortlist, today)
-    due = shortlist["due_date"].fillna("").astype(str)
-    not_declined = shortlist["contact_status"] != "declined"
-    upcoming = shortlist[(due != "") & (due > today) & not_declined].sort_values(
-        "due_date", kind="stable"
-    )
-    return pd.concat([late, upcoming]).head(limit)
-
-
 def _board_order(frame: pd.DataFrame) -> pd.DataFrame:
     """Soonest follow-up first within a column; undated leads last."""
     if frame.empty:
@@ -415,6 +434,35 @@ def _swiss(value: float) -> str:
     return F.swiss(value)
 
 
+#: How long a follow-up sits in the future when the board moves a card. The
+#: dialog no longer asks for a Wiedervorlage date — dragging a lead to its next
+#: stage is the moment the follow-up is decided, so the board sets it. Two weeks
+#: is the interval Philipp's own board used between a letter and a call.
+FOLLOW_UP_DAYS = 14
+
+
+def format_phone(value: str) -> str:
+    """Swiss grouping — `078 777 88 00` — for what was typed as digits.
+
+    Only the two shapes the cadastre and a Swiss address block actually carry:
+    ten digits starting with 0, and the same number written +41. Anything else
+    (a foreign number, an extension, a note beside the number) is left exactly
+    as typed rather than being regrouped into something that looks official and
+    is wrong.
+    """
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    plus = raw.startswith("+")
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if plus and digits.startswith("41") and len(digits) == 11:
+        rest = digits[2:]
+        return f"+41 {rest[:2]} {rest[2:5]} {rest[5:7]} {rest[7:]}"
+    if not plus and digits == raw.replace(" ", "") and digits.startswith("0") and len(digits) == 10:
+        return f"{digits[:3]} {digits[3:6]} {digits[6:8]} {digits[8:]}"
+    return raw
+
+
 def _or_dash(value) -> str:
     return str(value) if pd.notna(value) and str(value).strip() else "—"
 
@@ -434,6 +482,11 @@ def contact_list(shortlist: pd.DataFrame) -> pd.DataFrame:
             "Parzelle": shortlist["parcel"],
             "Potenzial m²": shortlist["delta"].round(0),
             "Eigentümerschaft": shortlist["owner_name"],
+            "Postadresse": shortlist["owner_address"].map(
+                lambda text: " · ".join(
+                    line.strip() for line in str(text).splitlines() if line.strip()
+                )
+            ),
             "Kontaktperson": shortlist["contact_person"],
             "Telefon": shortlist["phone"],
             "E-Mail": shortlist["email"],
@@ -476,7 +529,6 @@ def render(parcels, decisions, db, today, price_of):
     if shortlist.empty:
         st.info("Noch keine Parzellen gespeichert.")
     else:
-        _render_overdue(shortlist, today)
         _render_board(shortlist, db, price_of, today)
 
     _render_hidden(parcels, decisions, db)
@@ -486,12 +538,12 @@ def render(parcels, decisions, db, today, price_of):
 #: Five compact cells from the design: date; parcel identity; owner plus next
 #: step; stage; actions. Related fields stay together instead of each taking a
 #: separate Streamlit column and squeezing both action labels into two lines.
-_DUE_ROW_WIDTHS = [1.05, 2.3, 2.6, 1.25, 1.8]
+_DUE_CHIP_STYLE = (
+    "display:inline-flex;align-items:center;font-size:11px;font-weight:500;"
+    "padding:2px 7px;border-radius:20px;font-family:'IBM Plex Mono',monospace;"
+    "font-variant-numeric:tabular-nums;"
+)
 
-#: Matches the overdue tint the dataframe `Styler` used to apply to the
-#: `Wiedervorlage` cell — carried over verbatim so the list still tells late
-#: from merely scheduled apart now that a plain `st.write` can't be styled.
-_OVERDUE_TINT = "background-color:#fdf5e7;color:#8a5a12;padding:1px 6px;border-radius:3px"
 
 _ACQUISITION_INTRO = """
 <style>
@@ -554,8 +606,9 @@ _ACQUISITION_INTRO = """
 <div class="acquisition-page-intro">
   <div class="acquisition-page-kicker">Akquisition</div>
   <h1>Eigentümer-Dialog</h1>
-  <p>Kontaktstand je Parzelle und Eigentümerschaft. Wiedervorlagedatum steuert
-     die Fälligkeit; Karten per Drag &amp; Drop zwischen den Stufen verschieben.</p>
+  <p>Kontaktstand je Parzelle und Eigentümerschaft. Karten per Drag &amp; Drop
+     zwischen den Stufen verschieben; das Verschieben setzt Kontaktdatum und
+     Wiedervorlage.</p>
 </div>
 """
 
@@ -573,179 +626,17 @@ nachgeschlagen; Bearbeitung nur für den internen Akquisitionsprozess. Kein
 Bestandteil der amtlichen Parzellendaten.</p>
 """
 
-_DUE_CSS = """
-<style>
-.acq-mobile-label { display: none; }
-.st-key-acq_due {
-  padding: 0 14px 4px;
-  border: 1px solid #eaeaee;
-  border-radius: 9px;
-  background: #fff;
-  overflow: hidden;
-}
-.st-key-acq_due_title {
-  margin: 0 -14px;
-  padding: 9px 14px;
-  border-bottom: 1px solid #f0f0f3;
-  background: #fbfbfc;
-}
-.st-key-acq_due_title [data-testid="stHorizontalBlock"] { align-items: center; }
-.st-key-acq_due_title [data-testid="stCaptionContainer"] {
-  text-align: right; color: #b0b0b8;
-  font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;
-}
-.acq-due-heading { display: flex; align-items: center; gap: 10px; }
-.acq-due-title { color: #8a8a94; font-size: 10px; font-weight: 600;
-  letter-spacing: .1em; text-transform: uppercase; }
-.acq-due-count { display: inline-flex; padding: 2px 8px; border-radius: 20px;
-  background: #fdf5e7; color: #8a5a12; font-size: 10.5px; font-weight: 500; }
-[class*="st-key-acq_due_row_"] {
-  padding: 8px 0;
-  border-bottom: 1px solid #f0f0f3;
-}
-[class*="st-key-acq_due_row_"]:last-child { border-bottom: 0; }
-.acq-due-primary { font-size: 12px; font-weight: 600; color: #2f2f37; }
-.acq-due-secondary { margin-top: 2px; font-size: 10.5px; color: #8a8a94; }
-
-@media (max-width: 760px) {
-  [class*="st-key-acq_due_row_"] {
-    padding: 12px;
-    margin-bottom: 10px;
-    border: 1px solid #eaeaee;
-    border-radius: 9px;
-    background: #fff;
-  }
-
-  [class*="st-key-acq_due_row_"] [data-testid="stHorizontalBlock"] {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 9px 12px;
-  }
-
-  [class*="st-key-acq_due_row_"] [data-testid="stColumn"] {
-    width: auto !important;
-    min-width: 0;
-  }
-
-  [class*="st-key-acq_due_row_"] [data-testid="stColumn"]:nth-child(2),
-  [class*="st-key-acq_due_row_"] [data-testid="stColumn"]:nth-child(3),
-  [class*="st-key-acq_due_row_"] [data-testid="stColumn"]:nth-child(5) {
-    grid-column: 1 / -1;
-  }
-
-  .acq-mobile-label {
-    display: block;
-    margin-bottom: 2px;
-    color: #9a9aa6;
-    font-size: 9.5px;
-    font-weight: 600;
-    letter-spacing: .07em;
-    text-transform: uppercase;
-  }
-
-  [class*="st-key-acq_due_row_"] [data-testid="stButton"] button {
-    white-space: nowrap;
-  }
-}
-</style>
-"""
-
-
-def _render_overdue(shortlist, today):
-    """Render the follow-up overview even when no lead is currently due.
-
-    The persistent heading and its ``0 offen`` badge mirror the reference and
-    make an empty result read as a clear desk instead of a missing feature.
-    Rows are `due_items` (overdue leads, then a look-ahead at what is
-    coming, capped), but the badge counts `overdue` alone — the badge answers
-    "how many need chasing right now", and counting the look-ahead rows too
-    would make it lie the moment the preview shows anything upcoming.
-
-    Drawn as widgets, one row per lead, rather than a read-only `st.dataframe`
-    — the whole point of this section is acting on a lead first thing in the
-    morning without first hunting for its card among five stage columns.
-    """
-    rows = due_items(shortlist, today)
-    overdue_count = len(overdue(shortlist, today))
-    with st.container(key="acq_due"):
-        st.html(_DUE_CSS)
-        with st.container(key="acq_due_title"):
-            due_heading, due_today = st.columns([4, 1])
-            due_heading.markdown(
-                '<div class="acq-due-heading">'
-                '<span class="acq-due-title">Fällige Wiedervorlagen</span>'
-                f'<span class="acq-due-count">{overdue_count} offen</span></div>',
-                unsafe_allow_html=True,
-            )
-            due_today.caption(f"Heute {_contact_date_display(today)}")
-
-        # `due_items` orders overdue leads first, so the first `overdue_count`
-        # positions are exactly the overdue ones — a position check against that
-        # count, rather than re-deriving "is this row late" from its own due
-        # date, says so directly instead of duplicating `overdue`'s own rule.
-        for position, (_, row) in enumerate(rows.iterrows()):
-            _render_due_row(row, position < overdue_count)
-
-
-def _render_due_row(row, is_overdue):
-    key = int(row["bfs"]), str(row["parcel"])
-    slug = f"{key[0]}_{key[1]}"
-    with st.container(key=f"acq_due_row_{slug}"):
-        columns = st.columns(_DUE_ROW_WIDTHS, vertical_alignment="center")
-
-        for column, label in zip(
-            columns,
-            ("Wiedervorlage", "Parzelle", "Kontakt", "Stufe", "Aktionen"),
-        ):
-            if label:
-                column.html(f'<span class="acq-mobile-label">{label}</span>')
-
-        if is_overdue:
-            # Escaped even though `workflow._date` only ever stores a strict
-            # YYYY-MM-DD: this is the one field on the row interpolated into markup
-            # rather than written through `st.write`, and the database is a file on
-            # a volume that can be edited by hand. Relying on a validator three
-            # modules away to keep this safe would make a change over there a hole
-            # over here, silently.
-            columns[0].markdown(
-                f'<span style="{_OVERDUE_TINT}">{escape(str(row["due_date"]))}</span>',
-                unsafe_allow_html=True,
-            )
-        else:
-            columns[0].write(row["due_date"])
-        columns[1].markdown(
-            '<div class="acq-due-primary">'
-            + escape(_or_dash(row["address"]))
-            + '</div><div class="acq-due-secondary">'
-            + escape(f"{row['municipality']} · Parzelle {row['parcel']}")
-            + "</div>",
-            unsafe_allow_html=True,
-        )
-        columns[2].markdown(
-            '<div class="acq-due-primary">'
-            + escape(_or_dash(row["owner_name"]))
-            + '</div><div class="acq-due-secondary">'
-            + escape(_or_dash(row["next_step"]))
-            + "</div>",
-            unsafe_allow_html=True,
-        )
-        stage = (
-            row["contact_status"]
-            if row["contact_status"] in WF.CONTACT_STATUS_LABELS
-            else WF.DEFAULT_CONTACT_STATUS
-        )
-        columns[3].write(WF.CONTACT_STATUS_LABELS[stage])
-        action_owner, action_analyse = columns[4].columns(2)
-        with action_owner:
-            _eigentuemer_button(key, f"due_contact_{slug}")
-        with action_analyse:
-            _analyse_button(row, f"due_open_{slug}")
-
-
 def board_data(shortlist, price_of, today) -> list[dict]:
     """JSON-safe five-column board data for the local drag-and-drop component."""
     output = []
     grouped = by_stage(shortlist)
+    # One home for "late", shared with nothing else since the Fällige-
+    # Wiedervorlagen list was dropped: the card's own chip is the only place
+    # the rule still shows, and re-deriving it inline would be a second copy.
+    late = {
+        (int(row.bfs), str(row.parcel))
+        for row in overdue(shortlist, today).itertuples()
+    }
     for stage, label in WF.CONTACT_STATUS_LABELS.items():
         cards = []
         for _, row in grouped[stage].iterrows():
@@ -763,7 +654,7 @@ def board_data(shortlist, price_of, today) -> list[dict]:
                 )
                 if value
             ) or "Kontakt nicht erfasst"
-            due = _or_dash(row["due_date"])
+            due_iso = _or_dash(row["due_date"])
             cards.append(
                 {
                     "bfs": int(row["bfs"]),
@@ -777,11 +668,11 @@ def board_data(shortlist, price_of, today) -> list[dict]:
                     "owner": str(row["owner_name"]).strip()
                     or "Eigentümer nicht erfasst",
                     "contactLine": contact_line,
-                    "lastContact": _or_dash(row["last_contact"]),
-                    "due": due,
-                    "overdue": bool(
-                        due != "—" and due <= today and stage != "declined"
+                    "lastContact": _or_dash(
+                        _contact_date_display(row["last_contact"])
                     ),
+                    "due": _or_dash(_contact_date_display(row["due_date"])),
+                    "overdue": (int(row["bfs"]), str(row["parcel"])) in late,
                     "next": str(row["next_step"]).strip(),
                     "statusCode": stage,
                     "status": label,
@@ -809,12 +700,33 @@ def handle_board_event(event, shortlist, db, state=None) -> bool:
         stage = event.get("stage")
         if stage not in WF.CONTACT_STATUS_LABELS:
             return False
-        WF.update([key], contact_status=stage, db=db)
+        # Moving a card *is* the contact being recorded, so the two dates the
+        # dialog no longer asks for are written here. `declined` ends the
+        # conversation: it gets the contact date but no follow-up, which is
+        # also what keeps it out of "Fällige Wiedervorlagen".
+        today = date.today()
+        follow_up = (
+            "" if stage == "declined"
+            else (today + timedelta(days=FOLLOW_UP_DAYS)).isoformat()
+        )
+        WF.update(
+            [key],
+            contact_status=stage,
+            last_contact=today.isoformat(),
+            due_date=follow_up,
+            db=db,
+        )
         return True
     if event.get("type") == "analyse":
         target = st.session_state if state is None else state
         target[detail.SELECTED] = f"{bfs}:{parcel}"
         navigation.go_to("Analyse", target)
+        return True
+    if event.get("type") == "owner":
+        # The board is now the only way into the owner dialog from this page —
+        # the Fällige-Wiedervorlagen list that used to carry the button is gone.
+        target = st.session_state if state is None else state
+        target[CONTACT_OPEN] = f"{bfs}:{parcel}"
         return True
     return False
 
@@ -867,33 +779,9 @@ def _lead_by_pid(shortlist, pid):
     return None if match.empty else match.iloc[0]
 
 
-def _analyse_button(row, widget_key):
-    """Open a parcel from the native follow-up preview.
-
-    Board cards route the equivalent action through `handle_board_event`;
-    both paths write the same selected-parcel and pending-page state.
-    """
-    if st.button("Analyse", key=widget_key, width="stretch"):
-        detail.open_parcel(detail.parcel_id(row))
-        navigation.go_to("Analyse")
-        st.rerun()
-
-
-def _eigentuemer_button(key, widget_key):
-    """Open `_contact_dialog` for a row in the native follow-up preview.
-
-    The custom shortlist writes the same `CONTACT_OPEN` value through its
-    validated event handler, so every entry point resolves the identical
-    `bfs`/`parcel` record.
-    """
-    if st.button("Eigentümer", key=widget_key, width="stretch"):
-        st.session_state[CONTACT_OPEN] = f"{key[0]}:{key[1]}"
-        st.rerun()
-
-
 def _contact_date_display(value) -> str:
     """Show stored ISO dates in the same Swiss format as the design."""
-    text = str(value or "").strip()
+    text = "" if pd.isna(value) else str(value).strip()
     if not text:
         return ""
     try:
@@ -925,6 +813,11 @@ def _save_contact_field(key, db, field_name, widget_key, *, is_date=False):
     value = st.session_state.get(widget_key, "")
     if is_date:
         value = _contact_date_storage(value)
+    elif field_name == "phone":
+        # Written back into the widget as well: a number that is stored grouped
+        # but still displayed as the digits someone typed reads as "not saved".
+        value = format_phone(value)
+        st.session_state[widget_key] = value
     errors = dict(st.session_state.get("acq_contact_errors", {}))
     try:
         WF.update([key], db=db, **{field_name: value})
@@ -1014,6 +907,22 @@ def _contact_dialog(row, key, db):
             args=(key, db, "email", email_key),
         )
 
+        # The postal address the letter is actually sent to. One box rather
+        # than three fields: it is copied off the AGIS extract as a block and
+        # pasted into a letter as a block, and splitting it would ask the user
+        # to take apart something they never assemble by hand.
+        address_key = f"acq_contact_address_{slug}"
+        st.text_area(
+            "Adresse",
+            value=str(row["owner_address"]),
+            max_chars=300,
+            height=88,
+            placeholder="Empfängername\nLandstrasse 10B\n4313 Möhlin",
+            key=address_key,
+            on_change=_save_contact_field,
+            args=(key, db, "owner_address", address_key),
+        )
+
         third_row = st.columns(2)
         last_key = f"acq_contact_last_{slug}"
         third_row[0].text_input(
@@ -1026,22 +935,12 @@ def _contact_dialog(row, key, db):
             args=(key, db, "last_contact", last_key),
             kwargs={"is_date": True},
         )
-        due_key = f"acq_contact_due_{slug}"
-        third_row[1].text_input(
-            "Wiedervorlage",
-            value=_contact_date_display(row["due_date"]),
-            max_chars=10,
-            placeholder="TT.MM.JJJJ",
-            key=due_key,
-            on_change=_save_contact_field,
-            args=(key, db, "due_date", due_key),
-            kwargs={"is_date": True},
-        )
-
-        fourth_row = st.columns(2)
+        # Was "Nächster Schritt", and no Wiedervorlage beside it any more: the
+        # board sets the follow-up date when a card moves, so the only thing
+        # left to type here is where the lead stands.
         next_key = f"acq_contact_next_{slug}"
-        fourth_row[0].text_input(
-            "Nächster Schritt",
+        third_row[1].text_input(
+            "Status",
             value=str(row["next_step"]),
             max_chars=300,
             placeholder="Was ist zu tun?",
@@ -1049,11 +948,13 @@ def _contact_dialog(row, key, db):
             on_change=_save_contact_field,
             args=(key, db, "next_step", next_key),
         )
+
         note_key = f"acq_contact_note_{slug}"
-        fourth_row[1].text_input(
-            "Notiz",
+        st.text_area(
+            "Notizen",
             value=str(row["note"]),
             max_chars=1000,
+            height=68,
             placeholder="Interne Notiz",
             key=note_key,
             on_change=_save_contact_field,
