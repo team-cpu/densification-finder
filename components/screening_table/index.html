@@ -13,7 +13,7 @@
     html,body,#root{width:100%;max-width:100%;min-width:0;margin:0;padding:0;overflow-x:hidden;background:transparent;color:#17171b;font-family:'Instrument Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased}
     .frame{border:1px solid #eaeaee;border-radius:9px;background:#fff;overflow:hidden}
     .scroll{overflow-x:auto}
-    table{width:100%;min-width:1880px;border-collapse:collapse;table-layout:auto}
+    table{width:100%;min-width:1900px;border-collapse:collapse;table-layout:auto}
     th{padding:9px 12px;border-bottom:1px solid #ebebef;background:#fafafb;color:#8a8a94;font-size:9.5px;font-weight:600;letter-spacing:.08em;text-align:left;text-transform:uppercase;white-space:nowrap}
     th.num,td.num{text-align:right}
     td{padding:10px 12px;border-bottom:1px solid #f2f2f5;color:#4a4a54;font-size:12.5px;vertical-align:middle;white-space:nowrap}
@@ -30,11 +30,19 @@
     .dismissed{margin-top:16px;border:1px solid #eaeaee;border-radius:9px;background:#fff;overflow:hidden}.dismissed-toggle{width:100%;height:auto;min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border:0;border-radius:0;background:none;text-align:left}.dismissed-copy{display:flex;align-items:baseline;gap:10px}.dismissed-title{color:#17171b;font-size:12.5px;font-weight:500}.dismissed-count{color:#b0b0b8;font-size:11.5px;font-weight:400}.dismissed-sign{color:#9a9aa6;font:400 11px 'IBM Plex Mono',monospace}.dismissed-list{border-top:1px solid #f0f0f3}.dismissed-row{display:grid;grid-template-columns:1.2fr 1fr .9fr .9fr 1fr 200px;gap:16px;align-items:center;padding:10px 16px;border-bottom:1px solid #f5f5f7}.dismissed-row:last-child{border-bottom:0}.dismissed-address{font-size:12.5px;font-weight:500}.dismissed-place{margin-top:2px;color:#9a9aa6;font-size:11.5px}.dismissed-value{color:#4a4a54;font:400 12px 'IBM Plex Mono',monospace;text-align:right}.dismissed-empty{padding:18px 16px;color:#c0c0c8;font-size:12px;text-align:center}.dismissed-actions{display:flex;gap:6px;justify-content:flex-end}
     button{height:26px;padding:0 9px;border:1px solid #e2e2e8;border-radius:5px;background:#fff;color:#3a3a44;font:500 11.5px 'Instrument Sans',sans-serif;cursor:pointer;white-space:nowrap}
     button:hover{border-color:#c9c9d2}button.primary{border-color:#1c4e4a;background:#1c4e4a;color:#fff}button.primary:hover{border-color:#143a37;background:#143a37}button.quiet{border-color:#ececf0;color:#8a8a94}button.quiet:hover{border-color:#d8d8de;color:#5f5f68}
+    button:focus-visible,a:focus-visible{outline:2px solid #1c4e4a;outline-offset:2px}
+    .dismissed-toggle{white-space:normal}.dismissed-copy{min-width:0;flex-wrap:wrap}
+    .dismissed-row{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,.9fr) minmax(0,.9fr) minmax(0,1fr) 200px}
+    .dismissed-row>div,.dismissed-row>span{min-width:0;overflow-wrap:anywhere}.dismissed-row>.badges{min-width:0}.dismissed-row .badge{max-width:100%;white-space:normal;line-height:1.25}
     .empty{padding:34px 16px;color:#9a9aa6;font-size:12.5px;text-align:center}
     .mobile{display:none}
     @media(max-width:760px){
       .scroll{display:none}.frame{border:0;background:transparent;overflow:visible}.mobile{display:grid;gap:10px}
       .parcel-card{width:100%;min-width:0;padding:12px;overflow:hidden;border:1px solid #eaeaee;border-radius:9px;background:#fff}.card-head{display:flex;min-width:0;justify-content:space-between;gap:10px}.card-head>div:first-child{min-width:0}.card-address,.card-place,.card-meta,.card-number{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.card-address{font-size:12.5px;font-weight:500}.card-place{margin-top:3px;color:#9a9aa6;font-size:11.5px}.card-values{display:grid;min-width:0;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px;padding:9px 0;border-top:1px solid #f2f2f5;border-bottom:1px solid #f2f2f5}.card-values>div{min-width:0}.card-label{color:#9a9aa6;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase}.card-number{margin-top:3px;font-family:'IBM Plex Mono',monospace;font-size:12px}.card-meta{margin-top:9px;color:#77777f;font-size:11.5px}.badges{margin-top:8px}.badge{max-width:100%;line-height:1.25;white-space:normal}.actions{width:100%;min-width:0;margin-top:10px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.actions button{width:100%;min-width:0}.actions .quiet{grid-column:1/-1}.dismissed-copy{display:block}.dismissed-count{display:block;margin-top:3px}.dismissed-row{grid-template-columns:1fr 1fr}.dismissed-row>.badges{grid-column:1/-1}.dismissed-actions{grid-column:1/-1}.dismissed-actions button{flex:1}
+      .card-head>div:first-child{flex:1 1 0}.card-zone{flex:0 1 45%;min-width:0;text-align:right;font:12px 'IBM Plex Mono',monospace;overflow-wrap:anywhere}
+      .card-address,.card-place,.card-meta,.card-number{overflow:visible;text-overflow:clip;white-space:normal;overflow-wrap:anywhere}
+      .sources{flex-wrap:wrap;gap:12px;margin-top:9px}.sources a{display:inline-flex;align-items:center;min-height:26px}
+      .dismissed-row{grid-template-columns:repeat(2,minmax(0,1fr))}
     }
   </style>
 </head>
@@ -46,7 +54,8 @@
   const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node};
   const button=(label,cls,handler)=>{const node=el('button',cls,label);node.type='button';node.addEventListener('click',handler);return node};
   const badge=(item)=>{const node=el('span',`badge badge-${item.tone||'muted'}`,item.label);if(item.detail)node.title=item.detail;return node};
-  const source=(label,url)=>{const a=el('a','',label);a.href=url;a.target='_blank';a.rel='noopener noreferrer';return a};
+  const source=(label,url)=>{const a=el('a','',label);a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.title=`${label==='SV'?'Street View':label} öffnen (neuer Tab)`;a.setAttribute('aria-label',a.title);return a};
+  const sourceLinks=row=>{const links=el('div','sources');[['GIS',row.links?.gis],['ÖREB',row.links?.oereb],['SV',row.links?.streetView]].forEach(([label,url])=>{if(url)links.append(source(label,url))});return links};
   function desktop(rows){
     const scroll=el('div','scroll'),table=el('table'),head=el('thead'),hr=el('tr');
     [['Adresse',''],['Gemeinde',''],['Parz.-Nr.',''],['Objekttyp',''],['Baujahr','num'],['Zone',''],['AZ','num'],['Fläche m²','num'],['Potenzial m²','num'],['WE','num'],['Ref. CHF/m²','num'],['Landwert CHF','num'],['Preisquelle',''],['Status',''],['Quellen',''],['Aktion','num']].forEach(([label,cls])=>hr.append(el('th',cls,label)));
@@ -55,17 +64,19 @@
       const tr=el('tr');
       tr.append(el('td','address',row.address),el('td','',row.municipality),el('td','mono',row.parcel),el('td','',row.type),el('td','mono num',row.year),el('td','',row.zone),el('td','mono num',row.coeff),el('td','mono num',row.area),el('td','mono num strong',row.potential),el('td','mono num',row.units),el('td','mono num',row.refPrice),el('td','mono num strong',row.landValue),el('td','',row.priceSource));
       const status=el('td'),badges=el('div','badges');(row.badges||[]).forEach(item=>badges.append(badge(item)));status.append(badges);tr.append(status);
-      const links=el('td'),sources=el('div','sources');[['GIS',row.links?.gis],['ÖREB',row.links?.oereb],['SV',row.links?.streetView]].forEach(([label,url])=>{if(url)sources.append(source(label,url))});links.append(sources);tr.append(links);
+      const links=el('td');links.append(sourceLinks(row));tr.append(links);
       const actionCell=el('td'),actions=el('div','actions');actions.append(button('Analyse','primary',()=>emit('analyse',row)),button(row.saved?'Gemerkt':'Merken','',()=>emit('save',row)),button('Nicht interessant','quiet',()=>emit('hide',row)));actionCell.append(actions);tr.append(actionCell);body.append(tr);
     });
+    if(!rows.length){const tr=el('tr'),td=el('td','empty','Keine Parzellen entsprechen den aktuellen Filterkriterien.');td.colSpan=hr.children.length;tr.append(td);body.append(tr)}
     table.append(body);scroll.append(table);return scroll;
   }
   function mobile(rows){
-    const list=el('div','mobile');
+    const list=el('div','mobile');if(!rows.length)list.append(el('div','empty','Keine Parzellen entsprechen den aktuellen Filterkriterien.'));
     rows.forEach(row=>{
-      const card=el('article','parcel-card'),head=el('div','card-head'),identity=el('div');identity.append(el('div','card-address',row.address),el('div','card-place',`${row.municipality} · ${row.parcel}`));head.append(identity,el('div','mono',row.zone));card.append(head);
+      const card=el('article','parcel-card'),head=el('div','card-head'),identity=el('div');identity.append(el('div','card-address',row.address),el('div','card-place',`${row.municipality} · ${row.parcel}`));head.append(identity,el('div','card-zone',row.zone));card.append(head);
       const values=el('div','card-values');[['Potenzial',`${row.potential} m²`],['Landwert CHF',row.landValue],['Fläche',`${row.area} m²`],['Wohnungen',row.units]].forEach(([label,value])=>{const box=el('div');box.append(el('div','card-label',label),el('div','card-number',value));values.append(box)});card.append(values);
       card.append(el('div','card-meta',`${row.type} · Baujahr ${row.year} · AZ ${row.coeff}`));const badges=el('div','badges');(row.badges||[]).forEach(item=>badges.append(badge(item)));card.append(badges);
+      const sources=sourceLinks(row);if(sources.children.length)card.append(sources);
       const actions=el('div','actions');actions.append(button('Analyse','primary',()=>emit('analyse',row)),button(row.saved?'Gemerkt':'Merken','',()=>emit('save',row)),button('Nicht interessant','quiet',()=>emit('hide',row)));card.append(actions);list.append(card);
     });return list;
   }
@@ -80,7 +91,7 @@
     return panel;
   }
   function height(){requestAnimationFrame(()=>send('streamlit:setFrameHeight',{height:Math.ceil(document.documentElement.scrollHeight)}))}
-  function render(args){const rows=Array.isArray(args.rows)?args.rows:[],dismissed=Array.isArray(args.dismissed)?args.dismissed:[];root.replaceChildren();if(!rows.length){root.append(el('div','empty','Keine Parzelle erfüllt diese Kriterien.'))}else{const frame=el('div','frame');frame.append(desktop(rows),mobile(rows));root.append(frame)}root.append(dismissedPanel(dismissed));height()}
+  function render(args){const rows=Array.isArray(args.rows)?args.rows:[],dismissed=Array.isArray(args.dismissed)?args.dismissed:[];root.replaceChildren();const frame=el('div','frame');frame.append(desktop(rows),mobile(rows));root.append(frame);root.append(dismissedPanel(dismissed));height()}
   addEventListener('message',event=>{if(event.data?.type==='streamlit:render')render(event.data.args||{})});
   addEventListener('resize',height);new ResizeObserver(height).observe(root);
   send('streamlit:componentReady',{apiVersion:1});height();

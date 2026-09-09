@@ -13,7 +13,7 @@
     html,body{margin:0;padding:0;background:transparent;color:#17171b;font-family:'Instrument Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased}
     .frame{border:1px solid #eaeaee;border-radius:9px;background:#fff;overflow:hidden}
     .scroll{overflow-x:auto}
-    table{width:100%;min-width:1180px;border-collapse:collapse;table-layout:auto}
+    table{width:100%;min-width:1100px;border-collapse:collapse;table-layout:auto}
     th{padding:9px 12px;border-bottom:1px solid #ebebef;background:#fafafb;color:#8a8a94;font-size:9.5px;font-weight:600;letter-spacing:.08em;text-align:left;text-transform:uppercase}
     .status-hint{font-weight:400;text-transform:none;letter-spacing:0;color:#c0c0c8}
     th.num,td.num{text-align:right}
@@ -38,7 +38,7 @@
     .mobile{display:none}
     @media(max-width:760px){
       .scroll{display:none}.frame{border:0;background:transparent;overflow:visible}.mobile{display:grid;gap:10px}
-      .parcel-card{padding:12px;border:1px solid #eaeaee;border-radius:9px;background:#fff}.card-head{display:flex;justify-content:space-between;gap:10px}.card-address{font-size:12.5px;font-weight:500}.card-place{margin-top:3px;color:#9a9aa6;font-size:11.5px}.card-values{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;padding:9px 0;border-top:1px solid #f2f2f5;border-bottom:1px solid #f2f2f5}.card-label{color:#9a9aa6;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase}.card-number{margin-top:3px;font-family:'IBM Plex Mono',monospace;font-size:12px}.card-owner{margin-top:9px}.actions{margin-top:10px}.actions button{flex:1}.actions button.menu{flex:0 0 34px}
+      .parcel-card{min-width:0;padding:12px;border:1px solid #eaeaee;border-radius:9px;background:#fff}.card-head{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px}.card-head>div:first-child{flex:1 1 130px;min-width:0}.card-head>.stage{max-width:100%;white-space:normal;line-height:1.3}.card-address{font-size:12.5px;font-weight:500;overflow-wrap:anywhere}.card-place{margin-top:3px;color:#9a9aa6;font-size:11.5px;overflow-wrap:anywhere}.card-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px;padding:9px 0;border-top:1px solid #f2f2f5;border-bottom:1px solid #f2f2f5}.card-values>div{min-width:0}.card-label{color:#9a9aa6;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase}.card-number{margin-top:3px;font-family:'IBM Plex Mono',monospace;font-size:12px;overflow-wrap:anywhere}.card-owner{margin-top:9px}.actions{margin-top:10px}.actions button{flex:1}.actions button.menu{flex:0 0 34px}
     }
   </style>
 </head>
@@ -53,8 +53,8 @@
   // parcel is not something to put a click away from Analyse, and the design's
   // row already ends in a 3-dot affordance.
   const MENU_ITEMS=[['Von Merkliste entfernen','remove']];
-  let openPanel=null,openKey=null;
-  const closeMenu=()=>{if(openPanel){openPanel.remove();openPanel=null;openKey=null}};
+  let openPanel=null,openKey=null,openAnchor=null;
+  const closeMenu=()=>{if(openPanel){openAnchor?.setAttribute('aria-expanded','false');openPanel.remove();openPanel=null;openKey=null;openAnchor=null}};
   function openMenu(anchor,row){
     const key=`${row.bfs}:${row.parcel}`,again=openKey===key;
     closeMenu();if(again)return;
@@ -67,20 +67,26 @@
     const above=box.bottom+panel.offsetHeight+8>innerHeight;
     panel.style.top=`${Math.max(6,above?box.top-panel.offsetHeight-6:box.bottom+6)}px`;
     panel.style.left=`${Math.max(8,box.right-panel.offsetWidth)}px`;
-    openPanel=panel;openKey=key;
+    openPanel=panel;openKey=key;openAnchor=anchor;
+    anchor.setAttribute('aria-expanded','true');
+    panel.querySelector('button')?.focus({preventScroll:true});
   }
-  const menuButton=row=>{const b=el('button','menu','\u22EF');b.type='button';b.setAttribute('aria-label','Weitere Aktionen');b.addEventListener('click',event=>{event.stopPropagation();openMenu(b,row)});return b};
+  const menuButton=row=>{const b=el('button','menu','\u22EF');b.type='button';b.setAttribute('aria-label','Weitere Aktionen');b.setAttribute('aria-expanded','false');b.addEventListener('click',event=>{event.stopPropagation();openMenu(b,row)});return b};
   function desktop(rows){
     const scroll=el('div','scroll'),table=el('table'),head=el('thead'),hr=el('tr');
     [['Adresse',''],['Gemeinde',''],['Parz.-Nr.',''],['Potenzial m²','num'],['Landwert CHF','num'],['Kontaktstand',''],['Letzter Kontakt',''],['Eigentümerschaft / Notiz',''],['','']].forEach(([text,cls])=>{const cell=el('th',cls,text);if(text==='Kontaktstand')cell.append(el('span','status-hint',' · in Akquisition pflegen'));hr.append(cell)});
     head.append(hr);table.append(head);const body=el('tbody');
     rows.forEach(row=>{const tr=el('tr');tr.append(el('td','address',row.address));tr.append(el('td','',row.municipality));tr.append(el('td','parcel',row.parcel));tr.append(el('td','num',row.potential));tr.append(el('td','num value',row.landValue));const status=el('td');status.append(el('span',`stage stage-${row.statusCode}`,row.status));tr.append(status);tr.append(el('td','date',row.lastContact));const owner=el('td'),ownerName=el('div','owner',row.owner),note=el('div','note',row.note);owner.append(ownerName,note);tr.append(owner);const actionsCell=el('td'),actions=el('div','actions');actions.append(actionButton('Eigentümer',false,()=>emit('owner',row)),actionButton('Analyse',true,()=>emit('analyse',row)),menuButton(row));actionsCell.append(actions);tr.append(actionsCell);body.append(tr)});
+    if(!rows.length){const tr=el('tr'),td=el('td','empty','Noch keine Parzellen gemerkt.');td.colSpan=hr.children.length;tr.append(td);body.append(tr)}
     table.append(body);scroll.append(table);return scroll;
   }
-  function mobile(rows){const list=el('div','mobile');rows.forEach(row=>{const card=el('article','parcel-card'),head=el('div','card-head'),identity=el('div');identity.append(el('div','card-address',row.address),el('div','card-place',`${row.municipality} · ${row.parcel}`));head.append(identity,el('span',`stage stage-${row.statusCode}`,row.status));card.append(head);const values=el('div','card-values');[['Potenzial',row.potential+' m²'],['Landwert CHF',row.landValue]].forEach(([label,value])=>{const box=el('div');box.append(el('div','card-label',label),el('div','card-number',value));values.append(box)});card.append(values);const owner=el('div','card-owner');owner.append(el('div','owner',row.owner),el('div','note',row.note));card.append(owner);const actions=el('div','actions');actions.append(actionButton('Eigentümer',false,()=>emit('owner',row)),actionButton('Analyse',true,()=>emit('analyse',row)),menuButton(row));card.append(actions);list.append(card)});return list}
+  function mobile(rows){const list=el('div','mobile');if(!rows.length)list.append(el('div','empty','Noch keine Parzellen gemerkt.'));rows.forEach(row=>{const card=el('article','parcel-card'),head=el('div','card-head'),identity=el('div');identity.append(el('div','card-address',row.address),el('div','card-place',`${row.municipality} · ${row.parcel}`));head.append(identity,el('span',`stage stage-${row.statusCode}`,row.status));card.append(head);const values=el('div','card-values');[['Potenzial',row.potential+' m²'],['Landwert CHF',row.landValue]].forEach(([label,value])=>{const box=el('div');box.append(el('div','card-label',label),el('div','card-number',value));values.append(box)});card.append(values);const owner=el('div','card-owner');owner.append(el('div','owner',row.owner),el('div','note',row.note));card.append(owner);const actions=el('div','actions');actions.append(actionButton('Eigentümer',false,()=>emit('owner',row)),actionButton('Analyse',true,()=>emit('analyse',row)),menuButton(row));card.append(actions);list.append(card)});return list}
   function height(){requestAnimationFrame(()=>send('streamlit:setFrameHeight',{height:Math.ceil(document.documentElement.scrollHeight)}))}
-  function render(args){const rows=Array.isArray(args.rows)?args.rows:[];closeMenu();root.replaceChildren();if(!rows.length){root.append(el('div','empty','Noch keine Parzellen gemerkt.'))}else{const frame=el('div','frame');frame.append(desktop(rows),mobile(rows));root.append(frame)}height()}
+  function render(args){const rows=Array.isArray(args.rows)?args.rows:[];closeMenu();root.replaceChildren();const frame=el('div','frame');frame.append(desktop(rows),mobile(rows));root.append(frame);height()}
   addEventListener('message',event=>{if(event.data?.type==='streamlit:render')render(event.data.args||{})});
   addEventListener('click',closeMenu);addEventListener('resize',()=>{closeMenu();height()});new ResizeObserver(height).observe(root);
+  // A fixed panel must not remain beside a different parcel after scrolling.
+  addEventListener('scroll',closeMenu,true);
+  addEventListener('keydown',event=>{if(event.key==='Escape'&&openPanel){const anchor=openAnchor;event.preventDefault();closeMenu();anchor?.focus()}});
   send('streamlit:componentReady',{apiVersion:1});height();
 </script></body></html>

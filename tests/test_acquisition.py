@@ -1,3 +1,5 @@
+import csv
+import io
 import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
@@ -248,6 +250,29 @@ class BoardEventTest(unittest.TestCase):
 
 
 class DisplayParityTest(unittest.TestCase):
+    def test_postal_address_survives_csv_export(self):
+        rows = pd.DataFrame([
+            {
+                "address": "Parcel address", "municipality": "Möhlin",
+                "parcel": "954", "delta": 500.0, "owner_name": "UI test",
+                "owner_address": address, "contact_person": "", "phone": "",
+                "email": "", "contact_status": "contacted",
+                "last_contact": "2026-09-08", "due_date": "2026-09-22",
+                "next_step": "", "note": "First line\nSecond line",
+            }
+            for address in ('  Müller, "Test"\r\n\r\n Teststrasse 10 \n4313 Möhlin ', '')
+        ])
+        payload = acquisition.contact_list(rows).to_csv(index=False).encode("utf-8")
+        reader = csv.DictReader(io.StringIO(payload.decode("utf-8")))
+        exported = list(reader)
+        self.assertEqual(reader.fieldnames.count("Postadresse"), 1)
+        self.assertEqual(len(exported), 2)
+        self.assertEqual(exported[0]["Postadresse"], 'Müller, "Test" · Teststrasse 10 · 4313 Möhlin')
+        self.assertEqual(exported[1]["Postadresse"], "")
+        self.assertEqual(exported[0]["Adresse"], "Parcel address")
+        self.assertEqual(exported[0]["Notiz"], "First line\nSecond line")
+        self.assertTrue(all(None not in row for row in exported))
+
     def test_board_formats_dates_but_compares_iso_across_month_boundaries(self):
         dates = ("2026-08-31", "2026-09-02", "2025-12-31", "2027-01-01", "")
         rows = pd.DataFrame([

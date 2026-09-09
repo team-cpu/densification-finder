@@ -239,8 +239,8 @@ def account_summary(db: str | None = None) -> dict[str, object]:
 
 _DIALOG_CSS = """
 <style>
-div[data-testid="stDialog"]:has(.scope-org-modal){align-items:stretch!important;padding:0!important}
-div[data-testid="stDialog"]:has(.scope-org-modal)>div{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;display:flex!important;align-items:center!important;justify-content:center!important;box-sizing:border-box!important;margin:0!important;background:rgba(23,23,27,.28)!important;padding:40px 24px!important}
+div[data-testid="stDialog"]:has(.scope-org-modal){position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;display:flex!important;align-items:center!important;justify-content:center!important;box-sizing:border-box!important;margin:0!important;background:rgba(23,23,27,.28)!important;padding:40px 24px!important}
+div[data-testid="stDialog"]:has(.scope-org-modal)>div{display:contents!important}
 div[data-testid="stDialog"]:has(.scope-org-modal) section[role="dialog"]{width:660px!important;min-width:0!important;max-width:calc(100vw - 48px)!important;max-height:calc(100vh - 80px)!important;padding:0!important;overflow:auto!important;border:1px solid #e4e4ea!important;border-radius:11px!important;background:#fff!important;box-shadow:none!important;position:relative!important}
 body:has(div[data-testid="stDialog"] .scope-org-modal) div[data-testid="stPopoverBody"]:has(.scope-account-menu){display:none!important}
 div[data-testid="stDialog"]:has(.scope-org-modal) section[role="dialog"]>h2{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important}
@@ -280,6 +280,33 @@ div[data-testid="stDialog"]:has(.scope-org-modal) section[role="dialog"] [data-t
 }
 .st-key-org_profile_grid [data-testid="stTextInput"] label p {
   line-height: 12px !important;
+  font-weight: 400 !important;
+}
+/* Match the reference's 34 × 20 switch while retaining the native input. */
+[class*="st-key-org_setting_row_"] { min-height:60px; }
+.scope-org-setting-name { line-height:15px; }
+.scope-org-setting-caption { line-height:1.2; }
+[class*="st-key-org_setting_row_"] label:has(input[role="switch"]) > div:first-of-type {
+  width:34px; height:20px; min-width:34px; border-radius:20px;
+  border:1px solid #e2e2e8; background:#f2f2f5;
+  position:relative;
+}
+[class*="st-key-org_setting_row_"] label:has(input[role="switch"]:checked) > div:first-of-type {
+  background:#1c4e4a; border-color:#1c4e4a;
+}
+[class*="st-key-org_setting_row_"] label:has(input[role="switch"]) > div:first-of-type > div {
+  width:16px; height:16px; border-radius:50%; background:#fff;
+  position:absolute; left:1px; top:1px;
+  transform:translateX(0); box-shadow:0 1px 3px #0002;
+}
+[class*="st-key-org_setting_row_"] label:has(input[role="switch"]:checked) > div:first-of-type > div {
+  transform:translateX(14px);
+}
+div[data-testid="stDialog"]:has(.scope-org-modal) button[aria-label="Close"] svg {
+  width:13px; height:13px;
+}
+[class*="st-key-org_setting_row_"] label:has(input[role="switch"]:focus-visible) > div:first-of-type {
+  outline:2px solid #1c4e4a; outline-offset:3px;
 }
 .st-key-org_profile_grid [data-testid="stTextInputRootElement"]:focus-within,
 .st-key-org_invite [data-testid="stTextInputRootElement"]:focus-within {
@@ -347,7 +374,7 @@ div[data-testid="stDialog"]:has(.scope-org-modal) section[role="dialog"] [data-t
   .st-key-org_modal_content { max-height: calc(100vh - 42px); }
 }
 
-@media(max-width:700px){div[data-testid="stDialog"]:has(.scope-org-modal)>div{padding:20px 12px!important}div[data-testid="stDialog"]:has(.scope-org-modal) section[role="dialog"]{max-width:calc(100vw - 24px)!important;max-height:calc(100vh - 40px)!important}[class*="st-key-org_member_row_"]{flex-wrap:wrap!important}.scope-org-license-value{display:none}}
+@media(max-width:700px){div[data-testid="stDialog"]:has(.scope-org-modal){padding:20px 12px!important}div[data-testid="stDialog"]:has(.scope-org-modal) section[role="dialog"]{max-width:calc(100vw - 24px)!important;max-height:calc(100vh - 40px)!important}[class*="st-key-org_member_row_"]{flex-wrap:wrap!important}.scope-org-license-value{display:none}}
 </style>
 """
 

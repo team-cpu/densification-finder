@@ -61,9 +61,12 @@ function component() {
         cell.replaceChildren(button);
         return cell;
       });
-      this.replaceChildren(...cells);
+      const label = new Element('span');
+      label.className = 'calc__name';
+      this.replaceChildren(label, ...cells);
     }
     querySelectorAll(selector) {
+      if (selector === '.calc__name') return this.children.filter(node => node.className === 'calc__name');
       assert.equal(selector, 'button[data-field]');
       const matches = [];
       const visit = node => {
@@ -102,6 +105,7 @@ function component() {
   });
   return {
     document,
+    label:() => root.querySelectorAll('.calc__name')[0],
     render(rows, parcel='parcel-a', acknowledgedEventId=null) {
       const html = rows.map(([field, value, manual=false]) =>
         `<button data-field="${field}" data-value="${value}" class="calc__edit${manual ? ' calc__edit--overridden' : ''}" aria-label="${field}"></button>`).join('');
@@ -331,4 +335,21 @@ test('reopening a pending clear keeps the empty draft without submitting it twic
   assert.equal(calculated.value, '150');
   calculated.dispatch('keydown', {key:'Enter'});
   assert.equal(ui.events().length, 1);
+});
+
+
+test('tooltip Escape preserves focus and edits; a new visit restores visibility', () => {
+  const ui = component();
+  ui.render([['reserve', '200']]);
+  const label = ui.label();
+  label.focus();
+  label.dispatch('keydown', {key:'Escape'});
+  assert.equal(label.getAttribute('data-tip-dismissed'), 'true');
+  assert.equal(ui.document.activeElement, label);
+  assert.equal(ui.events().length, 0);
+  label.dispatch('pointerenter');
+  assert.equal(label.getAttribute('data-tip-dismissed'), null);
+  label.dispatch('keydown', {key:'Escape'});
+  ui.button('reserve').focus();
+  assert.equal(label.getAttribute('data-tip-dismissed'), null);
 });

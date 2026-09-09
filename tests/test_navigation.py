@@ -13,6 +13,12 @@ class FakeState(dict):
 
 
 class NavigationTest(unittest.TestCase):
+    def test_deselecting_the_active_tab_keeps_that_page(self):
+        state = FakeState({navigation.PAGE: "Akquisition"})
+        navigation.reconcile(state)
+        state[navigation.PAGE] = None
+        self.assertEqual(navigation.reconcile(state), "Akquisition")
+
     def test_a_pending_request_becomes_the_current_page(self):
         state = FakeState({navigation.PENDING: "Analyse"})
 

@@ -62,6 +62,29 @@ class AppRegressionTest(unittest.TestCase):
             os.path.join(paths.HERE, "app.py"), default_timeout=timeout
         ).run()
 
+    def test_empty_screening_keeps_saved_search_and_restore_controls(self):
+        first = pd.read_sql_query(
+            "SELECT bfs, parcel FROM parcel_results LIMIT 1",
+            sqlite3.connect(self.database),
+        ).iloc[0]
+        workflow.set_hidden([(int(first.bfs), str(first.parcel))], True, self.database)
+        app = self.screening()
+        field(app, "Parzellen-Nr. suchen").set_value("999999999999").run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any(w.label == "Name der Suche" for w in app.text_input))
+        self.assertEqual(len(app.get("component_instance")), 1)
+        field(app, "Name der Suche").set_value("Empty audit search").run()
+        next(w for w in app.button if w.label == "Speichern").click().run()
+        self.assertFalse(app.exception)
+        self.assertIn("Empty audit search", searches.load(self.database)["name"].tolist())
+
+    def test_empty_saved_pages_keep_their_components(self):
+        app = self.screening()
+        for page in ("Merkliste", "Akquisition"):
+            app.segmented_control(key="acq_page").set_value(page).run()
+            self.assertFalse(app.exception)
+            self.assertEqual(len(app.get("component_instance")), 1)
+
     def saved_leads(self):
         with sqlite3.connect(self.database) as connection:
             parcels = pd.read_sql_query("SELECT * FROM parcel_results", connection)
@@ -668,7 +691,7 @@ class AppRegressionTest(unittest.TestCase):
         self.assertEqual(len(app.error), 1)
         self.assertEqual(
             app.error[0].value,
-            "last_contact must be an ISO date (YYYY-MM-DD) or empty",
+            "Bitte ein gültiges Datum im Format TT.MM.JJJJ eingeben.",
         )
         # A refused save must not look like a closed, successful one.
         self.assertEqual(

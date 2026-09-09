@@ -49,11 +49,6 @@ _CONTACT_STAGE_TINTS = {
 _CONTACT_DIALOG_CSS = """
 <style>
 div[data-testid="stDialog"]:has(.scope-contact-modal) {
-  align-items: stretch !important;
-  padding: 0 !important;
-}
-
-div[data-testid="stDialog"]:has(.scope-contact-modal) > div {
   position: fixed !important;
   inset: 0 !important;
   width: 100vw !important;
@@ -70,6 +65,12 @@ div[data-testid="stDialog"]:has(.scope-contact-modal) > div {
   background: rgba(23, 23, 27, .28) !important;
 }
 
+/* React Aria treats the inner modal wrapper as "inside" for dismissal.
+   Keep its box on the dialog, so the surrounding overlay receives clicks. */
+div[data-testid="stDialog"]:has(.scope-contact-modal) > div {
+  display: contents !important;
+}
+
 /* Streamlit's own input chatter — "Press Enter to apply · 26/200" — is drawn
    over the field in this modal and is not part of the design. The length caps
    it announces are enforced in `workflow._text` either way. */
@@ -82,7 +83,33 @@ div[data-testid="stDialog"]:has(.scope-contact-modal)
    box; the dialog is a flow layout, so the modal grows with them. */
 div[data-testid="stDialog"]:has(.scope-contact-modal) textarea {
   field-sizing: content;
-  max-height: 40vh;
+  max-height: none;
+}
+
+/* Grow with the text, then scroll the form body while Close/Fertig stay visible. */
+div[data-testid="stDialog"]:has(.scope-contact-modal)
+  [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .scope-contact-modal) {
+  max-height:calc(100dvh - 130px);
+  min-height:0;
+  overflow:hidden;
+}
+div[data-testid="stDialog"]:has(.scope-contact-modal)
+  [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .scope-contact-modal) > div {
+  flex:0 0 auto !important;
+}
+div[data-testid="stDialog"]:has(.scope-contact-modal)
+  [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .scope-contact-modal) > div:has(> .st-key-contact_modal_body) {
+  flex:1 1 auto !important;
+  min-height:0 !important;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+}
+@supports not (field-sizing: content) {
+  .st-key-contact_modal_body [data-testid="stTextArea"] textarea {
+    resize:vertical !important;
+    overflow:auto;
+    min-height:90px !important;
+  }
 }
 
 div[data-testid="stDialog"]:has(.scope-contact-modal) section[role="dialog"] {
@@ -163,6 +190,7 @@ div[data-testid="stDialog"]:has(.scope-contact-modal)
 }
 
 .scope-contact-address {
+  overflow-wrap:anywhere;
   color: #17171b;
   font-size: 16px;
   font-weight: 600;
@@ -244,7 +272,7 @@ div[data-testid="stDialog"]:has(.scope-contact-modal)
 .st-key-contact_modal_body [data-testid="stTextArea"] textarea {
   height: auto !important;
   field-sizing: content;
-  min-height: 60px !important;
+  min-height: 54px !important;
   padding: 8px 10px !important;
   border: 1px solid #e2e2e8 !important;
   border-radius: 6px !important;
@@ -253,6 +281,17 @@ div[data-testid="stDialog"]:has(.scope-contact-modal)
   font-size: 12.5px !important;
   line-height: 1.45 !important;
   resize: none !important;
+}
+
+.st-key-contact_modal_body [data-testid="stTextAreaRootElement"] {
+  border:0 !important; box-shadow:none !important; background:transparent !important;
+}
+.st-key-contact_modal_body textarea:focus {
+  outline:none; border-color:#1c4e4a !important;
+  box-shadow:0 0 0 3px #e2eceb !important;
+}
+div[data-testid="stDialog"]:has(.scope-contact-modal) button[aria-label="Close"] svg {
+  width:13px; height:13px;
 }
 
 .st-key-contact_modal_body [data-testid="stTextInput"]
@@ -325,12 +364,16 @@ div[data-testid="stDialog"]:has(.scope-contact-modal)
 }
 
 @media (max-width: 700px) {
-  div[data-testid="stDialog"]:has(.scope-contact-modal) > div {
+  div[data-testid="stDialog"]:has(.scope-contact-modal) {
     padding: 20px 12px !important;
   }
 
   div[data-testid="stDialog"]:has(.scope-contact-modal) section[role="dialog"] {
     max-width: calc(100vw - 24px) !important;
+  }
+  div[data-testid="stDialog"]:has(.scope-contact-modal)
+    [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .scope-contact-modal) {
+    max-height:calc(100dvh - 42px);
   }
 
   .scope-contact-header {
@@ -526,10 +569,7 @@ def render(parcels, decisions, db, today, price_of):
                 width="content",
             )
 
-    if shortlist.empty:
-        st.info("Noch keine Parzellen gespeichert.")
-    else:
-        _render_board(shortlist, db, price_of, today)
+    _render_board(shortlist, db, price_of, today)
 
     _render_hidden(parcels, decisions, db)
     st.html(_ACQUISITION_FOOTER)
@@ -547,7 +587,7 @@ _DUE_CHIP_STYLE = (
 
 _ACQUISITION_INTRO = """
 <style>
-.st-key-acq_header { margin: 10px 0 20px; }
+.st-key-acq_header { margin: 10px 0 4px; }
 .st-key-acq_header [data-testid="stHorizontalBlock"] {
   align-items: flex-end;
   gap: 24px;
@@ -581,6 +621,7 @@ _ACQUISITION_INTRO = """
 .acquisition-page-intro h1 {
   margin: 0;
   font-size: 21px;
+  line-height: 1.2;
   font-weight: 600;
   letter-spacing: -.015em;
 }
@@ -589,6 +630,7 @@ _ACQUISITION_INTRO = """
   margin: 7px 0 0;
   color: #77777f;
   font-size: 12.5px;
+  line-height: 1.2;
   text-wrap: pretty;
 }
 @media (max-width: 760px) {
@@ -822,7 +864,10 @@ def _save_contact_field(key, db, field_name, widget_key, *, is_date=False):
     try:
         WF.update([key], db=db, **{field_name: value})
     except ValueError as error:
-        errors[field_name] = str(error)
+        errors[field_name] = (
+            "Bitte ein gültiges Datum im Format TT.MM.JJJJ eingeben."
+            if is_date else str(error)
+        )
     else:
         errors.pop(field_name, None)
     st.session_state["acq_contact_errors"] = errors

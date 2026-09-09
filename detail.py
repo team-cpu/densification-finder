@@ -821,6 +821,9 @@ def apply_calculation_event(event, pid, state=None):
 #: background whichever theme is running.
 PAGE_CSS = """
 <style>
+  .st-key-detail_page {
+      max-width:1124px; margin-inline:auto; padding-top:6px;
+      padding-bottom:20px; }
   .st-key-detail_breadcrumb { min-height:14px; height:14px; margin:0 0 2px;
       align-items:center; gap:8px; }
   .st-key-detail_breadcrumb > [data-testid="stElementContainer"],
@@ -837,7 +840,7 @@ PAGE_CSS = """
   .detail-breadcrumb-trail { height:14px; display:flex; align-items:center;
       gap:8px; color:#9a9aa6; font-size:11.5px; line-height:14px; }
   .detail-breadcrumb-current { color:#4a4a54; }
-  .st-key-detail_header { margin:0 0 22px; }
+  .st-key-detail_header { margin:0 0 8px; }
   .st-key-detail_header > [data-testid="stHorizontalBlock"] {
       align-items:flex-start; gap:24px; }
   .st-key-detail_header [data-testid="stColumn"]:first-child
@@ -868,7 +871,7 @@ PAGE_CSS = """
       border-radius:6px; font-size:12px; font-weight:500; line-height:14px;
       white-space:nowrap; }
 
-  .st-key-result_bar { padding:0; margin-bottom:26px; }
+  .st-key-result_bar { padding:0; margin-bottom:10px; }
   .detail-result-grid { border:1px solid #dde9e7; border-radius:10px;
       background:#fbfdfd; padding:22px 24px; display:grid;
       grid-template-columns:minmax(0,1.35fr) minmax(0,1fr) minmax(0,1fr);
@@ -1194,6 +1197,7 @@ CALC_CSS = """
   span.calc__name:hover span.calc__tip,
   span.calc__name:focus span.calc__tip,
   span.calc__name:focus-within span.calc__tip { display:block; }
+  span.calc__name[data-tip-dismissed] span.calc__tip { display:none; }
   span.calc__tip b { color:#ff8a7a; font-weight:600; }
   table.calc tr:nth-last-child(-n+4) span.calc__tip {
       top:auto; bottom:calc(100% + .45rem); }
@@ -1406,7 +1410,7 @@ def page(parcels, cache, price_of, db=None):
     # clicking it.
     key = (int(row["bfs"]), row["parcel"])
     db_path = db if db is not None else paths.DB
-    st.markdown(PAGE_CSS, unsafe_allow_html=True)
+    st.html(PAGE_CSS)
 
     address = _text(row.get("address")) or f"Parzelle {row['parcel']}"
     with st.container(key="detail_breadcrumb", horizontal=True):

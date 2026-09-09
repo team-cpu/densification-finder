@@ -279,10 +279,6 @@ def page(parcels, decisions, db, price_of):
                 navigation.go_to("Akquisition")
                 st.rerun()
 
-    if leads.empty:
-        st.info("Noch keine Parzellen gemerkt.")
-        return
-
     def land_value(row):
         # Unreachable today and deliberately kept: the committed
         # `land_prices.csv` carries a canton-wide fallback, so every one of the

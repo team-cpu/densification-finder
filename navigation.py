@@ -30,6 +30,9 @@ PENDING = "acq_page_go"
 #: The page a jump came from, so "back" returns there.
 ORIGIN = "acq_page_from"
 
+# Segmented controls allow deselection; navigation must retain its active page.
+LAST_PAGE = "acq_page_last"
+
 
 def reconcile(state) -> str:
     """Apply any parked navigation request. Call before rendering the control.
@@ -40,7 +43,9 @@ def reconcile(state) -> str:
     if requested:
         state[PAGE] = requested
     elif state.get(PAGE) not in PAGES:
-        state[PAGE] = DEFAULT_PAGE
+        previous = state.get(LAST_PAGE)
+        state[PAGE] = previous if previous in PAGES else DEFAULT_PAGE
+    state[LAST_PAGE] = state[PAGE]
     return state[PAGE]
 
 

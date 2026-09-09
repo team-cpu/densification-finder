@@ -140,6 +140,7 @@ _SCREENING_CSS = """
 .screening-page-intro h1 {
   margin: 0;
   font-size: 21px;
+  line-height: 1.2;
   font-weight: 600;
   letter-spacing: -.015em;
 }
@@ -154,11 +155,20 @@ _SCREENING_CSS = """
 }
 
 .st-key-screening_header {
-  margin: 10px 0 10px;
+  margin: 10px 0 0;
 }
 
 .st-key-screening_header .screening-page-intro {
   margin: 0;
+}
+
+@media (min-width:761px) {
+  .st-key-screening_header [data-testid="stColumn"]:first-child {
+    flex:1 1 0; min-width:0;
+  }
+  .st-key-screening_header [data-testid="stColumn"]:last-child {
+    flex:0 0 246px; width:246px; min-width:246px;
+  }
 }
 
 .st-key-screening_header_actions,
@@ -381,9 +391,22 @@ _SCREENING_CSS = """
 }
 
 .st-key-screening_filter_flags {
-  padding-top: 7px;
+  padding-top: 20px;
   padding-bottom: 9px;
   border-top: 1px solid #f2f2f5;
+}
+
+.st-key-screening_filter_numeric input,
+.st-key-screening_filter_flags input[type="text"] {
+  font-family: 'IBM Plex Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.st-key-screening_exclusion_options label > div:first-of-type {
+  width:13px; height:13px; min-width:13px; border-radius:2px;
+}
+.st-key-screening_exclusion_options label:not(:has(input:checked)) > div:first-of-type {
+  border:1px solid #8a8a94; background:#fff;
 }
 
 .st-key-screening_filter_flags [data-testid="stCheckbox"] p {
@@ -593,22 +616,20 @@ _SCREENING_CSS = """
 }
 
 @media (max-width: 960px) {
-  .st-key-screening_result_toolbar > [data-testid="stLayoutWrapper"]
-    > [data-testid="stHorizontalBlock"] {
+  .st-key-screening_result_toolbar {
     flex-wrap: wrap;
     gap: 8px;
   }
 
-  .st-key-screening_result_toolbar > [data-testid="stLayoutWrapper"]
-    > [data-testid="stHorizontalBlock"] > [data-testid="stElementContainer"]:first-child {
+  .st-key-screening_result_toolbar > [data-testid="stElementContainer"]:first-child {
     flex: 0 0 100% !important;
     width: 100% !important;
   }
 
-  .st-key-screening_result_toolbar > [data-testid="stLayoutWrapper"]
-    > [data-testid="stHorizontalBlock"] > [data-testid="stElementContainer"]:nth-child(2) {
+  .st-key-screening_result_toolbar > [data-testid="stElementContainer"]:nth-child(2) {
     margin-left: auto;
   }
+  .st-key-screening_result_limit { flex-wrap:nowrap !important; }
 }
 
 @media (max-width: 760px) {
@@ -1027,6 +1048,116 @@ def _initial_widget_value(key, state=None, **default):
     return {parameter: state.pop(key)}
 
 
+def _render_search_actions(header_actions, csv_data: bytes | None, db) -> None:
+    # ── saved searches ───────────────────────────────────────────────────────────
+    # Beside the export because both act on the filters just arrived at, not on
+    # the rows: a screening run is a research position — "Wohnzone, 800 m²
+    # potential, Bezirk Horgen" — and retyping twelve controls to get back to it
+    # is exactly the friction saving one removes.
+    header_actions.download_button(
+        "CSV exportieren",
+        csv_data or b"",
+        disabled=csv_data is None,
+        file_name="verdichtungspotenzial.csv",
+        mime="text/csv",
+        key="screening_csv",
+    )
+
+    # The prototype exposes one compact page action. Naming and managing saved
+    # searches happens inside it instead of adding a permanent third field to
+    # the page header.
+    with header_actions.popover("Suche speichern"):
+        search_name = st.text_input(
+            "Name der Suche",
+            key="screening_search_name",
+            placeholder="z. B. Wohnzone Aarau",
+        )
+        if st.button("Speichern", width="stretch"):
+            try:
+                SR.save(
+                    search_name,
+                    {key: st.session_state.get(key) for key in FILTER_KEYS},
+                    db,
+                )
+            except ValueError as error:
+                st.error(str(error))
+            else:
+                st.session_state.pop("screening_search_name", None)
+                st.toast(f"Suche „{search_name}“ gespeichert.")
+                st.rerun()
+
+        # Not cached, like `workflow.load`: a save or delete above must be
+        # visible in this same picker on the next run.
+        saved = SR.load(db)
+        if not saved.empty:
+            picked = st.selectbox(
+                "Gespeicherte Suche",
+                list(saved["name"]),
+                key="screening_search_pick",
+            )
+            apply_col, delete_col = st.columns(2)
+            if apply_col.button("Anwenden", width="stretch"):
+                st.session_state[PENDING_SEARCH] = (
+                    saved.set_index("name").loc[picked, "filters"]
+                )
+                st.rerun()
+            if delete_col.button("Löschen", width="stretch"):
+                SR.delete(picked, db)
+                st.session_state.pop("screening_search_pick", None)
+                st.toast(f"Suche „{picked}“ gelöscht.")
+                st.rerun()
+
+    # Reported once, right after the rerun that applied a search — not read
+    # again on the next unrelated rerun, which is why `_apply_pending_search`
+    # writes it and this is the only place that pops it back out.
+    skipped = st.session_state.pop(SKIPPED_SEARCH_VALUES, [])
+    if skipped:
+        st.warning(
+            "Diese Werte der geladenen Suche gibt es nicht mehr und wurden "
+            "übersprungen: " + ", ".join(skipped) + "."
+        )
+
+
+def _render_design_results(
+    rows, final, parcels, hidden_keys, price_of, cache, workflow_by_key, db,
+) -> None:
+    # The supplied design is a dense action table, not Streamlit's generic
+    # dataframe toolbar. The local component mirrors that table and returns
+    # only a parcel intent; Python validates the key before doing anything.
+    dismissed_rows = dismissed_table_rows(parcels, hidden_keys, price_of, cache)
+    with st.container(key="screening_design_table"):
+        table_event = ui_components.screening_table(
+            rows,
+            dismissed=dismissed_rows,
+            key="screening_results",
+        )
+    table_event = ui_components.consume_event(
+        table_event, "screening_results"
+    )
+    hidden_candidates = parcels[
+        [parcel_key(row) in hidden_keys for _, row in parcels.iterrows()]
+    ]
+    valid_actions = pd.concat([final, hidden_candidates], ignore_index=True)
+    resolved_event = resolve_table_event(table_event, valid_actions)
+    if resolved_event:
+        action, key = resolved_event
+        if action == "analyse":
+            detail.open_parcel(f"{key[0]}:{key[1]}")
+            navigation.go_to("Analyse")
+        elif action == "save":
+            current = workflow_by_key.get(key)
+            target = not bool(current is not None and current.saved)
+            WF.set_saved([key], target, db)
+            st.toast("Auf die Merkliste gesetzt." if target else "Von der Merkliste entfernt.")
+        elif action == "restore":
+            WF.set_hidden([key], False, db)
+            st.toast("Parzelle wiederhergestellt.")
+        else:
+            WF.set_hidden([key], True, db)
+            st.toast("Parzelle als nicht interessant ausgeblendet.")
+        st.rerun()
+
+
 def page(parcels, decisions, db, price_of, land_price_references, runs):
     """The screening list: filters, ranking, the ÖREB check and the table."""
     # Before any filter widget below is created — see PENDING_SEARCH.
@@ -1191,7 +1322,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     query = query_area.text_input(
         "Parzellen-Nr. suchen",
         key="screening_query",
-        placeholder="z. B. HO 1284",
+        placeholder="z. B. 954 oder Sportplatzweg",
         icon=":material/search:",
     )
 
@@ -1291,8 +1422,13 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         gap="medium",
     )
     result_summary = result_toolbar.empty()
+    sort_label = {
+        "Bebaut": "Relative Ausnutzungsreserve ↓",
+        "Unbebaut": "Bebaubare Geschossfläche ↓",
+        "Alle": "Bebaut / unbebaut im Wechsel",
+    }[parcel_type]
     result_toolbar.html(
-        '<span class="screening-result-sort">Sortiert nach Potenzial ↓</span>'
+        f'<span class="screening-result-sort">{sort_label}</span>'
     )
     with result_toolbar.container(
         key="screening_result_limit",
@@ -1331,7 +1467,15 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
     )
 
     if final.empty:
-        st.info("Keine Parzelle erfüllt diese Kriterien.")
+        result_summary.html(
+            '<div class="screening-result-summary"><strong>0 Parzellen</strong>'
+            '<span>Summe Potenzial <code>0</code> m² · '
+            'Summe Landwert <code>CHF 0</code></span></div>'
+        )
+        _render_search_actions(header_actions, None, db)
+        _render_design_results(
+            [], final, parcels, hidden_keys, price_of, cache, workflow_by_key, db,
+        )
         return
 
     # ── table ───────────────────────────────────────────────────────────────────
@@ -1464,108 +1608,11 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         '</div>',
         unsafe_allow_html=True,
     )
-    # ── saved searches ───────────────────────────────────────────────────────────
-    # Beside the export because both act on the filters just arrived at, not on
-    # the rows: a screening run is a research position — "Wohnzone, 800 m²
-    # potential, Bezirk Horgen" — and retyping twelve controls to get back to it
-    # is exactly the friction saving one removes.
-    header_actions.download_button(
-        "CSV exportieren",
-        view.to_csv(index=False).encode("utf-8"),
-        file_name="verdichtungspotenzial.csv",
-        mime="text/csv",
-        key="screening_csv",
+    _render_search_actions(header_actions, view.to_csv(index=False).encode("utf-8"), db)
+    _render_design_results(
+        screening_table_rows(final, view), final, parcels, hidden_keys,
+        price_of, cache, workflow_by_key, db,
     )
-
-    # The prototype exposes one compact page action. Naming and managing saved
-    # searches happens inside it instead of adding a permanent third field to
-    # the page header.
-    with header_actions.popover("Suche speichern"):
-        search_name = st.text_input(
-            "Name der Suche",
-            key="screening_search_name",
-            placeholder="z. B. Wohnzone Aarau",
-        )
-        if st.button("Speichern", width="stretch"):
-            try:
-                SR.save(
-                    search_name,
-                    {key: st.session_state.get(key) for key in FILTER_KEYS},
-                    db,
-                )
-            except ValueError as error:
-                st.error(str(error))
-            else:
-                st.session_state.pop("screening_search_name", None)
-                st.toast(f"Suche „{search_name}“ gespeichert.")
-                st.rerun()
-
-        # Not cached, like `workflow.load`: a save or delete above must be
-        # visible in this same picker on the next run.
-        saved = SR.load(db)
-        if not saved.empty:
-            picked = st.selectbox(
-                "Gespeicherte Suche",
-                list(saved["name"]),
-                key="screening_search_pick",
-            )
-            apply_col, delete_col = st.columns(2)
-            if apply_col.button("Anwenden", width="stretch"):
-                st.session_state[PENDING_SEARCH] = (
-                    saved.set_index("name").loc[picked, "filters"]
-                )
-                st.rerun()
-            if delete_col.button("Löschen", width="stretch"):
-                SR.delete(picked, db)
-                st.session_state.pop("screening_search_pick", None)
-                st.toast(f"Suche „{picked}“ gelöscht.")
-                st.rerun()
-
-    # Reported once, right after the rerun that applied a search — not read
-    # again on the next unrelated rerun, which is why `_apply_pending_search`
-    # writes it and this is the only place that pops it back out.
-    skipped = st.session_state.pop(SKIPPED_SEARCH_VALUES, [])
-    if skipped:
-        st.warning(
-            "Diese Werte der geladenen Suche gibt es nicht mehr und wurden "
-            "übersprungen: " + ", ".join(skipped) + "."
-        )
-
-    # The supplied design is a dense action table, not Streamlit's generic
-    # dataframe toolbar. The local component mirrors that table and returns
-    # only a parcel intent; Python validates the key before doing anything.
-    dismissed_rows = dismissed_table_rows(parcels, hidden_keys, price_of, cache)
-    with st.container(key="screening_design_table"):
-        table_event = ui_components.screening_table(
-            screening_table_rows(final, view),
-            dismissed=dismissed_rows,
-            key="screening_results",
-        )
-    table_event = ui_components.consume_event(
-        table_event, "screening_results"
-    )
-    hidden_candidates = parcels[
-        [parcel_key(row) in hidden_keys for _, row in parcels.iterrows()]
-    ]
-    valid_actions = pd.concat([final, hidden_candidates], ignore_index=True)
-    resolved_event = resolve_table_event(table_event, valid_actions)
-    if resolved_event:
-        action, key = resolved_event
-        if action == "analyse":
-            detail.open_parcel(f"{key[0]}:{key[1]}")
-            navigation.go_to("Analyse")
-        elif action == "save":
-            current = workflow_by_key.get(key)
-            target = not bool(current is not None and current.saved)
-            WF.set_saved([key], target, db)
-            st.toast("Auf die Merkliste gesetzt." if target else "Von der Merkliste entfernt.")
-        elif action == "restore":
-            WF.set_hidden([key], False, db)
-            st.toast("Parzelle wiederhergestellt.")
-        else:
-            WF.set_hidden([key], True, db)
-            st.toast("Parzelle als nicht interessant ausgeblendet.")
-        st.rerun()
 
     # Multi-row selection supports saving and dismissing several leads at once. An
     # explicit action opens the single-parcel analysis because a row click can no

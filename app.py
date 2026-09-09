@@ -131,11 +131,12 @@ elif page == "Merkliste":
     merkliste.page(parcels, parcel_workflow, DB, price_of)
 elif page == "Analyse":
     if detail.selected():
-        detail.page(
-            parcels,
-            screening.read_oereb_cache(),
-            price_of,
-        )
+        with st.container(key="detail_page"):
+            detail.page(
+                parcels,
+                screening.read_oereb_cache(),
+                price_of,
+            )
     else:
         st.info(
             "Keine Parzelle ausgewählt. Eine Parzelle im Screening oder auf der "

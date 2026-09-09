@@ -162,6 +162,18 @@
     refreshing = true;
     try {
       root.innerHTML = typeof args.html === 'string' ? args.html : '';
+      root.querySelectorAll('.calc__name').forEach(label => {
+        label.addEventListener('keydown', event => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            label.setAttribute('data-tip-dismissed', 'true');
+          }
+        });
+        // A new pointer or keyboard visit may reveal the explanation again.
+        for (const eventName of ['pointerenter', 'blur']) {
+          label.addEventListener(eventName, () => label.removeAttribute('data-tip-dismissed'));
+        }
+      });
       let activeButton = null;
       root.querySelectorAll('button[data-field]').forEach(button => {
         button.addEventListener('click', () => startEdit(button));
