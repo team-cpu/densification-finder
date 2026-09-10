@@ -250,6 +250,22 @@ class BoardEventTest(unittest.TestCase):
 
 
 class DisplayParityTest(unittest.TestCase):
+    def test_legacy_phone_is_formatted_on_board_and_export_without_mutating_source(self):
+        rows = pd.DataFrame([{
+            "bfs": 4001, "parcel": "1", "municipality": "Aarau",
+            "address": "", "area": 1000.0, "delta": 500.0,
+            "contact_status": "contacted", "due_date": "", "last_contact": "",
+            "contact_person": "Test", "phone": "0787778800", "owner_name": "",
+            "owner_address": "", "next_step": "", "email": "", "note": "",
+        }])
+        before = rows.copy(deep=True)
+        self.assertEqual(acquisition.contact_list(rows).iloc[0]["Telefon"], "078 777 88 00")
+        stages = acquisition.board_data(rows, lambda row: None, "2026-09-09")
+        cards = [card for stage in stages for card in stage["cards"]]
+        self.assertEqual(cards[0]["contactLine"], "Test · 078 777 88 00")
+        pd.testing.assert_frame_equal(rows, before)
+
+
     def test_postal_address_survives_csv_export(self):
         rows = pd.DataFrame([
             {

@@ -1,35 +1,21 @@
-"""Ranking rules for built, vacant, and mixed parcel result lists."""
+"""Rank screening results by absolute potential, matching the reference UI."""
 
 import pandas as pd
 
 
 def rank_candidates(candidates: pd.DataFrame, parcel_type: str) -> pd.DataFrame:
-    """Rank candidates without comparing incompatible built/vacant scores.
+    """Filter the parcel type, then show the largest additional floor area first.
 
-    Built parcels rank by additional floor area relative to estimated existing
-    floor area. Vacant parcels have no meaningful ratio, so they rank by
-    absolute developable floor area. A mixed list interleaves both rankings so
-    ``Alle`` actually represents both parcel types in every result window.
+    Stable ties retain source order. The ratio remains available to existing
+    consumers, but does not determine which parcels enter the result window.
     """
-    ratio = candidates["delta"] / candidates["existing"].clip(lower=1)
-    ranked = candidates.assign(ratio=ratio)
-
-    built = ranked[ranked["buildings"] > 0].sort_values(
-        ["ratio", "delta"], ascending=[False, False], kind="stable"
-    )
-    vacant = ranked[ranked["buildings"] == 0].sort_values(
-        "delta", ascending=False, kind="stable"
-    )
-
-    if parcel_type == "Bebaut":
-        return built
-    if parcel_type == "Unbebaut":
-        return vacant
-    if parcel_type != "Alle":
+    if parcel_type not in ("Bebaut", "Unbebaut", "Alle"):
         raise ValueError(f"Unknown parcel type: {parcel_type}")
-
-    built = built.assign(_kind_order=0, _kind_rank=range(len(built)))
-    vacant = vacant.assign(_kind_order=1, _kind_rank=range(len(vacant)))
-    return pd.concat((built, vacant)).sort_values(
-        ["_kind_rank", "_kind_order"], kind="stable"
+    ranked = candidates.assign(
+        ratio=candidates["delta"] / candidates["existing"].clip(lower=1)
     )
+    if parcel_type == "Bebaut":
+        ranked = ranked[ranked["buildings"] > 0]
+    elif parcel_type == "Unbebaut":
+        ranked = ranked[ranked["buildings"] == 0]
+    return ranked.sort_values("delta", ascending=False, kind="stable")

@@ -485,7 +485,7 @@ def _render_team(db: str | None) -> None:
                             args=(member_id, role_key, db),
                         )
                         if member["pending"]:
-                            if st.button("Erneut senden", key=f"org_resend_{member_id}"):
+                            if st.button("Erneut vormerken", key=f"org_resend_{member_id}"):
                                 resend_invite(member_id, db)
                                 st.toast("Einladung erneut vorgemerkt.")
                                 st.rerun()
@@ -536,8 +536,9 @@ def _setting_toggle(field: str, name: str, caption: str,
             f'<div class="scope-org-setting-caption">{escape(caption)}</div></div>'
         )
         st.toggle(
-            name, value=bool(profile[field]), key=key, label_visibility="collapsed",
-            on_change=_save_profile_field, args=(field, key, db),
+            name, value=False, key=f"{key}_unavailable",
+            label_visibility="collapsed", disabled=True,
+            help="Noch nicht verfügbar. Gespeicherte Präferenzen bleiben erhalten.",
         )
 
 
@@ -559,10 +560,10 @@ def _render_settings(profile: dict[str, object], data_as_of: str,
         for error in st.session_state.get("org_profile_errors", {}).values():
             st.error(error)
         st.html('<div class="scope-org-section-title" style="margin-top:10px">Organisation</div>')
-        _setting_toggle("weekly_digest", "Wöchentliche Zusammenfassung", "Präferenz gespeichert. Automatischer E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
-        _setting_toggle("due_reminders", "Erinnerung bei fälligen Kontakten", "Präferenz gespeichert. Fälligkeiten erscheinen im Board; E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
-        _setting_toggle("enforce_2fa", "Zwei-Faktor-Authentifizierung erzwingen", "Präferenz gespeichert. Keine aktive 2FA ohne persönliche Benutzerkonten.", profile, db)
-        _setting_toggle("shared_calculations", "Kalkulationen teamweit sichtbar", "Präferenz gespeichert. Annahmen bleiben derzeit pro Sitzung; keine Freigabesteuerung.", profile, db)
+        _setting_toggle("weekly_digest", "Wöchentliche Zusammenfassung", "Noch nicht verfügbar. Automatischer E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
+        _setting_toggle("due_reminders", "Erinnerung bei fälligen Kontakten", "Noch nicht verfügbar. Fälligkeiten erscheinen im Board; E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
+        _setting_toggle("enforce_2fa", "Zwei-Faktor-Authentifizierung erzwingen", "Noch nicht verfügbar. Keine aktive 2FA ohne persönliche Benutzerkonten.", profile, db)
+        _setting_toggle("shared_calculations", "Kalkulationen teamweit sichtbar", "Noch nicht verfügbar. Annahmen bleiben derzeit pro Sitzung; keine Freigabesteuerung.", profile, db)
         st.html(
             '<div class="scope-org-setting-copy scope-org-license"><div>'
             '<div class="scope-org-setting-name">Datenlizenz</div>'

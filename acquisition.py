@@ -531,7 +531,7 @@ def contact_list(shortlist: pd.DataFrame) -> pd.DataFrame:
                 )
             ),
             "Kontaktperson": shortlist["contact_person"],
-            "Telefon": shortlist["phone"],
+            "Telefon": shortlist["phone"].map(format_phone),
             "E-Mail": shortlist["email"],
             "Stufe": shortlist["contact_status"].map(
                 lambda code: WF.CONTACT_STATUS_LABELS.get(
@@ -692,7 +692,7 @@ def board_data(shortlist, price_of, today) -> list[dict]:
                 value
                 for value in (
                     str(row["contact_person"]).strip(),
-                    str(row["phone"]).strip(),
+                    format_phone(row["phone"]),
                 )
                 if value
             ) or "Kontakt nicht erfasst"
@@ -934,7 +934,7 @@ def _contact_dialog(row, key, db):
         phone_key = f"acq_contact_phone_{slug}"
         second_row[0].text_input(
             "Telefon",
-            value=str(row["phone"]),
+            value=format_phone(row["phone"]),
             max_chars=50,
             placeholder="+41 ...",
             key=phone_key,

@@ -112,10 +112,8 @@ class AppRegressionTest(unittest.TestCase):
         parcel_type.select("Alle").run()
         self.assertFalse(app.exception)
         frame = app.dataframe[0].value
-        self.assertEqual(
-            frame["Typ"].value_counts().to_dict(),
-            {"bebaut": 25, "unbebaut": 25},
-        )
+        self.assertEqual(len(frame), 50)
+        self.assertTrue(frame["Potenzial m² (Schätzung)"].is_monotonic_decreasing)
         self.assertIn("≈ Landwert / Potenzial-GF", frame.columns)
         self.assertTrue(frame["Preisebene"].eq("Kanton AG").all())
         self.assertTrue(frame["Preisstand"].eq("2021 Q2").all())
@@ -617,6 +615,7 @@ class AppRegressionTest(unittest.TestCase):
         bfs, parcel = int(first["bfs"]), str(first["parcel"])
         key = [(bfs, parcel)]
         workflow.set_saved(key, True, self.database)
+        workflow.update(key, db=self.database, phone="0787778800")
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=60
         )
@@ -626,6 +625,13 @@ class AppRegressionTest(unittest.TestCase):
         app.run()
 
         self.assertFalse(app.exception)
+        self.assertEqual(field(app, "Telefon").value, "078 777 88 00")
+        with sqlite3.connect(self.database) as connection:
+            stored_phone = connection.execute(
+                "SELECT phone FROM parcel_workflow WHERE bfs = ? AND parcel = ?",
+                (bfs, parcel),
+            ).fetchone()[0]
+        self.assertEqual(stored_phone, "0787778800")
 
         field(app, "Kontaktperson").set_value("Frau Meier")
         # Typed as digits; stored grouped, which is the point of the formatter.

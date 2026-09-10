@@ -1422,11 +1422,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         gap="medium",
     )
     result_summary = result_toolbar.empty()
-    sort_label = {
-        "Bebaut": "Relative Ausnutzungsreserve ↓",
-        "Unbebaut": "Bebaubare Geschossfläche ↓",
-        "Alle": "Bebaut / unbebaut im Wechsel",
-    }[parcel_type]
+    sort_label = "Sortiert nach Potenzial ↓"
     result_toolbar.html(
         f'<span class="screening-result-sort">{sort_label}</span>'
     )

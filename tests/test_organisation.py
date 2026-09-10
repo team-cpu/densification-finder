@@ -191,12 +191,13 @@ class OrganisationDialogTest(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertNotIn(organisation.DIALOG_OPEN, app.session_state)
 
-    def test_settings_dialog_exposes_all_editable_fields_and_toggles(self):
+    def test_settings_keeps_profile_editable_but_unavailable_services_disabled(self):
         app = self._open("settings")
         for field in organisation.PROFILE_TEXT_FIELDS:
             self.assertFalse(app.text_input(key=f"org_profile_{field}").disabled)
         for field in organisation.PROFILE_BOOLEAN_FIELDS:
-            self.assertFalse(app.toggle(key=f"org_profile_{field}").disabled)
+            self.assertTrue(app.toggle(key=f"org_profile_{field}_unavailable").disabled)
+            self.assertFalse(app.toggle(key=f"org_profile_{field}_unavailable").value)
         html = " ".join(node.proto.body for node in app.get("html"))
         self.assertIn("Aargau", html)
         self.assertIn("AGIS", html)
