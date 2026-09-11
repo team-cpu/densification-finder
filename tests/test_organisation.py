@@ -244,7 +244,7 @@ class OrganisationDialogTest(unittest.TestCase):
         self.assertIn("Aargau", html)
         self.assertIn("AGIS", html)
         self.assertIn("geodienste.ch", html)
-        self.assertIn("Keine aktive 2FA", html)
+        self.assertIn("Nur mit persönlichen Konten verfügbar", html)
         self.assertIn("E-Mail-Versand ist noch nicht eingerichtet", html)
         self.assertNotIn("Abo Team", html)
         self.assertIn("st-key-org_modal_content", html)

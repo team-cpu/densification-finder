@@ -64,6 +64,8 @@ CSS = """
 /* The six-digit code reads better spaced out in the mono face. */
 .st-key-scope_login_code input { font-family: 'IBM Plex Mono', monospace; letter-spacing: .35em; }
 .scope-login-hint { margin: -8px 0 0; font-size: 11px; line-height: 1.4; color: #9a9aa6; }
+.scope-login-key { margin: 2px 0 0; font: 500 13px 'IBM Plex Mono', monospace; letter-spacing: .08em; color: #17171b; user-select: all; }
+.st-key-scope_login_card [data-testid="stImage"] img { border: 1px solid #ebebef; border-radius: 8px; padding: 6px; background: #fff; }
 .scope-login-divider { height: 1px; margin: 2px 0; background: #f0f0f3; }
 
 @media (max-width: 480px) {

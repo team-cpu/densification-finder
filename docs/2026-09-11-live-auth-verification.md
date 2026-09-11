@@ -109,3 +109,31 @@ the `test_scope_auth` widget tests pass unmodified. Browser check: personal
 gate at 1280/820/375 px (no horizontal overflow on mobile, card 315 px wide),
 shared gate wrong password → *Falsches Passwort.* inside the card, correct
 password → application. Full suite: 297 passed, 1 skipped.
+
+## Addendum — second factor (TOTP), same day
+
+Spec: `docs/superpowers/specs/2026-09-11-totp-2fa-design.md`. Live against
+the dedicated Scope project, owner account, enforcement switched on in
+Einstellungen (toggle writes `organisation_profile.enforce_2fa`; takes effect
+at the next full rerun, e.g. *Fertig*):
+
+- Enrolment card: QR (provider SVG) + manual key + code → *Aktivieren* →
+  application (AAL2 token replaces the session token). TOTP computed from
+  the displayed key with RFC 6238, so no phone was needed for the check.
+- Account menu → *2FA zurücksetzen* → factor unenrolled → fresh enrolment
+  with a new key and a rendered QR.
+- Logout, new e-mail code, then *Zweiter Faktor* challenge: wrong code
+  rejected, current code → application.
+- Cleanup: enforcement off, factor removed; the owner account is back to
+  e-mail code only.
+
+Defect found and fixed on the way: the transport capped provider answers at
+64 KB, and the enrolment answer carries the QR as inline SVG (~200 KB), so
+the body was cut and the factor was created without the app seeing it
+(`mfa_factor_name_conflict` on the next try). Cap is 1 MB now, with a
+regression test; abandoned unverified factors are removed before enrolling.
+Also: the provider's `qr_code` may be bare SVG or a data URL — both handled.
+
+Not covered: recovery without the device (operator deletes the factor in the
+Scope project's Auth dashboard), provider-side rate limits. Full suite: 306
+passed, 1 skipped.

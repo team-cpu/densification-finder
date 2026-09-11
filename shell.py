@@ -117,8 +117,18 @@ def _account_chip() -> None:
             st.session_state[organisation.DIALOG_OPEN] = True
             st.rerun()
         st.html('<div class="scope-account-menu-separator"></div>')
+        import scope_auth
+        if st.session_state.get("scope_mfa") and st.button(
+            "2FA zurücksetzen", key="app_shell_account_mfa_reset", width="stretch",
+            help="Entfernt den aktuellen zweiten Faktor; beim nächsten Schritt wird ein neues Gerät eingerichtet.",
+        ):
+            try:
+                scope_auth.mfa_reset()
+            except scope_auth.AuthError as error:
+                st.error(str(error))
+            else:
+                st.rerun()
         if st.button("Abmelden", key="app_shell_account_logout", width="stretch"):
-            import scope_auth
             scope_auth.logout()
             st.session_state.pop(organisation.DIALOG_OPEN, None)
             st.session_state.pop(organisation.DIALOG_VIEW, None)

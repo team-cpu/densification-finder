@@ -362,7 +362,7 @@ div[data-testid="stDialog"]:has(.scope-org-modal) section[role="dialog"]>button[
 div[data-testid="stDialog"]:has(.scope-org-modal) section[role="dialog"]>div:last-child{padding:0!important}
 div[data-testid="stDialog"]:has(.scope-org-modal) section[role="dialog"] [data-testid="stVerticalBlock"]{gap:0!important}
 .scope-org-modal,.scope-org-modal *{box-sizing:border-box}.scope-org-header{padding:18px 52px 18px 20px;border-bottom:1px solid #f0f0f3}.scope-org-kicker,.scope-org-section-title{color:#8a8a94;font-size:10px;font-weight:600;letter-spacing:.09em;line-height:1.2;text-transform:uppercase}.scope-org-kicker{margin-bottom:6px;letter-spacing:.1em}.scope-org-title{color:#17171b;font-size:16px;font-weight:600;letter-spacing:-.01em;line-height:1.25}.scope-org-subtitle{margin-top:4px;color:#9a9aa6;font-size:11.5px;line-height:1.35}.scope-org-section-title{margin:0 0 11px}.scope-org-roles,.scope-org-empty{margin:12px 0 0;color:#b0b0b8;font-size:11px;line-height:1.45}.scope-org-empty{padding:22px;border:1px solid #f0f0f3;border-radius:8px;text-align:center}.scope-org-member-name{font-size:12.5px;font-weight:500;color:#17171b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.scope-org-member-email,.scope-org-member-activity{margin-top:2px;color:#9a9aa6;font-size:11px}.scope-org-member-avatar{width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:#e8f0ef;color:#143a37;font-size:9.5px;font-weight:600}.scope-org-pending{display:inline-flex;margin-left:7px;padding:3px 7px;border-radius:20px;background:#f6f2ee;color:#7a5a3a;font-size:10px;font-weight:500}.scope-org-setting-copy{padding:13px 2px}.scope-org-setting-name{color:#17171b;font-size:12.5px;font-weight:500}.scope-org-setting-caption{margin-top:3px;color:#9a9aa6;font-size:11px;line-height:1.4}.scope-org-license{display:flex;align-items:center;justify-content:space-between;gap:20px;border-bottom:1px solid #f4f4f6}.scope-org-license-value{color:#4a4a54;font:12px 'IBM Plex Mono',monospace;white-space:nowrap}.scope-org-footer-note{color:#b0b0b8;font-size:11px;line-height:1.35}
-.st-key-org_team_body,.st-key-org_settings_body{padding:16px 20px 18px!important}.st-key-org_invite{gap:8px!important;margin-bottom:16px}.st-key-org_invite [data-testid="stTextInput"] label,.st-key-org_invite [data-testid="stSelectbox"] label{display:none}.st-key-org_invite [data-testid="stButton"] button{height:32px!important;min-height:32px!important;padding:0 14px!important;border-radius:6px!important;font-size:12px!important}.st-key-org_roster{border:1px solid #f0f0f3;border-radius:8px;overflow:hidden}.st-key-org_roster>div+div{border-top:1px solid #f2f2f5}[class*="st-key-org_member_row_"]{padding:10px 12px!important;gap:11px!important;align-items:center!important}[class*="st-key-org_member_row_"] [data-testid="stButton"] button{height:27px!important;min-height:27px!important;padding:0 9px!important;border-radius:5px!important;font-size:11.5px!important}.st-key-org_profile_grid [data-testid="stTextInput"]{margin-bottom:12px}.st-key-org_profile_grid label p{font-size:10px!important;font-weight:600!important;letter-spacing:.07em!important;text-transform:uppercase!important;color:#8a8a94!important}[class*="st-key-org_setting_row_"]{min-height:65px;padding:0 2px!important;border-bottom:1px solid #f4f4f6;align-items:center!important}.st-key-org_modal_footer{min-height:59px;padding:14px 20px!important;border-top:1px solid #f0f0f3;align-items:center!important}.st-key-org_modal_footer button[kind="primary"]{height:30px!important;min-height:30px!important;padding:0 14px!important;border-radius:6px!important;font-size:12px!important}
+.st-key-org_team_body,.st-key-org_settings_body{padding:16px 20px 18px!important}.st-key-org_invite{gap:8px!important;margin-bottom:16px}.st-key-org_invite [data-testid="stTextInput"] label,.st-key-org_invite [data-testid="stSelectbox"] label{display:none}.st-key-org_invite [data-testid="stButton"] button{height:32px!important;min-height:32px!important;padding:0 14px!important;border-radius:6px!important;font-size:12px!important}.st-key-org_roster{border:1px solid #f0f0f3;border-radius:8px;overflow:hidden}.st-key-org_roster>div+div{border-top:1px solid #f2f2f5}[class*="st-key-org_member_row_"]{padding:10px 12px!important;gap:11px!important;align-items:center!important}[class*="st-key-org_member_row_"] [data-testid="stButton"] button{height:27px!important;min-height:27px!important;padding:0 9px!important;border-radius:5px!important;font-size:11.5px!important}.st-key-org_profile_grid [data-testid="stTextInput"]{margin-bottom:12px}.st-key-org_profile_grid label p{font-size:10px!important;font-weight:600!important;letter-spacing:.07em!important;text-transform:uppercase!important;color:#8a8a94!important}[class*="st-key-org_setting_row_"]{min-height:65px;padding:0 2px!important;border-bottom:1px solid #f4f4f6;align-items:center!important;flex-wrap:nowrap!important}[class*="st-key-org_setting_row_"]>div:has(.scope-org-setting-copy){flex:1 1 0!important;min-width:0!important}[class*="st-key-org_setting_row_"]>div:has([data-testid="stToggle"]){flex:0 0 auto!important;width:auto!important}.st-key-org_modal_footer{min-height:59px;padding:14px 20px!important;border-top:1px solid #f0f0f3;align-items:center!important}.st-key-org_modal_footer button[kind="primary"]{height:30px!important;min-height:30px!important;padding:0 14px!important;border-radius:6px!important;font-size:12px!important}
 
 /* Streamlit wraps each control in a flex child; size those wrappers too. */
 .st-key-org_invite > .st-key-org_invite_email {
@@ -682,7 +682,7 @@ def _profile_input(container, label: str, field: str, profile: dict[str, object]
 
 
 def _setting_toggle(field: str, name: str, caption: str,
-                    profile: dict[str, object], db: str | None) -> None:
+                    profile: dict[str, object], db: str | None, *, live: bool = False) -> None:
     key = f"org_profile_{field}"
     with st.container(
         key=f"org_setting_row_{field}", horizontal=True,
@@ -693,6 +693,13 @@ def _setting_toggle(field: str, name: str, caption: str,
             f'<div class="scope-org-setting-name">{escape(name)}</div>'
             f'<div class="scope-org-setting-caption">{escape(caption)}</div></div>'
         )
+        if live:
+            st.session_state[key] = bool(profile[field])
+            st.toggle(
+                name, key=key, label_visibility="collapsed",
+                on_change=_save_profile_field, args=(field, key, db),
+            )
+            return
         st.toggle(
             name, value=False, key=f"{key}_unavailable",
             label_visibility="collapsed", disabled=True,
@@ -720,7 +727,10 @@ def _render_settings(profile: dict[str, object], data_as_of: str,
         st.html('<div class="scope-org-section-title" style="margin-top:10px">Organisation</div>')
         _setting_toggle("weekly_digest", "Wöchentliche Zusammenfassung", "Noch nicht verfügbar. Automatischer E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
         _setting_toggle("due_reminders", "Erinnerung bei fälligen Kontakten", "Noch nicht verfügbar. Fälligkeiten erscheinen im Board; E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
-        _setting_toggle("enforce_2fa", "Zwei-Faktor-Authentifizierung erzwingen", "Noch nicht verfügbar. Keine aktive 2FA: Die Prüfung eines zweiten Faktors ist noch nicht eingerichtet.", profile, db)
+        if scope_auth.enabled():
+            _setting_toggle("enforce_2fa", "Zwei-Faktor-Authentifizierung erzwingen", "Nach dem E-Mail-Code zusätzlich per Authenticator-App (TOTP). Gilt sofort für alle Mitglieder.", profile, db, live=True)
+        else:
+            _setting_toggle("enforce_2fa", "Zwei-Faktor-Authentifizierung erzwingen", "Nur mit persönlichen Konten verfügbar. Beim gemeinsamen Zugang gibt es keinen zweiten Faktor.", profile, db)
         _setting_toggle("shared_calculations", "Kalkulationen teamweit sichtbar", "Noch nicht verfügbar. Annahmen bleiben derzeit pro Sitzung; keine Freigabesteuerung.", profile, db)
         st.html(
             '<div class="scope-org-setting-copy scope-org-license"><div>'
