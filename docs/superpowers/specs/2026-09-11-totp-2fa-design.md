@@ -18,10 +18,12 @@ session from `POST /factors/{id}/verify`, and that session's access token
 replaces the one in session state.
 
 - **Policy.** `organisation_profile.enforce_2fa`, editable by owners in
-  Einstellungen in personal mode (stays disabled in shared mode). Off: no
-  second factor, no optional enrolment. On: every member completes TOTP after
-  the e-mail code on every login, enrolling on first use. Turning it on takes
-  effect at the next rerun of every open session.
+  Einstellungen in personal mode (stays disabled in shared mode). On: every
+  member completes TOTP after the e-mail code on every login, enrolling on
+  first use; turning it on takes effect at the next full rerun of every open
+  session. Off: a member may still add a factor from the account menu
+  ("2FA einrichten", with a "Später" way out); a verified factor is then
+  challenged on every login regardless of the switch.
 - **Enrolment.** `POST /factors` (`factor_type: totp`, issuer "Scope").
   The card shows the provider's QR code (SVG via `st.image`), the manual key
   in groups of four, and a code field; `challenge` + `verify` activate the
@@ -40,8 +42,8 @@ replaces the one in session state.
 
 ## Not in scope
 
-Optional per-member 2FA while enforcement is off, phone/WebAuthn factors,
-remembering devices, admin-side reset inside the app.
+Phone/WebAuthn factors, remembering devices, admin-side reset inside the
+app (would need a service-role credential the app deliberately lacks).
 
 ## Verification
 

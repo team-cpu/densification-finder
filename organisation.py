@@ -84,7 +84,7 @@ def load_profile(db: str | None = None) -> dict[str, object]:
     if row is None:
         return {
             **{field: "" for field in PROFILE_TEXT_FIELDS},
-            "weekly_digest": True, "due_reminders": True,
+            "weekly_digest": False, "due_reminders": False,
             "enforce_2fa": False, "shared_calculations": True, "updated_at": "",
         }
     result = dict(row)

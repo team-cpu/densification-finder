@@ -281,6 +281,7 @@ def mfa_reset(db: str | None = None) -> None:
 def _finish_second_factor(old_token: str, new_token: str) -> None:
     _verified_identities.pop(old_token, None)
     st.session_state.pop("scope_mfa_enrol", None)
+    st.session_state.pop("scope_mfa_setup", None)
     st.session_state["scope_access_token"] = new_token
     st.session_state["scope_mfa"] = True
     st.rerun()
@@ -296,7 +297,7 @@ def _qr_svg(raw: str) -> str:
     return text[start:] if start >= 0 else ""
 
 
-def _second_factor_gate(member: dict, db: str) -> None:
+def _second_factor_gate(member: dict, db: str, *, required: bool = True) -> None:
     token = st.session_state["scope_access_token"]
     if member.get("mfa_factor"):
         with login_page.card("Geben Sie den Code aus Ihrer Authenticator-App ein.", title="Zweiter Faktor"):
@@ -311,17 +312,20 @@ def _second_factor_gate(member: dict, db: str) -> None:
                 st.error(str(error))
             _logout_link()
         st.stop()
+    caption = ("Zweiter Faktor ist für alle Mitglieder erforderlich."
+               if required else "Optional: Schützen Sie Ihr Konto zusätzlich mit einer Authenticator-App.")
     try:
         enrol = st.session_state.get("scope_mfa_enrol") or mfa_enrol(token, member)
     except AuthError as error:
-        with login_page.card("Zweiter Faktor ist für alle Mitglieder erforderlich.", title="Zweiter Faktor einrichten"):
+        with login_page.card(caption, title="Zweiter Faktor einrichten"):
             st.error(str(error))
             if st.button("Erneut versuchen", key="scope_mfa_retry", type="primary", width="stretch"):
                 st.rerun()
+            _postpone_link(required)
             _logout_link()
         st.stop()
     st.session_state["scope_mfa_enrol"] = enrol
-    with login_page.card("Scannen Sie den QR-Code mit einer Authenticator-App und geben Sie den angezeigten Code ein.",
+    with login_page.card(caption + " Scannen Sie den QR-Code mit einer Authenticator-App und geben Sie den angezeigten Code ein.",
                          title="Zweiter Faktor einrichten"):
         if svg := _qr_svg(enrol["qr"]):
             st.image(svg, width=168)
@@ -337,8 +341,17 @@ def _second_factor_gate(member: dict, db: str) -> None:
                 _finish_second_factor(token, mfa_verify(token, enrol["id"], code, member["email"], db))
         except AuthError as error:
             st.error(str(error))
+        _postpone_link(required)
         _logout_link()
     st.stop()
+
+
+def _postpone_link(required: bool) -> None:
+    """A voluntary set-up can be left for later; an enforced one cannot."""
+    if not required and st.button("Später", key="scope_mfa_later", width="stretch"):
+        st.session_state.pop("scope_mfa_setup", None)
+        st.session_state.pop("scope_mfa_enrol", None)
+        st.rerun()
 
 
 def _logout_link() -> None:
@@ -422,8 +435,12 @@ def gate(db: str) -> None:
             logout()
             notice = "Sitzung abgelaufen oder Zugang nicht mehr gültig. Bitte erneut anmelden."
         else:
-            if mfa_required(db) and not st.session_state.get("scope_mfa"):
-                _second_factor_gate(member, db)
+            # Required by the organisation, chosen by the member (a verified
+            # factor is always challenged), or being set up from the menu.
+            required = mfa_required(db)
+            wanted = required or bool(member.get("mfa_factor")) or bool(st.session_state.get("scope_mfa_setup"))
+            if wanted and not st.session_state.get("scope_mfa"):
+                _second_factor_gate(member, db, required=required)
             if member["role"] == "Leseweise":
                 st.info("Lesezugriff: Sie können Daten ansehen, aber keine Änderungen speichern.")
             return

@@ -193,8 +193,11 @@ ORGANISATION_PROFILE_COLUMNS = [
     ("city", "TEXT NOT NULL DEFAULT ''"),
     ("uid", "TEXT NOT NULL DEFAULT ''"),
     ("billing_email", "TEXT NOT NULL DEFAULT ''"),
-    ("weekly_digest", "INTEGER NOT NULL DEFAULT 1"),
-    ("due_reminders", "INTEGER NOT NULL DEFAULT 1"),
+    # Off until an owner switches them on: both send real e-mail once personal
+    # accounts and Resend are configured, and nobody should get a Monday
+    # digest they never asked for.
+    ("weekly_digest", "INTEGER NOT NULL DEFAULT 0"),
+    ("due_reminders", "INTEGER NOT NULL DEFAULT 0"),
     ("enforce_2fa", "INTEGER NOT NULL DEFAULT 0"),
     ("shared_calculations", "INTEGER NOT NULL DEFAULT 1"),
     ("updated_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
@@ -401,6 +404,18 @@ def schema(con):
     con.execute(
         "INSERT OR IGNORE INTO organisation_profile (id, name) VALUES (1, '')"
     )
+    # One-time data fixes, each recorded by name so it runs exactly once.
+    # The mail switches shipped as disabled placeholders defaulting to 1; a
+    # stored 1 from that time is the old default, not a decision, and must not
+    # start sending mail the day the switches go live.
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    if con.execute(
+        "INSERT OR IGNORE INTO schema_migrations (name) VALUES ('mail_switches_opt_in')"
+    ).rowcount == 1:
+        con.execute("UPDATE organisation_profile SET weekly_digest = 0, due_reminders = 0")
     # After widening, because the copy carries whichever columns the widened
     # table has; before the indexes, because DROP TABLE takes its indexes with
     # it and the CREATE INDEX statements below put them back.

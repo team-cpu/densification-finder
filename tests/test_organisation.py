@@ -26,9 +26,28 @@ class OrganisationPersistenceTest(unittest.TestCase):
     def test_schema_bootstraps_empty_truthful_organisation(self):
         profile = organisation.load_profile(self.database)
         self.assertEqual(profile["name"], "")
-        self.assertTrue(profile["weekly_digest"])
+        self.assertFalse(profile["weekly_digest"])
+        self.assertFalse(profile["due_reminders"])
         self.assertFalse(profile["enforce_2fa"])
         self.assertEqual(organisation.load_members(self.database), [])
+
+    def test_mail_switches_from_the_placeholder_era_are_reset_once(self):
+        """A database from before the switches went live carries the old
+        default 1 in both columns; the first migrated start turns them off,
+        and an owner's later choice survives every start after that."""
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("DELETE FROM schema_migrations")
+            connection.execute(
+                "UPDATE organisation_profile SET weekly_digest = 1, due_reminders = 1"
+            )
+            ingest.schema(connection)
+        profile = organisation.load_profile(self.database)
+        self.assertFalse(profile["weekly_digest"])
+        self.assertFalse(profile["due_reminders"])
+        organisation.update_profile({"due_reminders": True}, self.database)
+        with sqlite3.connect(self.database) as connection:
+            ingest.schema(connection)
+        self.assertTrue(organisation.load_profile(self.database)["due_reminders"])
 
     def test_profile_fields_and_toggles_persist(self):
         organisation.update_profile(

@@ -118,7 +118,20 @@ def _account_chip() -> None:
             st.rerun()
         st.html('<div class="scope-account-menu-separator"></div>')
         import scope_auth
-        if st.session_state.get("scope_mfa") and st.button(
+        if scope_auth.enabled():
+            _second_factor_actions(scope_auth)
+        if st.button("Abmelden", key="app_shell_account_logout", width="stretch"):
+            scope_auth.logout()
+            st.session_state.pop(organisation.DIALOG_OPEN, None)
+            st.session_state.pop(organisation.DIALOG_VIEW, None)
+            st.rerun()
+
+
+def _second_factor_actions(scope_auth) -> None:
+    """Set up a second factor, or replace the device behind the current one."""
+    has_factor = bool(scope_auth.current().get("mfa_factor"))
+    if has_factor and st.session_state.get("scope_mfa"):
+        if st.button(
             "2FA zurücksetzen", key="app_shell_account_mfa_reset", width="stretch",
             help="Entfernt den aktuellen zweiten Faktor; beim nächsten Schritt wird ein neues Gerät eingerichtet.",
         ):
@@ -128,11 +141,12 @@ def _account_chip() -> None:
                 st.error(str(error))
             else:
                 st.rerun()
-        if st.button("Abmelden", key="app_shell_account_logout", width="stretch"):
-            scope_auth.logout()
-            st.session_state.pop(organisation.DIALOG_OPEN, None)
-            st.session_state.pop(organisation.DIALOG_VIEW, None)
-            st.rerun()
+    elif not has_factor and st.button(
+        "2FA einrichten", key="app_shell_account_mfa_setup", width="stretch",
+        help="Authenticator-App als zweiten Faktor hinzufügen.",
+    ):
+        st.session_state["scope_mfa_setup"] = True
+        st.rerun()
 
 
 #: Shared form surfaces, including controls mounted in popover/dialog portals.

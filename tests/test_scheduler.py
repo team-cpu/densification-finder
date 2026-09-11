@@ -175,7 +175,8 @@ def test_reminder_and_digest_toggles_are_live_in_personal_mode(db, monkeypatch):
     assert not app.exception
     for field in ("weekly_digest", "due_reminders"):
         assert not app.toggle(key=f"org_profile_{field}").disabled
-    app.toggle(key="org_profile_due_reminders").set_value(False).run()
+    assert app.toggle(key="org_profile_due_reminders").value is False  # opt-in
+    app.toggle(key="org_profile_due_reminders").set_value(True).run()
     assert not app.exception
-    assert organisation.load_profile(db)["due_reminders"] is False
+    assert organisation.load_profile(db)["due_reminders"] is True
     assert app.toggle(key="org_profile_shared_calculations_unavailable").disabled

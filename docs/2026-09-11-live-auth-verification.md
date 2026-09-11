@@ -154,3 +154,22 @@ to the owner with address, parcel, stage, due date and contact; a second run
 the same minute → `{}` (nothing re-sent). Tests: planning, rendering,
 idempotence, switches/mode/config guards, uncertain-delivery retry with the
 stored text (7 tests, five mutations each turned a test red).
+
+## Addendum — follow-ups, same evening
+
+- Mail switches are opt-in: column defaults and `load_profile` defaults are
+  off, and `ingest.schema` resets the placeholder-era 1s exactly once
+  (`schema_migrations` row `mail_switches_opt_in`); a later owner choice
+  survives every start. Test: `test_mail_switches_from_the_placeholder_era_are_reset_once`.
+- Digest sent live with a faked Monday 07:05 against the QA database (two
+  leads): `{"digest/2026-W38": 1}`, Resend accepted `889e3ce4-…`, body with
+  stage totals, 1 überfällig, 1 upcoming, 3 touched.
+- Voluntary second factor: account menu → *2FA einrichten* opens the
+  enrolment card with *Später*; a verified factor is challenged on every
+  login even when the organisation does not enforce 2FA; *2FA zurücksetzen*
+  only for an active second-factor session. Four tests.
+- Not done: JWT expiry (needs a one-hour wait or a shorter JWT lifetime in
+  the Scope project; the browser session from the afternoon was gone by the
+  time an hour had passed) and the e-mail rendering check in a mail client
+  (the Chrome extension is not connected in this session). `shared_calculations`
+  awaits a scope decision.

@@ -16,9 +16,10 @@ messages. Delivery reuses `email_outbox` + the Resend transport, so every
 message has a stable event key, a lease, and a stored provider id.
 
 - **Policy.** `organisation_profile.due_reminders` and `weekly_digest`,
-  editable by owners in Einstellungen in personal mode (disabled in shared
-  mode, as with 2FA). Recipients: every *active* member. Nothing is sent
-  without Resend configuration and `SCOPE_PUBLIC_URL`.
+  **off by default** (opt-in; a one-time migration resets the placeholder
+  era's stored 1s), editable by owners in Einstellungen in personal mode
+  (disabled in shared mode, as with 2FA). Recipients: every *active* member.
+  Nothing is sent without Resend configuration and `SCOPE_PUBLIC_URL`.
 - **Reminder (daily).** From 07:00 Europe/Zurich, if any saved, not hidden
   lead has a follow-up date ≤ today and is not *Abgelehnt*: one plain-text
   e-mail per member listing those leads (address or parcel number,

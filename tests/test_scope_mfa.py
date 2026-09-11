@@ -232,3 +232,85 @@ def test_qr_code_is_accepted_bare_or_as_data_url():
     assert auth._qr_svg("data:image/svg+xml;utf-8," + quote(QR)) == QR
     assert auth._qr_svg("data:image/svg+xml;base64," + b64.b64encode(QR.encode()).decode()) == QR
     assert auth._qr_svg("") == "" and auth._qr_svg("data:image/png;base64,AAAA") == ""
+
+
+def _factor_api(calls, verified=True):
+    def api(endpoint, payload=None, token=None, method=None):
+        calls.append(endpoint)
+        if endpoint == "user":
+            return user([{"id": "f-ok", "factor_type": "totp", "status": "verified"}] if verified else [])
+        if endpoint == "factors":
+            return {"id": "f-new", "type": "totp", "totp": {"qr_code": QR, "secret": "JBSWY3DPEHPK3PXP", "uri": "otpauth://x"}}
+        if endpoint.endswith("/challenge"):
+            return {"id": "ch-1"}
+        if endpoint.endswith("/verify"):
+            return {"access_token": "aal2-token"}
+        if method == "DELETE":
+            return {}
+        raise AssertionError(endpoint)
+    return api
+
+
+def test_voluntary_factor_is_challenged_even_without_enforcement(db, monkeypatch):
+    auth.verified_member(user(), db, bind=True)
+    monkeypatch.setattr(auth, "api", _factor_api([]))
+    app = gate_app(db).run()
+    assert not app.exception
+    assert not _private(app)
+    assert any(button.label == "Bestätigen" for button in app.button)
+    app.text_input[0].set_value("123456")
+    next(button for button in app.button if button.label == "Bestätigen").click().run()
+    assert not app.exception
+    assert _private(app) and app.session_state["scope_mfa"] is True
+
+
+def test_member_can_set_up_a_second_factor_voluntarily_or_postpone_it(db, monkeypatch):
+    auth.verified_member(user(), db, bind=True)
+    monkeypatch.setattr(auth, "api", _factor_api([], verified=False))
+    app = gate_app(db)
+    app.session_state["scope_mfa_setup"] = True
+    app.run()
+    assert not app.exception
+    assert not _private(app)
+    assert app.get("image")  # enrolment card
+    later = next(button for button in app.button if button.label == "Später")
+    later.click().run()
+    assert not app.exception
+    assert _private(app)
+    assert "scope_mfa_setup" not in app.session_state and "scope_mfa" not in app.session_state
+
+    app.session_state["scope_mfa_setup"] = True
+    app.run()
+    next(item for item in app.text_input if item.label == "Code aus der App").set_value("123456")
+    next(button for button in app.button if button.label == "Aktivieren").click().run()
+    assert not app.exception
+    assert _private(app) and app.session_state["scope_mfa"] is True
+    assert "scope_mfa_setup" not in app.session_state
+
+
+def test_enforced_enrolment_offers_no_postponement(db, monkeypatch):
+    auth.verified_member(user(), db, bind=True)
+    enforce(db)
+    monkeypatch.setattr(auth, "api", _factor_api([], verified=False))
+    app = gate_app(db).run()
+    assert not app.exception
+    assert app.get("image")
+    assert not any(button.label == "Später" for button in app.button)
+
+
+def test_account_menu_offers_setup_or_reset(db, monkeypatch):
+    import shell
+    for factor, flag, expected in ((None, False, "2FA einrichten"), ("f-ok", True, "2FA zurücksetzen")):
+        monkeypatch.setattr(auth, "current", lambda db=None, f=factor: {"id": 1, "role": "Inhaber", "name": "Owner",
+                                                                        "email": "owner@example.com", "mfa_factor": f})
+        import paths
+        monkeypatch.setattr(paths, "DB", db)
+        app = AppTest.from_string(
+            "import shell, streamlit as st\n"
+            f"st.session_state['scope_mfa'] = {flag!r}\n"
+            "shell._account_chip()\n"
+        ).run()
+        assert not app.exception
+        labels = {button.label for button in app.button}
+        assert expected in labels
+        assert not ({"2FA einrichten", "2FA zurücksetzen"} - {expected}) & labels
