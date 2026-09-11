@@ -206,8 +206,7 @@ def test_enforce_toggle_is_live_for_owners_in_personal_mode(db, monkeypatch):
     assert not app.exception
     assert organisation.load_profile(db)["enforce_2fa"] is True
     assert auth.mfa_required(db) is True
-    for field in ("weekly_digest", "due_reminders", "shared_calculations"):
-        assert app.toggle(key=f"org_profile_{field}_unavailable").disabled
+    assert app.toggle(key="org_profile_shared_calculations_unavailable").disabled
 
 
 def test_transport_reads_large_enrolment_answers(monkeypatch):

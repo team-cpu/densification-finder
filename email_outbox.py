@@ -62,6 +62,14 @@ def enqueue(connection: sqlite3.Connection, *, event_key: str, recipient: str,
     return str(row[0])
 
 
+def find(connection: sqlite3.Connection, event_key: str) -> tuple[str, str] | None:
+    """(message id, status) for an event key, or None when nothing was queued."""
+    row = connection.execute(
+        "SELECT id, status FROM email_outbox WHERE event_key=?", (event_key,)
+    ).fetchone()
+    return (str(row[0]), str(row[1])) if row else None
+
+
 def deliver(db: str, message_id: str, *, config: ResendConfig | None = None) -> str:
     """Claim once, send outside the transaction, then persist acceptance.
 

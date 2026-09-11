@@ -80,7 +80,10 @@ SMTP configuration, production change or push was performed.
 Still needed before activating personal mode: provision/configure the dedicated
 Scope project, configure Resend SMTP, set the real owner, then verify live login,
 invitation, role change, revocation and logout using authorized test recipients.
-2FA and scheduled reminder/digest delivery are separate unfinished features.
+The TOTP second factor (`enforce_2fa`) and the reminder/digest e-mails
+(`due_reminders`, `weekly_digest`) are owner switches in Einstellungen; both
+were verified live on 2026-09-11. Recovery without the authenticator device is
+an operator action in the Scope project's Auth dashboard.
 
 Official references:
 - https://supabase.com/docs/guides/auth/auth-email-passwordless

@@ -137,3 +137,20 @@ Also: the provider's `qr_code` may be bare SVG or a data URL — both handled.
 Not covered: recovery without the device (operator deletes the factor in the
 Scope project's Auth dashboard), provider-side rate limits. Full suite: 306
 passed, 1 skipped.
+
+## Addendum — reminders and digest, same day
+
+Spec: `docs/superpowers/specs/2026-09-11-reminders-digest-design.md`.
+`scheduler.py`: daily due-date reminder and Monday digest from 07:00
+Europe/Zurich, one plain-text mail per active member through the outbox,
+event keys `reminder/<date>/<member>` and `digest/<ISO week>/<member>`; the
+container starts `python -m scheduler` beside Streamlit. Einstellungen
+switches *Wöchentliche Zusammenfassung* and *Erinnerung bei fälligen
+Kontakten* are live in personal mode (profile defaults are on).
+
+Live: `python -m scheduler --once` against the QA database with one lead due
+10.09. → `{"reminder/2026-09-11": 1}`, Resend accepted (`086f073c-…`), mail
+to the owner with address, parcel, stage, due date and contact; a second run
+the same minute → `{}` (nothing re-sent). Tests: planning, rendering,
+idempotence, switches/mode/config guards, uncertain-delivery retry with the
+stored text (7 tests, five mutations each turned a test red).

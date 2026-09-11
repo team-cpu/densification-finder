@@ -725,8 +725,12 @@ def _render_settings(profile: dict[str, object], data_as_of: str,
         for error in st.session_state.get("org_profile_errors", {}).values():
             st.error(error)
         st.html('<div class="scope-org-section-title" style="margin-top:10px">Organisation</div>')
-        _setting_toggle("weekly_digest", "Wöchentliche Zusammenfassung", "Noch nicht verfügbar. Automatischer E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
-        _setting_toggle("due_reminders", "Erinnerung bei fälligen Kontakten", "Noch nicht verfügbar. Fälligkeiten erscheinen im Board; E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
+        if scope_auth.enabled():
+            _setting_toggle("weekly_digest", "Wöchentliche Zusammenfassung", "Montags um 07:00 Uhr: Board-Stand und anstehende Wiedervorlagen per E-Mail an alle aktiven Mitglieder.", profile, db, live=True)
+            _setting_toggle("due_reminders", "Erinnerung bei fälligen Kontakten", "Täglich um 07:00 Uhr, wenn Wiedervorlagen fällig sind: E-Mail an alle aktiven Mitglieder.", profile, db, live=True)
+        else:
+            _setting_toggle("weekly_digest", "Wöchentliche Zusammenfassung", "Nur mit persönlichen Konten verfügbar; E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
+            _setting_toggle("due_reminders", "Erinnerung bei fälligen Kontakten", "Nur mit persönlichen Konten verfügbar; Fälligkeiten erscheinen im Board, E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
         if scope_auth.enabled():
             _setting_toggle("enforce_2fa", "Zwei-Faktor-Authentifizierung erzwingen", "Nach dem E-Mail-Code zusätzlich per Authenticator-App (TOTP). Gilt sofort für alle Mitglieder.", profile, db, live=True)
         else:

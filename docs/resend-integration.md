@@ -19,12 +19,13 @@ https://resend.com/docs/dashboard/emails/idempotency-keys
 ## Current boundaries
 
 The transport is wired to invitation notification through the durable outbox in
-`email_outbox.py` and `organisation.send_invitation`; it is still not connected to
-a reminder/digest scheduler. No actual email has been sent, because no live
-provider configuration or authorized recipient has been used. Personal identity
-was resolved as a separate Scope Supabase project, and roles are enforced in
-personal mode only. 2FA and scheduled digest/reminders remain unavailable.
-No deployment or push performed.
+`email_outbox.py` and `organisation.send_invitation`, and to the due-date
+reminder and weekly digest in `scheduler.py` (event keys per day/week and
+member; the container runs `python -m scheduler` beside Streamlit). Invitation,
+reminder and login-code delivery were verified live on 2026-09-11 (see
+`docs/2026-09-11-live-auth-verification.md`). Personal identity is a separate
+Scope Supabase project; roles and the optional TOTP second factor are enforced
+in personal mode only.
 
 ## Verification
 

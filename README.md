@@ -67,8 +67,10 @@ mode uses a **separate Scope Supabase project**, local invitation membership and
 owner/editor/reader permission checks. See [Scope account setup](docs/scope-accounts.md)
 before enabling it. Resend sends invitation notifications; Supabase sends login
 codes through Resend SMTP. Neither sends anything just by starting the app.
-2FA, scheduled digest/reminders and shared calculations remain unavailable and
-their switches are disabled. No example users or licensed datasets are seeded.
+In personal mode owners can enforce a TOTP second factor and switch on the
+daily due-date reminder and the Monday digest (07:00 Europe/Zurich, sent by
+`python -m scheduler`, which the container starts beside Streamlit). Shared
+calculations remain unavailable. No example users or licensed datasets are seeded.
 
 ## Tests
 

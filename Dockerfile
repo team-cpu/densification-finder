@@ -25,9 +25,12 @@ EXPOSE 8501
 # Prepare the persistent database before Streamlit can pass Railway's health
 # check. This applies additive schema migrations to volumes created by older
 # releases and performs a requested one-time reseed before serving any session.
+# The reminder/digest scheduler runs beside Streamlit in the same container
+# (`python -m scheduler`), so sending never waits for a browser session; it
+# is a no-op until personal accounts, Resend and SCOPE_PUBLIC_URL are set.
 # $PORT is injected by Railway. `sh -c` expands it rather than passing it
 # through literally, which an exec-form CMD would do.
-CMD ["sh", "-c", "python bootstrap.py && exec streamlit run app.py \
+CMD ["sh", "-c", "python bootstrap.py && { python -m scheduler & } && exec streamlit run app.py \
      --server.port ${PORT:-8501} \
      --server.address 0.0.0.0 \
      --server.headless true \
