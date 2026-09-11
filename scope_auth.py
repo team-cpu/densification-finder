@@ -15,6 +15,7 @@ from urllib.error import URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import streamlit as st
+import login_page
 import paths
 
 
@@ -257,6 +258,7 @@ def gate(db: str) -> None:
     except AuthError as error:
         st.error(str(error))
         st.stop()
+    notice = None
     if st.session_state.get("scope_access_token"):
         try:
             member = current(db)
@@ -265,24 +267,28 @@ def gate(db: str) -> None:
             return
         except AuthError:
             logout()
-            st.warning("Sitzung abgelaufen oder Zugang nicht mehr gültig. Bitte erneut anmelden.")
-    st.title("Bei Scope anmelden")
-    st.caption("Persönlicher Zugang für eingeladene Mitglieder.")
-    with st.form("scope_login"):
-        email = st.text_input("E-Mail-Adresse", max_chars=200)
-        code = st.text_input("Anmeldecode", type="password", max_chars=6)
-        request = st.form_submit_button("Code anfordern")
-        verify = st.form_submit_button("Anmelden", type="primary")
-    try:
-        if request:
-            request_code(email, db)
-            st.info("Wenn ein gültiger Scope-Zugang besteht, erhalten Sie einen Anmeldecode per E-Mail.")
-        if verify:
-            token = verify_code(email, code, db)
-            for key in list(st.session_state):
-                del st.session_state[key]
-            st.session_state["scope_access_token"] = token
-            st.rerun()
-    except AuthError as error:
-        st.error(str(error))
+            notice = "Sitzung abgelaufen oder Zugang nicht mehr gültig. Bitte erneut anmelden."
+    with login_page.card("Persönlicher Zugang für eingeladene Mitglieder."):
+        if notice:
+            st.warning(notice)
+        with st.form("scope_login", border=False):
+            email = st.text_input("E-Mail-Adresse", max_chars=200, placeholder="name@firma.ch")
+            request = st.form_submit_button("Code anfordern", width="stretch")
+            login_page.divider()
+            with st.container(key="scope_login_code"):
+                code = st.text_input("Anmeldecode", type="password", max_chars=6, placeholder="••••••")
+            login_page.hint("Sechsstellig, gilt 10 Minuten.")
+            verify = st.form_submit_button("Anmelden", type="primary", width="stretch")
+        try:
+            if request:
+                request_code(email, db)
+                st.info("Wenn ein gültiger Scope-Zugang besteht, erhalten Sie einen Anmeldecode per E-Mail.")
+            if verify:
+                token = verify_code(email, code, db)
+                for key in list(st.session_state):
+                    del st.session_state[key]
+                st.session_state["scope_access_token"] = token
+                st.rerun()
+        except AuthError as error:
+            st.error(str(error))
     st.stop()

@@ -98,3 +98,14 @@ Local only. No commit, push, deployment or production change. Production keeps
   clients — recipient's check.
 - 2FA, reminder/digest scheduling, production activation: unchanged, not
   started.
+
+## Addendum — login card (same day)
+
+Both gates now render inside the shared `login_page.card` (spec:
+`docs/superpowers/specs/2026-09-11-login-page-design.md`). Authentication
+logic, labels and messages are unchanged; `tests/test_login_page.py` covers
+the chrome, the personal form and the shared-password form end to end, and
+the `test_scope_auth` widget tests pass unmodified. Browser check: personal
+gate at 1280/820/375 px (no horizontal overflow on mobile, card 315 px wide),
+shared gate wrong password → *Falsches Passwort.* inside the card, correct
+password → application. Full suite: 297 passed, 1 skipped.

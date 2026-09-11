@@ -975,8 +975,7 @@ class DetailEdgeCaseTest(unittest.TestCase):
             app.session_state[detail.SELECTED] = self.pid
             app.run()
             self.assertFalse(app.exception)
-            self.assertEqual([t.value for t in app.title],
-                             ["Verdichtungspotenzial — Kanton Aargau"])
+            self.assertEqual([t.label for t in app.text_input], ["Passwort"])
             self.assertEqual(len(app.subheader), 0)
             self.assertEqual(len(app.number_input), 0)
         finally:

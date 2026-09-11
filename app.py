@@ -29,6 +29,7 @@ import merkliste
 import navigation
 import screening
 import shell
+import login_page
 import scope_auth
 import workflow as WF
 
@@ -66,14 +67,17 @@ def gate():
     secret = os.environ.get("APP_PASSWORD")
     if not secret or st.session_state.get("_ok"):
         return
-    st.title("Verdichtungspotenzial — Kanton Aargau")
-    entered = st.text_input("Passwort", type="password")
-    if entered:
-        # Constant-time so a wrong guess cannot be narrowed down by timing.
-        if hmac.compare_digest(entered, secret):
-            st.session_state["_ok"] = True
-            st.rerun()
-        st.error("Falsches Passwort.")
+    with login_page.card("Gemeinsamer Zugang mit Passwort."):
+        with st.form("shared_login", border=False):
+            entered = st.text_input("Passwort", type="password")
+            submitted = st.form_submit_button("Anmelden", type="primary", width="stretch")
+        if submitted:
+            # Constant-time so a wrong guess cannot be narrowed down by timing;
+            # bytes, so a non-ASCII entry is simply wrong rather than an error.
+            if hmac.compare_digest(entered.encode(), secret.encode()):
+                st.session_state["_ok"] = True
+                st.rerun()
+            st.error("Falsches Passwort.")
     st.stop()
 
 
