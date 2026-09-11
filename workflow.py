@@ -120,6 +120,8 @@ def update(
     with conservative defaults before it is updated, which makes the same
     operation work for both new and existing leads.
     """
+    import scope_auth
+    actor = scope_auth.require_write(db)
     parcel_keys = _keys(keys)
     if not parcel_keys:
         return 0
@@ -170,6 +172,7 @@ def update(
 
     assignments.append("updated_at = CURRENT_TIMESTAMP")
     with sqlite3.connect(db or paths.DB) as connection:
+        scope_auth.check_transaction(connection, actor)
         connection.executemany(
             "INSERT OR IGNORE INTO parcel_workflow (bfs, parcel) VALUES (?, ?)",
             parcel_keys,

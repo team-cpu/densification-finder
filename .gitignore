@@ -8,3 +8,11 @@ out/
 
 # Run logs.
 *.log
+
+# Local browser/UAT evidence: screenshots and downloaded CSVs from review passes.
+# Kept out of the image already; keep them out of the repository too.
+artifacts/
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml

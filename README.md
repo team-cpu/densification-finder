@@ -62,20 +62,25 @@ planned member roles, pending invitations and setting preferences persist in
 `organisation_profile` and `organisation_members` on the same SQLite volume.
 Schema changes are additive and do not reseed parcel results or lead decisions.
 
-This remains a single-organisation, shared-password application, not a personal
-account system. Invitations are recorded but no email is sent. Roles do not yet
-enforce permissions; the 2FA, digest, email reminder and calculation-sharing
-switches store preferences only. The dialogs explicitly describe these limits.
-No fictitious users, subscriptions or licensed datasets are seeded from the
-design example. Do not use these settings as security controls.
+The default remains single-organisation shared-password access. Opt-in personal
+mode uses a **separate Scope Supabase project**, local invitation membership and
+owner/editor/reader permission checks. See [Scope account setup](docs/scope-accounts.md)
+before enabling it. Resend sends invitation notifications; Supabase sends login
+codes through Resend SMTP. Neither sends anything just by starting the app.
+2FA, scheduled digest/reminders and shared calculations remain unavailable and
+their switches are disabled. No example users or licensed datasets are seeded.
 
 ## Tests
 
 Install `requirements-dev.txt` into the local virtual environment, then run:
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -q
+.venv/bin/python -m pytest -q
+node --test tests/calculation_table.test.cjs
 ```
+
+`unittest discover` also works but collects a smaller subset, because several
+tests are pytest-style. Use `pytest` for the full suite.
 
 The extra PDF reader is for export assertions only and is not installed in the
 production image. For browser tests that edit data, set `DENSIFICATION_DB` to a

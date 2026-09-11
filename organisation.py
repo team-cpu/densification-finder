@@ -1,20 +1,24 @@
 """Persistent organisation, team and settings controls.
 
 The design export keeps these values only in browser memory. Scope persists
-them in the application's existing SQLite volume instead. This is deliberately
-not an authentication system: the app still has one optional shared-password
-gate; members and roles are operational metadata until per-user login and
-authorisation are introduced.
+them in the application's existing SQLite volume instead. Personal mode binds
+explicit invitations to separate Scope identities and enforces member roles.
+Shared-password mode retains the previous metadata-only behavior.
 """
 from __future__ import annotations
 
 import re
+import os
 import sqlite3
 from html import escape
+from urllib.parse import urlparse
 
 import streamlit as st
 
 import paths
+import scope_auth
+import email_outbox
+from email_delivery import ResendConfig, EmailDeliveryError
 
 
 DIALOG_OPEN = "organisation_dialog_open"
@@ -93,6 +97,7 @@ def update_profile(
     values: dict[str, object], db: str | None = None
 ) -> dict[str, object]:
     """Validate and persist a partial organisation profile atomically."""
+    actor = scope_auth.require_owner(db)
     unknown = set(values) - set(PROFILE_TEXT_FIELDS) - set(PROFILE_BOOLEAN_FIELDS)
     if unknown:
         raise ValueError(f"Unbekannte Firmenfelder: {', '.join(sorted(unknown))}")
@@ -108,6 +113,7 @@ def update_profile(
     if not clean:
         return load_profile(db)
     with sqlite3.connect(_db(db)) as connection:
+        scope_auth.check_transaction(connection, actor, owner=True)
         connection.row_factory = sqlite3.Row
         connection.execute(
             "INSERT OR IGNORE INTO organisation_profile (id, name) VALUES (1, '')"
@@ -135,17 +141,28 @@ def update_profile(
 
 def load_members(db: str | None = None) -> list[dict[str, object]]:
     """Return members in stable creation order."""
+    personal = scope_auth.enabled()
     with sqlite3.connect(_db(db)) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
-            "SELECT id, name, email, role, status, activity, is_self, "
-            "created_at, updated_at FROM organisation_members ORDER BY id"
+            "SELECT m.id, m.name, m.email, m.role, m.status, m.activity, m.is_self, "
+            "m.created_at, m.updated_at, a.member_id IS NOT NULL AS granted "
+            "FROM organisation_members m LEFT JOIN scope_access a ON a.member_id = m.id "
+            "ORDER BY m.id"
         ).fetchall()
+    personal_id = scope_auth.current(db)["id"] if personal else None
+    active_owners = [row["id"] for row in rows if row["role"] == "Inhaber" and row["status"] == "active"]
     return [
         {
-            **dict(row),
-            "is_self": bool(row["is_self"]),
+            **{key: row[key] for key in row.keys() if key != "granted"},
+            "is_self": row["id"] == personal_id if personal_id is not None else bool(row["is_self"]),
             "pending": row["status"] == "pending",
+            # A withdrawn invitation keeps its roster row, but no login code can
+            # be requested for it until an owner invites the person again.
+            "revoked": personal and row["status"] == "pending" and not row["granted"],
+            # The sole active owner cannot be demoted or removed (see
+            # _guard_last_owner); the roster locks those controls up front.
+            "last_owner": active_owners == [row["id"]],
         }
         for row in rows
     ]
@@ -155,12 +172,16 @@ def invite_member(
     email: object, role: str = "Bearbeiter", *, db: str | None = None
 ) -> int:
     """Create a pending invitation, or refresh an existing pending one."""
+    actor = scope_auth.require_owner(db)
     email_clean = _clean_email(email)
     if role not in ROLE_OPTIONS:
         raise ValueError("Unbekannte Rolle.")
     with sqlite3.connect(_db(db)) as connection:
         # Serialize lookup + insert so two sessions cannot race the unique email.
-        connection.execute("BEGIN IMMEDIATE")
+        if actor is None:
+            connection.execute("BEGIN IMMEDIATE")
+        else:
+            scope_auth.check_transaction(connection, actor, owner=True)
         row = connection.execute(
             "SELECT id, status FROM organisation_members WHERE email = ?",
             (email_clean,),
@@ -173,46 +194,137 @@ def invite_member(
                 "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (role, "erneut vorgemerkt", row[0]),
             )
+            if scope_auth.enabled():
+                scope_auth.grant(connection, int(row[0]))
             return int(row[0])
         cursor = connection.execute(
             "INSERT INTO organisation_members "
             "(name, email, role, status, activity) VALUES (?, ?, ?, 'pending', '—')",
             (_member_name(email_clean), email_clean, role),
         )
-        return int(cursor.lastrowid)
+        member_id = int(cursor.lastrowid)
+        if scope_auth.enabled():
+            scope_auth.grant(connection, member_id)
+        return member_id
+
+
+def _begin_owner_write(connection: sqlite3.Connection, actor: dict | None) -> None:
+    """Take the write lock before reading roster state a decision depends on."""
+    if actor is None:
+        connection.execute("BEGIN IMMEDIATE")
+    else:
+        scope_auth.check_transaction(connection, actor, owner=True)
+
+
+def _guard_last_owner(connection: sqlite3.Connection, member_id: int) -> None:
+    """Refuse to demote or remove the only active owner.
+
+    Pending owner invitations do not count: nobody can act with them yet, and
+    a roster whose last owner is gone could never manage itself again. Runs
+    under the caller's write lock so two sessions cannot each remove "the
+    other" owner.
+    """
+    target = connection.execute(
+        "SELECT role, status FROM organisation_members WHERE id = ?", (member_id,)
+    ).fetchone()
+    if target is None or target[0] != "Inhaber" or target[1] != "active":
+        return
+    other = connection.execute(
+        "SELECT 1 FROM organisation_members "
+        "WHERE role = 'Inhaber' AND status = 'active' AND id <> ? LIMIT 1",
+        (member_id,),
+    ).fetchone()
+    if other is None:
+        raise ValueError("Mindestens ein aktiver Inhaber muss bleiben.")
 
 
 def set_member_role(member_id: int, role: str, db: str | None = None) -> bool:
+    actor = scope_auth.require_owner(db)
+    if actor is not None and actor["id"] == int(member_id):
+        raise ValueError("Die eigene Rolle kann nicht geändert werden.")
     if role not in ROLE_OPTIONS:
         raise ValueError("Unbekannte Rolle.")
     with sqlite3.connect(_db(db)) as connection:
+        _begin_owner_write(connection, actor)
+        if role != "Inhaber":
+            _guard_last_owner(connection, int(member_id))
         cursor = connection.execute(
             "UPDATE organisation_members SET role = ?, updated_at = CURRENT_TIMESTAMP "
-            "WHERE id = ? AND is_self = 0",
-            (role, int(member_id)),
+            "WHERE id = ? AND (is_self = 0 OR ?)",
+            (role, int(member_id), actor is not None),
         )
     return cursor.rowcount == 1
 
 
 def remove_member(member_id: int, db: str | None = None) -> bool:
     """Remove an active non-self member; pending invitations are retained."""
+    actor = scope_auth.require_owner(db)
+    if actor is not None and actor["id"] == int(member_id):
+        raise ValueError("Das eigene Konto kann nicht entfernt werden.")
     with sqlite3.connect(_db(db)) as connection:
+        _begin_owner_write(connection, actor)
+        _guard_last_owner(connection, int(member_id))
         cursor = connection.execute(
             "DELETE FROM organisation_members "
-            "WHERE id = ? AND is_self = 0 AND status = 'active'",
-            (int(member_id),),
+            "WHERE id = ? AND (is_self = 0 OR ?) AND status = 'active'",
+            (int(member_id), actor is not None),
         )
+        if cursor.rowcount == 1:
+            connection.execute("DELETE FROM scope_access WHERE member_id=?", (int(member_id),))
     return cursor.rowcount == 1
 
 
 def resend_invite(member_id: int, db: str | None = None) -> bool:
+    actor = scope_auth.require_owner(db)
     with sqlite3.connect(_db(db)) as connection:
+        scope_auth.check_transaction(connection, actor, owner=True)
         cursor = connection.execute(
             "UPDATE organisation_members SET activity = 'erneut vorgemerkt', "
             "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'",
             (int(member_id),),
         )
+        if scope_auth.enabled() and cursor.rowcount == 1:
+            scope_auth.grant(connection, int(member_id))
     return cursor.rowcount == 1
+
+
+def send_invitation(member_id: int, db: str | None = None) -> str:
+    """Send a notification, not a credential; login still requires email OTP."""
+    scope_auth.require_owner(db)
+    if not scope_auth.enabled():
+        raise ValueError("Persönliche Konten sind noch nicht aktiviert.")
+    config = ResendConfig.from_environment()
+    url = os.environ.get("SCOPE_PUBLIC_URL", "").rstrip("/")
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Scope-Adresse ist noch nicht konfiguriert.")
+    with sqlite3.connect(_db(db)) as con:
+        row = con.execute("SELECT m.email,a.invited_until FROM organisation_members m "
+                          "JOIN scope_access a ON a.member_id=m.id WHERE m.id=? AND m.status='pending'",
+                          (member_id,)).fetchone()
+        if not row:
+            raise ValueError("Einladung nicht mehr verfügbar.")
+        message_id = email_outbox.enqueue(
+            con, event_key=f"invitation/{member_id}/{row[1]}", recipient=row[0],
+            sender=config.sender, subject="Ihre Einladung zu Scope",
+            body=f"Sie wurden zu Scope eingeladen.\n\nÖffnen Sie {url} und fordern Sie mit dieser E-Mail-Adresse einen Anmeldecode an.\n\nDie Einladung ist sieben Tage gültig.",
+        )
+    status = email_outbox.deliver(_db(db), message_id, config=config)
+    with sqlite3.connect(_db(db)) as con:
+        activity = {"accepted": "E-Mail von Resend angenommen", "uncertain": "Versand unbestätigt",
+                    "review": "Versand manuell prüfen", "sending": "Versand läuft"}[status]
+        con.execute("UPDATE organisation_members SET activity=? WHERE id=?", (activity, member_id))
+    return status
+
+
+def revoke_invite(member_id: int, db: str | None = None) -> None:
+    actor = scope_auth.require_owner(db)
+    with sqlite3.connect(_db(db)) as con:
+        scope_auth.check_transaction(con, actor, owner=True)
+        con.execute("DELETE FROM scope_access WHERE member_id=? AND EXISTS "
+                    "(SELECT 1 FROM organisation_members WHERE id=? AND status='pending')",
+                    (member_id, member_id))
+        con.execute("UPDATE organisation_members SET activity='Einladung widerrufen' WHERE id=? AND status='pending'", (member_id,))
 
 
 def account_summary(db: str | None = None) -> dict[str, object]:
@@ -221,6 +333,8 @@ def account_summary(db: str | None = None) -> dict[str, object]:
     members = load_members(db)
     active = [member for member in members if not member["pending"]]
     current = next((member for member in active if member["is_self"]), None)
+    if scope_auth.enabled():
+        current = scope_auth.current(db)
     org_name = str(profile["name"]).strip()
     if current:
         short_name = str(current["name"]).strip() or str(current["email"])
@@ -346,14 +460,20 @@ div[data-testid="stDialog"]:has(.scope-org-modal) button[aria-label="Close"] svg
 [class*="st-key-org_member_row_"] > [data-testid="stElementContainer"] {
   flex: 0 0 auto !important; width: auto !important; min-width: 0 !important;
 }
+/* Identity keeps a readable minimum; the activity note shrinks first and the
+   pending-row buttons wrap under it, so a long status never hides the e-mail. */
 [class*="st-key-org_member_row_"] > div:has(.scope-org-member-name) {
-  flex: 1 1 0 !important;
+  flex: 1 1 200px !important; min-width: 180px !important;
+}
+[class*="st-key-org_member_row_"] > div:has(.scope-org-member-activity) {
+  flex: 0 1 auto !important; min-width: 0 !important;
 }
 [class*="st-key-org_member_row_"] > div:has([data-testid="stSelectbox"]) {
   flex: 0 0 102px !important; width: 102px !important;
 }
 .scope-org-member-avatar--pending { background: #f2f2f5; color: #9a9aa6; }
-.scope-org-member-email { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scope-org-member-email,
+.scope-org-member-activity { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Only the body scrolls; the reference keeps Close and Fertig available. */
 .st-key-org_modal_content {
@@ -381,12 +501,13 @@ div[data-testid="stDialog"]:has(.scope-org-modal) button[aria-label="Close"] svg
 
 def _header(view: str, profile: dict[str, object], members: list[dict[str, object]]) -> str:
     active = sum(not member["pending"] for member in members)
+    access = "Persönliche Konten" if scope_auth.enabled() else "Gemeinsamer Zugang"
     return f"""
 <div class="scope-org-modal scope-org-modal--{escape(view)}">
   <div class="scope-org-header">
     <div class="scope-org-kicker">{'Einstellungen' if view == 'settings' else 'Team'}</div>
     <div class="scope-org-title">{escape(str(profile['name']).strip() or 'Organisation')}</div>
-    <div class="scope-org-subtitle">{active} aktive Mitglieder · Gemeinsamer Zugang</div>
+    <div class="scope-org-subtitle">{active} aktive Mitglieder · {access}</div>
   </div>
 </div>
 """
@@ -414,17 +535,35 @@ def _save_member_role(member_id: int, widget_key: str, db: str | None) -> None:
 def _submit_invite(db: str | None) -> None:
     """Clear a successful invite before Streamlit recreates the input widget."""
     try:
-        invite_member(
+        member_id = invite_member(
             st.session_state.get("org_invite_email", ""),
             st.session_state.get("org_invite_role", "Bearbeiter"),
             db=db,
         )
+        if scope_auth.enabled():
+            try:
+                send_invitation(member_id, db)
+            except (EmailDeliveryError, ValueError) as error:
+                st.session_state["org_error"] = f"Einladung gespeichert. {error}"
+                return
     except ValueError as error:
         st.session_state["org_error"] = str(error)
     else:
         st.session_state.pop("org_error", None)
         st.session_state["org_invite_email"] = ""
         st.session_state["org_invite_success"] = True
+
+
+def _resend_pending(member_id: int, db: str | None) -> None:
+    """Refresh a pending invitation and, with personal accounts, notify again."""
+    try:
+        resend_invite(member_id, db)
+        if scope_auth.enabled():
+            send_invitation(member_id, db)
+        st.toast("Einladungsstatus aktualisiert.")
+    except (ValueError, EmailDeliveryError) as error:
+        st.session_state["org_error"] = str(error)
+    st.rerun()
 
 
 def _render_team(db: str | None) -> None:
@@ -467,7 +606,7 @@ def _render_team(db: str | None) -> None:
                         )
                         pending = (
                             '<span class="scope-org-pending">Einladung offen</span>'
-                            if member["pending"] else ""
+                            if member["pending"] and not member["revoked"] else ""
                         )
                         st.html(
                             '<div style="min-width:0;flex:1">'
@@ -480,21 +619,40 @@ def _render_team(db: str | None) -> None:
                         st.selectbox(
                             "Rolle", ROLE_OPTIONS,
                             key=role_key,
-                            label_visibility="collapsed", disabled=bool(member["is_self"]),
+                            label_visibility="collapsed",
+                            disabled=bool(member["is_self"] or member["last_owner"]),
                             on_change=_save_member_role,
                             args=(member_id, role_key, db),
                         )
-                        if member["pending"]:
-                            if st.button("Erneut vormerken", key=f"org_resend_{member_id}"):
-                                resend_invite(member_id, db)
-                                st.toast("Einladung erneut vorgemerkt.")
+                        if member["revoked"]:
+                            # Re-inviting grants access again and sends a new
+                            # e-mail, so say so instead of offering "check
+                            # delivery" and a no-op "revoke" on a dead invite.
+                            if st.button("Erneut einladen", key=f"org_reinvite_{member_id}"):
+                                _resend_pending(member_id, db)
+                        elif member["pending"]:
+                            if st.button("Versand prüfen / erneut versuchen" if scope_auth.enabled() else "Erneut vormerken", key=f"org_resend_{member_id}"):
+                                _resend_pending(member_id, db)
+                            if scope_auth.enabled() and st.button("Widerrufen", key=f"org_revoke_{member_id}"):
+                                revoke_invite(member_id, db)
                                 st.rerun()
                         elif not member["is_self"]:
-                            if st.button("Entfernen", key=f"org_remove_{member_id}"):
-                                remove_member(member_id, db)
+                            # Disabled, not hidden, for the sole active owner, so
+                            # the roster shows why nothing can happen to that row.
+                            if st.button("Entfernen", key=f"org_remove_{member_id}",
+                                         disabled=bool(member["last_owner"])):
+                                try:
+                                    # Re-checked in the database: this dialog may be
+                                    # stale after another session changed roles.
+                                    remove_member(member_id, db)
+                                except ValueError as error:
+                                    st.session_state["org_error"] = str(error)
                                 st.rerun()
                         else:
                             st.html('<span style="width:1px"></span>')
+        if scope_auth.enabled():
+            st.caption("Inhaber verwalten das Team. Bearbeiter können Daten ändern. Leseweise erlaubt nur Lesezugriff.")
+            return
         st.html(
             '<p class="scope-org-roles">Vorgesehene Rollen: Inhaber · Bearbeiter · '
             'Leseweise. Rollen werden gespeichert, steuern beim gemeinsamen '
@@ -562,7 +720,7 @@ def _render_settings(profile: dict[str, object], data_as_of: str,
         st.html('<div class="scope-org-section-title" style="margin-top:10px">Organisation</div>')
         _setting_toggle("weekly_digest", "Wöchentliche Zusammenfassung", "Noch nicht verfügbar. Automatischer E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
         _setting_toggle("due_reminders", "Erinnerung bei fälligen Kontakten", "Noch nicht verfügbar. Fälligkeiten erscheinen im Board; E-Mail-Versand ist noch nicht eingerichtet.", profile, db)
-        _setting_toggle("enforce_2fa", "Zwei-Faktor-Authentifizierung erzwingen", "Noch nicht verfügbar. Keine aktive 2FA ohne persönliche Benutzerkonten.", profile, db)
+        _setting_toggle("enforce_2fa", "Zwei-Faktor-Authentifizierung erzwingen", "Noch nicht verfügbar. Keine aktive 2FA: Die Prüfung eines zweiten Faktors ist noch nicht eingerichtet.", profile, db)
         _setting_toggle("shared_calculations", "Kalkulationen teamweit sichtbar", "Noch nicht verfügbar. Annahmen bleiben derzeit pro Sitzung; keine Freigabesteuerung.", profile, db)
         st.html(
             '<div class="scope-org-setting-copy scope-org-license"><div>'
@@ -574,6 +732,11 @@ def _render_settings(profile: dict[str, object], data_as_of: str,
 
 
 def render(data_as_of: str, view: str = "team", db: str | None = None) -> None:
+    try:
+        scope_auth.require_owner(db)
+    except scope_auth.AuthError as error:
+        st.info(str(error))
+        return
     view = "settings" if view == "settings" else "team"
     profile = load_profile(db)
     members = load_members(db)
@@ -594,11 +757,13 @@ def _close_dialog() -> None:
 @st.dialog("Organisation", width="large", on_dismiss=_close_dialog)
 def _dialog(data_as_of: str) -> None:
     view = st.session_state.get(DIALOG_VIEW, "team")
-    note = (
-        "Änderungen gelten für die ganze Organisation."
-        if view == "settings"
-        else "Einladungen werden gespeichert; E-Mail-Versand benötigt persönliche Benutzerkonten."
-    )
+    if view == "settings":
+        note = "Änderungen gelten für die ganze Organisation."
+    elif scope_auth.enabled():
+        note = ("Eingeladene erhalten eine E-Mail und melden sich mit einem Anmeldecode an. "
+                "Einladungen gelten sieben Tage.")
+    else:
+        note = "Einladungen werden gespeichert; E-Mail-Versand benötigt persönliche Benutzerkonten."
     with st.container(key="org_modal_content"):
         render(data_as_of, view)
         with st.container(

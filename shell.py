@@ -118,7 +118,8 @@ def _account_chip() -> None:
             st.rerun()
         st.html('<div class="scope-account-menu-separator"></div>')
         if st.button("Abmelden", key="app_shell_account_logout", width="stretch"):
-            st.session_state.pop("_ok", None)
+            import scope_auth
+            scope_auth.logout()
             st.session_state.pop(organisation.DIALOG_OPEN, None)
             st.session_state.pop(organisation.DIALOG_VIEW, None)
             st.rerun()

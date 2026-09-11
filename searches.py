@@ -29,6 +29,8 @@ def save(name: str, filters: dict, db: str | None = None) -> None:
     dozen near-duplicate "Wohnzone" searches would defeat the picker as
     surely as never saving at all.
     """
+    import scope_auth
+    actor = scope_auth.require_write(db)
     clean = str(name).strip()
     if not clean:
         raise ValueError("name must not be empty")
@@ -40,6 +42,7 @@ def save(name: str, filters: dict, db: str | None = None) -> None:
         raise ValueError(f"filters is not JSON-serialisable: {exc}") from None
 
     with sqlite3.connect(db or paths.DB) as connection:
+        scope_auth.check_transaction(connection, actor)
         # INSERT OR REPLACE, not UPDATE-or-INSERT: `name` is the primary key,
         # and replacing the whole row (rather than merging into it) is what
         # makes saving under an existing name mean "this search now looks
@@ -81,7 +84,10 @@ def load(db: str | None = None) -> pd.DataFrame:
 
 def delete(name: str, db: str | None = None) -> int:
     """Remove one saved search. Returns the number of rows removed (0 or 1)."""
+    import scope_auth
+    actor = scope_auth.require_write(db)
     with sqlite3.connect(db or paths.DB) as connection:
+        scope_auth.check_transaction(connection, actor)
         cursor = connection.execute(
             "DELETE FROM saved_searches WHERE name = ?", (str(name).strip(),)
         )

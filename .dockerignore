@@ -5,3 +5,7 @@ __pycache__/
 .git/
 *.log
 out/
+.env
+.env.*
+.streamlit/secrets.toml
+artifacts/

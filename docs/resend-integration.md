@@ -18,10 +18,12 @@ https://resend.com/docs/dashboard/emails/idempotency-keys
 
 ## Current boundaries
 
-This transport is not yet connected to invitation UI or a reminder scheduler.
-No actual email has been sent. Personal identity architecture is awaiting the
-choice between separate Scope accounts and explicitly invited Normiq identities.
-Existing shared-password access remains in place. Roles and 2FA remain unavailable.
+The transport is wired to invitation notification through the durable outbox in
+`email_outbox.py` and `organisation.send_invitation`; it is still not connected to
+a reminder/digest scheduler. No actual email has been sent, because no live
+provider configuration or authorized recipient has been used. Personal identity
+was resolved as a separate Scope Supabase project, and roles are enforced in
+personal mode only. 2FA and scheduled digest/reminders remain unavailable.
 No deployment or push performed.
 
 ## Verification

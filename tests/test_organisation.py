@@ -112,6 +112,48 @@ class OrganisationPersistenceTest(unittest.TestCase):
         self.assertTrue(organisation.remove_member(member_id, self.database))
         self.assertEqual(organisation.load_members(self.database), [])
 
+    def _activate(self, member_id):
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "UPDATE organisation_members SET status = 'active' WHERE id = ?",
+                (member_id,),
+            )
+
+    def test_last_active_owner_cannot_be_demoted_or_removed(self):
+        owner = organisation.invite_member("owner@example.ch", "Inhaber", db=self.database)
+        self._activate(owner)
+        # A pending owner invitation does not count: nobody can act with it yet.
+        organisation.invite_member("pending@example.ch", "Inhaber", db=self.database)
+        for operation in (
+            lambda: organisation.set_member_role(owner, "Bearbeiter", self.database),
+            lambda: organisation.remove_member(owner, self.database),
+        ):
+            with self.assertRaisesRegex(ValueError, "Inhaber"):
+                operation()
+        member = organisation.load_members(self.database)[0]
+        self.assertEqual((member["role"], member["status"]), ("Inhaber", "active"))
+
+        second = organisation.invite_member("second@example.ch", "Inhaber", db=self.database)
+        self._activate(second)
+        self.assertTrue(organisation.set_member_role(owner, "Bearbeiter", self.database))
+        with self.assertRaisesRegex(ValueError, "Inhaber"):
+            organisation.remove_member(second, self.database)
+        self.assertTrue(organisation.remove_member(owner, self.database))
+        flags = {m["id"]: m["last_owner"] for m in organisation.load_members(self.database)}
+        self.assertTrue(flags[second])
+        self.assertEqual(sum(flags.values()), 1)
+
+    def test_last_owner_flag_marks_only_the_sole_active_owner(self):
+        owner = organisation.invite_member("owner@example.ch", "Inhaber", db=self.database)
+        editor = organisation.invite_member("editor@example.ch", db=self.database)
+        self.assertFalse(organisation.load_members(self.database)[0]["last_owner"])
+        self._activate(owner)
+        self._activate(editor)
+        flags = {m["id"]: m["last_owner"] for m in organisation.load_members(self.database)}
+        self.assertEqual(flags, {owner: True, editor: False})
+        organisation.set_member_role(editor, "Inhaber", self.database)
+        self.assertFalse(any(m["last_owner"] for m in organisation.load_members(self.database)))
+
     def test_duplicate_pending_invite_is_refreshed_not_duplicated(self):
         first = organisation.invite_member("a@example.ch", db=self.database)
         second = organisation.invite_member(
@@ -280,6 +322,25 @@ class OrganisationDialogTest(unittest.TestCase):
         rendered += " " + " ".join(button.label or "" for button in app.button)
         for invented in ("Brunner", "Sutter", "Iten", "Meili", "Hochbau AG"):
             self.assertNotIn(invented, rendered)
+
+    def test_last_owner_controls_lock_and_a_stale_removal_is_dropped(self):
+        owner = organisation.invite_member("owner@example.ch", "Inhaber", db=self.database)
+        other = organisation.invite_member("other@example.ch", "Inhaber", db=self.database)
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("UPDATE organisation_members SET status = 'active'")
+        app = self._open("team")
+        self.assertFalse(app.selectbox(key=f"org_member_role_{owner}").disabled)
+        self.assertFalse(app.button(key=f"org_remove_{owner}").disabled)
+        # Another session demotes the other owner; this dialog is now stale.
+        organisation.set_member_role(other, "Leseweise", self.database)
+        app.button(key=f"org_remove_{owner}").click().run()
+        self.assertFalse(app.exception)
+        member = next(m for m in organisation.load_members(self.database) if m["id"] == owner)
+        self.assertEqual((member["role"], member["status"]), ("Inhaber", "active"))
+        # Re-rendered from the database, the sole owner's controls are locked.
+        self.assertTrue(app.selectbox(key=f"org_member_role_{owner}").disabled)
+        self.assertTrue(app.button(key=f"org_remove_{owner}").disabled)
+        self.assertFalse(app.button(key=f"org_remove_{other}").disabled)
 
     def test_stale_dialog_does_not_overwrite_another_sessions_role_change(self):
         member_id = organisation.invite_member("qa@example.com", db=self.database)

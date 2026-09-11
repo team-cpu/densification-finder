@@ -727,6 +727,8 @@ def failed_egrids(cache):
 def check_oereb(egrids, progress=None):
     """One call per parcel, eight at a time. Results are written as they arrive,
     so an interrupted run keeps what it already paid for."""
+    import scope_auth
+    scope_auth.require_write(paths.DB)
     con = sqlite3.connect(paths.DB)
     done = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
@@ -1786,6 +1788,8 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
 
     if run:
         import ingest
+        import scope_auth
+        scope_auth.require_write(db)
 
         full = ingest.geodata_available()
         bar = st.progress(0.0, "Kaskade" if full else "ÖREB")

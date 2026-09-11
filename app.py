@@ -29,6 +29,7 @@ import merkliste
 import navigation
 import screening
 import shell
+import scope_auth
 import workflow as WF
 
 import ingest as _ingest
@@ -41,16 +42,27 @@ st.set_page_config(page_title="Verdichtungspotenzial Aargau", layout="wide")
 
 
 def gate():
-    """A shared password, active only when APP_PASSWORD is set.
+    """Select personal Scope login or the existing optional shared-password gate.
 
     A Railway URL is public and guessable, and this list is the output of
     Philipp's own research — which parcels to approach before anyone else does.
     Leaving that open would give it away. Unset locally, so development is
     unaffected; set in the deployed environment.
 
-    Deliberately not a login: the brief describes a single-user internal tool,
-    and accounts would be more machinery than it is worth.
+    Personal mode must be explicitly configured and never falls back to shared
+    access when its configuration or identity provider is unavailable.
     """
+    try:
+        personal = scope_auth.enabled()
+    except scope_auth.AuthError as error:
+        st.error(str(error))
+        st.stop()
+    if personal:
+        paths.ensure_db()
+        with sqlite3.connect(DB) as connection:
+            _ingest.schema(connection)
+        scope_auth.gate(DB)
+        return
     secret = os.environ.get("APP_PASSWORD")
     if not secret or st.session_state.get("_ok"):
         return

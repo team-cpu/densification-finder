@@ -28,6 +28,8 @@ import urllib.parse
 import urllib.request
 
 import paths
+import email_outbox
+import scope_auth
 import land_cover as LC
 import workflow as WF
 
@@ -328,6 +330,8 @@ def _rebuild_workflow_check(con):
 
 
 def schema(con):
+    email_outbox.schema(con)
+    scope_auth.schema(con)
     parcel_cols = _column_definitions(COLUMNS)
     run_cols = _column_definitions(RUN_COLUMNS)
     oereb_cols = _column_definitions(OEREB_COLUMNS)
