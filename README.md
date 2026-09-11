@@ -92,6 +92,11 @@ temporary copy; do not write UAT contacts or invitations into the committed seed
 .venv/bin/streamlit run app.py
 ```
 
+With personal accounts (`SCOPE_AUTH_MODE=personal`) the app needs the
+variables listed in `.env.example` in its process environment; it does not
+read dotenv files. `scripts/run-local.sh` exports `.env.local` and starts
+Streamlit on `127.0.0.1:${SCOPE_PORT:-8521}`.
+
 `results.sqlite` is committed — 36,274 candidates across 165 municipalities
 (20,659 built and 15,615 vacant) — so a fresh clone opens a working list without
 downloading anything. **Neu berechnen** re-runs the cascade over the stored
