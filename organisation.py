@@ -85,7 +85,7 @@ def load_profile(db: str | None = None) -> dict[str, object]:
         return {
             **{field: "" for field in PROFILE_TEXT_FIELDS},
             "weekly_digest": False, "due_reminders": False,
-            "enforce_2fa": False, "shared_calculations": True, "updated_at": "",
+            "enforce_2fa": False, "shared_calculations": False, "updated_at": "",
         }
     result = dict(row)
     for field in PROFILE_BOOLEAN_FIELDS:
@@ -735,7 +735,7 @@ def _render_settings(profile: dict[str, object], data_as_of: str,
             _setting_toggle("enforce_2fa", "Zwei-Faktor-Authentifizierung erzwingen", "Nach dem E-Mail-Code zusätzlich per Authenticator-App (TOTP). Gilt sofort für alle Mitglieder.", profile, db, live=True)
         else:
             _setting_toggle("enforce_2fa", "Zwei-Faktor-Authentifizierung erzwingen", "Nur mit persönlichen Konten verfügbar. Beim gemeinsamen Zugang gibt es keinen zweiten Faktor.", profile, db)
-        _setting_toggle("shared_calculations", "Kalkulationen teamweit sichtbar", "Noch nicht verfügbar. Annahmen bleiben derzeit pro Sitzung; keine Freigabesteuerung.", profile, db)
+        _setting_toggle("shared_calculations", "Kalkulationen teamweit sichtbar", "Gespeicherte Team-Versionen pro Parzelle. Inhaber und Bearbeiter speichern; alle Mitglieder können laden. Entwürfe bleiben persönlich.", profile, db, live=scope_auth.enabled())
         st.html(
             '<div class="scope-org-setting-copy scope-org-license"><div>'
             '<div class="scope-org-setting-name">Datenlizenz</div>'

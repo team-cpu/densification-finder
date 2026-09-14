@@ -41,7 +41,7 @@ class ResendConfig:
 
 def send_email(
     *, recipient: str, subject: str, text: str, idempotency_key: str,
-    config: ResendConfig | None = None,
+    config: ResendConfig | None = None, html: str | None = None,
 ) -> str:
     """Send once and return provider id, never equating acceptance with delivery.
 
@@ -59,7 +59,8 @@ def send_email(
     config = config or ResendConfig.from_environment()
     request = Request(
         "https://api.resend.com/emails",
-        data=json.dumps({"from": config.sender, "to": [recipient], "subject": subject, "text": text}).encode(),
+        data=json.dumps({"from": config.sender, "to": [recipient], "subject": subject, "text": text,
+                         **({"html": html} if html is not None else {})}).encode(),
         headers={"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json",
                  "Idempotency-Key": idempotency_key, "User-Agent": "Scope/1.0"},
         method="POST",

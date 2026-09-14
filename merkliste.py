@@ -266,7 +266,7 @@ def page(parcels, decisions, db, price_of):
             )
             st.subheader("Gemerkte Parzellen")
             st.caption(
-                f"{ACQ._swiss(len(leads))} Parzellen · manuell gepflegt. "
+                f"{ACQ._swiss(len(leads))} {'Parzelle' if len(leads) == 1 else 'Parzellen'} · manuell gepflegt. "
                 "Kontaktstand und Wiedervorlagen werden in der Akquisition geführt."
             )
         with header_action_column.container(

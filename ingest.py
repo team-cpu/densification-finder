@@ -199,7 +199,7 @@ ORGANISATION_PROFILE_COLUMNS = [
     ("weekly_digest", "INTEGER NOT NULL DEFAULT 0"),
     ("due_reminders", "INTEGER NOT NULL DEFAULT 0"),
     ("enforce_2fa", "INTEGER NOT NULL DEFAULT 0"),
-    ("shared_calculations", "INTEGER NOT NULL DEFAULT 1"),
+    ("shared_calculations", "INTEGER NOT NULL DEFAULT 0"),
     ("updated_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
 ]
 
@@ -416,6 +416,12 @@ def schema(con):
         "INSERT OR IGNORE INTO schema_migrations (name) VALUES ('mail_switches_opt_in')"
     ).rowcount == 1:
         con.execute("UPDATE organisation_profile SET weekly_digest = 0, due_reminders = 0")
+    import shared_calculations
+    shared_calculations.schema(con)
+    if con.execute(
+        "INSERT OR IGNORE INTO schema_migrations (name) VALUES ('shared_calculations_opt_in')"
+    ).rowcount == 1:
+        con.execute("UPDATE organisation_profile SET shared_calculations = 0")
     # After widening, because the copy carries whichever columns the widened
     # table has; before the indexes, because DROP TABLE takes its indexes with
     # it and the CREATE INDEX statements below put them back.

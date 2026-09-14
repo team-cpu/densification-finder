@@ -371,9 +371,15 @@ def current(db: str | None = None) -> dict:
     return member
 
 
+def _require_second_factor(member: dict, required: bool) -> None:
+    if (required or member.get("mfa_factor")) and not st.session_state.get("scope_mfa"):
+        raise AuthError("Bitte zuerst den zweiten Faktor bestätigen.")
+
+
 def require_owner(db: str | None = None) -> dict | None:
     if enabled():
         member = current(db)
+        _require_second_factor(member, mfa_required(db or paths.DB))
         if member["role"] != "Inhaber":
             raise AuthError("Nur Inhaber können das Team und die Einstellungen ändern.")
         return member
@@ -384,6 +390,7 @@ def require_write(db: str | None = None) -> dict | None:
     if enabled():
         try:
             member = current(db)
+            _require_second_factor(member, mfa_required(db or paths.DB))
             if member["role"] not in ("Inhaber", "Bearbeiter"):
                 raise AuthError("Lesezugriff: Änderungen sind nicht erlaubt.")
             return member
@@ -399,6 +406,8 @@ def check_transaction(con: sqlite3.Connection, actor: dict | None, *, owner: boo
     if actor is None:
         return
     con.execute("BEGIN IMMEDIATE")
+    policy = con.execute("SELECT enforce_2fa FROM organisation_profile WHERE id=1").fetchone()
+    _require_second_factor(actor, bool(policy and policy[0]))
     row = con.execute("SELECT m.role FROM organisation_members m JOIN scope_access a "
                       "ON a.member_id=m.id WHERE m.id=?", (actor["id"],)).fetchone()
     allowed = ("Inhaber",) if owner else ("Inhaber", "Bearbeiter")

@@ -34,9 +34,13 @@ def schema(connection: sqlite3.Connection) -> None:
         )
     """)
 
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(email_outbox)")}
+    if "body_html" not in columns:
+        connection.execute("ALTER TABLE email_outbox ADD COLUMN body_html TEXT")
+
 
 def enqueue(connection: sqlite3.Connection, *, event_key: str, recipient: str,
-            sender: str, subject: str, body: str) -> str:
+            sender: str, subject: str, body: str, body_html: str | None = None) -> str:
     """Join caller's transaction, allowing domain changes and email to be atomic.
 
     An event key represents one authorized notification. Reusing it with a
@@ -47,14 +51,15 @@ def enqueue(connection: sqlite3.Connection, *, event_key: str, recipient: str,
     payload = (recipient, sender, subject, body)
     if any(not value.strip() for value in payload):
         raise ValueError("Email fields are required")
+    payload = (*payload, body_html)
     message_id = uuid.uuid4().hex
     connection.execute(
-        "INSERT INTO email_outbox (id,event_key,recipient,sender,subject,body,created_at) "
-        "VALUES (?,?,?,?,?,?,?) ON CONFLICT(event_key) DO NOTHING",
+        "INSERT INTO email_outbox (id,event_key,recipient,sender,subject,body,body_html,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO NOTHING",
         (message_id, event_key, *payload, time.time()),
     )
     row = connection.execute(
-        "SELECT id,recipient,sender,subject,body FROM email_outbox WHERE event_key=?",
+        "SELECT id,recipient,sender,subject,body,body_html FROM email_outbox WHERE event_key=?",
         (event_key,),
     ).fetchone()
     if tuple(row[1:]) != payload:
@@ -102,6 +107,7 @@ def deliver(db: str, message_id: str, *, config: ResendConfig | None = None) -> 
             recipient=row["recipient"], subject=row["subject"], text=row["body"],
             idempotency_key=f"scope/{message_id}",
             config=ResendConfig(config.api_key, row["sender"]),
+            **({"html": row["body_html"]} if row["body_html"] is not None else {}),
         )
         status = "accepted"
     except (EmailDeliveryError, ValueError):

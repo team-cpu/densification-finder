@@ -100,3 +100,21 @@ def test_event_identity_and_transaction_rollback(queued):
             raise RuntimeError("domain transaction failed")
     with sqlite3.connect(db) as con:
         assert con.execute("SELECT COUNT(*) FROM email_outbox").fetchone()[0] == 1
+
+
+def test_html_is_persisted_and_retried_unchanged(queued, monkeypatch):
+    db, _ = queued
+    with sqlite3.connect(db) as con:
+        message = outbox.enqueue(con, event_key='html/1', recipient='qa@example.com',
+                                 sender='scope@example.com', subject='Scope', body='Plain', body_html='<p>HTML</p>')
+    calls = []
+    def send(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise EmailDeliveryError('timeout')
+        return 'provider'
+    monkeypatch.setattr(outbox, 'send_email', send)
+    assert outbox.deliver(db, message, config=CONFIG) == 'uncertain'
+    assert outbox.deliver(db, message, config=CONFIG) == 'accepted'
+    assert calls[0] == calls[1]
+    assert calls[0]['html'] == '<p>HTML</p>'

@@ -202,11 +202,12 @@ def test_enforce_toggle_is_live_for_owners_in_personal_mode(db, monkeypatch):
     assert not app.exception
     toggle = app.toggle(key="org_profile_enforce_2fa")
     assert not toggle.disabled and toggle.value is False
+    assert not app.toggle(key="org_profile_shared_calculations").disabled
     toggle.set_value(True).run()
     assert not app.exception
     assert organisation.load_profile(db)["enforce_2fa"] is True
     assert auth.mfa_required(db) is True
-    assert app.toggle(key="org_profile_shared_calculations_unavailable").disabled
+    assert any("zweiten Faktor" in error.value for error in app.info)
 
 
 def test_transport_reads_large_enrolment_answers(monkeypatch):
@@ -314,3 +315,19 @@ def test_account_menu_offers_setup_or_reset(db, monkeypatch):
         labels = {button.label for button in app.button}
         assert expected in labels
         assert not ({"2FA einrichten", "2FA zurücksetzen"} - {expected}) & labels
+
+
+def test_write_guards_recheck_second_factor_policy(db, monkeypatch):
+    member = auth.verified_member(user(), db, bind=True)
+    monkeypatch.setattr(auth, "current", lambda db=None: member)
+    monkeypatch.setattr(auth.st, "session_state", {})
+    enforce(db)
+    with pytest.raises(auth.AuthError, match="zweiten Faktor"):
+        auth.require_owner(db)
+    with sqlite3.connect(db) as con:
+        with pytest.raises(auth.AuthError, match="zweiten Faktor"):
+            auth.check_transaction(con, member, owner=True)
+    auth.st.session_state['scope_mfa'] = True
+    assert auth.require_owner(db)['id'] == member['id']
+    with sqlite3.connect(db) as con:
+        auth.check_transaction(con, member, owner=True)

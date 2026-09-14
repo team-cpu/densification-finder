@@ -23,6 +23,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 
 import email_outbox
+from email_templates import notification_html
 import organisation
 import paths
 import scope_auth
@@ -153,7 +154,7 @@ def digest_subject(summary: dict) -> str:
 
 def digest_text(summary: dict, url: str) -> str:
     lines = [f"Wochenübersicht KW {int(summary['week'].split('W')[1])} (Stand {_german_date(summary['today'])})", ""]
-    lines.append(f"Board: {summary['total']} Leads")
+    lines.append(f"Board: {summary['total']} {'Lead' if summary['total'] == 1 else 'Leads'}")
     lines.extend(f"- {label}: {count}" for label, count in summary["by_stage"].items())
     lines.append("")
     lines.append(f"Wiedervorlagen: {summary['overdue']} überfällig, "
@@ -173,7 +174,8 @@ def digest_text(summary: dict, url: str) -> str:
 def _recipients(db: str) -> list[tuple[int, str]]:
     with sqlite3.connect(db) as con:
         return [(int(member_id), email) for member_id, email in con.execute(
-            "SELECT id, email FROM organisation_members WHERE status = 'active' AND email <> '' ORDER BY id")]
+            "SELECT m.id, m.email FROM organisation_members m JOIN scope_access a ON a.member_id=m.id "
+            "WHERE m.status = 'active' AND m.email <> '' AND a.auth_id IS NOT NULL AND a.auth_id <> '' ORDER BY m.id")]
 
 
 def run_once(db: str, now: datetime | None = None) -> dict[str, int]:
@@ -220,13 +222,18 @@ def run_once(db: str, now: datetime | None = None) -> dict[str, int]:
                         continue
                     messages.append(email_outbox.enqueue(
                         con, event_key=key, recipient=email, sender=config.sender,
-                        subject=subject, body=body))
+                        subject=subject, body=body, body_html=notification_html(subject, body, url)))
                 elif found[1] != "accepted":
                     messages.append(found[0])
         if not messages:
             continue
-        done[prefix] = sum(
-            email_outbox.deliver(db, message_id, config=config) == "accepted" for message_id in messages)
+        done[prefix] = 0
+        for message_id in messages:
+            # Recheck after enqueue: a grant may have been revoked during planning.
+            with sqlite3.connect(db) as con:
+                recipient = con.execute("SELECT recipient FROM email_outbox WHERE id=?", (message_id,)).fetchone()
+            if recipient and recipient[0] in {email for _, email in _recipients(db)}:
+                done[prefix] += email_outbox.deliver(db, message_id, config=config) == "accepted"
     return done
 
 

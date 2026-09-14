@@ -34,6 +34,8 @@ def db(tmp_path, monkeypatch):
         con.execute("INSERT INTO organisation_members (name, email, role, status) VALUES "
                     "('Anna', 'anna@example.com', 'Bearbeiter', 'active'), "
                     "('Pending', 'pending@example.com', 'Leseweise', 'pending')")
+        con.execute("UPDATE scope_access SET auth_id='owner-verified' WHERE member_id=1")
+        con.execute("INSERT INTO scope_access(member_id,auth_id,invited_until) SELECT id,'anna-verified',0 FROM organisation_members WHERE email='anna@example.com'")
     return database
 
 
@@ -179,4 +181,31 @@ def test_reminder_and_digest_toggles_are_live_in_personal_mode(db, monkeypatch):
     app.toggle(key="org_profile_due_reminders").set_value(True).run()
     assert not app.exception
     assert organisation.load_profile(db)["due_reminders"] is True
-    assert app.toggle(key="org_profile_shared_calculations_unavailable").disabled
+    assert not app.toggle(key="org_profile_shared_calculations").disabled
+
+
+def test_recipients_exclude_legacy_unbound_and_revoked(db):
+    with sqlite3.connect(db) as con:
+        con.execute("INSERT INTO organisation_members(name,email,role,status) VALUES('Legacy','legacy@example.com','Inhaber','active')")
+        con.execute("UPDATE scope_access SET auth_id=NULL WHERE member_id=1")
+    assert [email for _, email in scheduler._recipients(db)] == ['anna@example.com']
+    with sqlite3.connect(db) as con:
+        con.execute("DELETE FROM scope_access")
+    assert scheduler._recipients(db) == []
+
+
+def test_revoked_after_planning_is_not_sent(db, monkeypatch):
+    settings(db, due_reminders=True)
+    save_lead(db, parcel(db), due_date="2026-09-10")
+    original = scheduler.reminder_text
+
+    def revoke(leads, url):
+        with sqlite3.connect(db) as con:
+            con.execute("DELETE FROM scope_access")
+        return original(leads, url)
+
+    monkeypatch.setattr(scheduler, "reminder_text", revoke)
+    send = Mock()
+    monkeypatch.setattr(email_outbox, "send_email", send)
+    assert scheduler.run_once(db, now=at("2026-09-14 07:05")) == {"reminder/2026-09-14": 0}
+    send.assert_not_called()

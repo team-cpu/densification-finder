@@ -15,8 +15,8 @@ latency and a second answer that could differ from the one in the list.
 
 Edits live in `st.session_state` and are keyed by parcel, so switching between
 two parcels and back keeps both sets of assumptions for as long as the page is
-open. They are deliberately not persisted — the brief calls that a separate
-task, and a half-built table of saved analyses is worse than none.
+open. Personal accounts can explicitly save and load a team snapshot when
+the organisation enables shared calculations; unsaved drafts remain local.
 """
 import json
 from functools import partial
@@ -751,6 +751,49 @@ def _remember(pid, name, value):
     return value
 
 
+def _team_load(pid, db):
+    import organisation
+    import scope_auth
+    import shared_calculations as shared
+    if not scope_auth.enabled() or not organisation.load_profile(db)["shared_calculations"]:
+        return False
+    try:
+        saved = shared.load(db, pid)
+        revision_key = f"team_revision::{pid}"
+        st.session_state.setdefault(revision_key, saved["revision"] if saved else 0)
+        st.caption("Team-Kalkulation · Änderungen bleiben ein persönlicher Entwurf, bis Sie speichern.")
+        if saved:
+            st.caption(f"Team-Version {saved['revision']} · gespeichert {saved['updated_at']} UTC")
+            if st.button("Team-Version laden", key=f"team_load::{pid}"):
+                for name, value in saved["payload"]["inputs"].items():
+                    _remember(pid, name, value)
+                    st.session_state[_widget_key(pid, name)] = value
+                st.session_state.setdefault(OVERRIDE_STORE, {})[pid] = saved["payload"]["overrides"]
+                st.session_state[revision_key] = saved["revision"]
+                st.success("Team-Version geladen. Ihre bisherigen Annahmen wurden ersetzt.")
+        return True
+    except (scope_auth.AuthError, ValueError) as error:
+        st.error(str(error))
+        return False
+
+
+def _team_save(pid, db):
+    import scope_auth
+    import shared_calculations as shared
+    member = scope_auth.current(db)
+    if st.button("Für das Team speichern", key=f"team_save::{pid}",
+                 disabled=member["role"] not in ("Inhaber", "Bearbeiter")):
+        payload = {"inputs": {name: _recall(pid, name, None)
+                              for name in (*OWN, "gf", "demolish")},
+                   "overrides": st.session_state.get(OVERRIDE_STORE, {}).get(pid, {})}
+        try:
+            version = shared.save(db, pid, payload, st.session_state[f"team_revision::{pid}"])
+            st.session_state[f"team_revision::{pid}"] = version
+            st.success(f"Team-Version {version} gespeichert.")
+        except (scope_auth.AuthError, ValueError) as error:
+            st.error(str(error))
+
+
 def forget(pid):
     """Reset C's benchmarks and this parcel's overrides, keeping B's inputs.
 
@@ -1459,6 +1502,7 @@ def page(parcels, cache, price_of, db=None):
                 st.toast("Auf die Merkliste gesetzt.")
                 st.rerun()
 
+    team_enabled = _team_load(pid, db_path)
     price_ref = price_of(row)
     extract = extract_of(row, cache)
     zone_rows = _zone_rows(extract) if extract else []
@@ -1589,6 +1633,9 @@ def page(parcels, cache, price_of, db=None):
                     "Auf dieser Parzelle steht kein Gebäude, das abgebrochen werden müsste."
                 ),
             ))
+
+    if team_enabled:
+        _team_save(pid, db_path)
 
     steps = E.residual(
         potential_gf=potential,
