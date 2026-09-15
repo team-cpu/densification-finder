@@ -2,6 +2,12 @@
 
 ## Second attempt — authenticated baseline
 
+### Follow-up result
+
+On 2026-09-14, the scheduled follow-up arrived at 09:52:56 UTC; the UI check completed by 09:59:57 UTC (16:59:57 WIB), about 80 minutes after the baseline. The SAME providerTabId was present and initially displayed Screening and kris. Clicking Merkliste triggered the authentication gate, which replaced the protected UI with Anmelden and: `Sitzung abgelaufen oder Zugang nicht mehr gültig. Bitte erneut anmelden.` No reload, logout, token changes, server restart or provider configuration changes were performed during this check.
+
+Observed result: the previous session was rejected on navigation after the wait and reauthentication was required. This verifies the visible session-rejection behavior, but does not isolate JWT expiry as the provider's exact reason: the application combines expiration and other invalid-access errors into this message. Exact JWT-expiry diagnosis remains unverified. The heartbeat was paused after this single follow-up. This documentation update remains local; no push or production change was made for the check.
+
 At 2026-09-14 08:39:48 UTC (15:39:48 WIB), Codex browser 1 tab 3, providerTabId `browser-use:185f95d1-7579-419c-bf6d-34ec81a4ebb7`, visibly showed Screening and the kris account at localhost:8521. The local server had been started before this fresh login (the earlier server was unavailable). No reload or token change was made after confirming this baseline. Tab marked for handoff to preserve it. Follow-up reactivated for no earlier than 09:45 UTC (16:45 WIB); JWT expiry remains pending, not passed.
 
 ## Physical-phone inbox evidence

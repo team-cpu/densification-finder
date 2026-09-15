@@ -13,7 +13,7 @@ import re
 import sqlite3
 import time
 from http.client import HTTPException
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import unquote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -24,6 +24,18 @@ import paths
 
 class AuthError(ValueError):
     pass
+
+
+class AuthTransientError(AuthError):
+    """Provider unavailable; retain the session but do not authorize access."""
+
+
+class AuthSessionExpired(AuthError):
+    """Provider explicitly reports the token/session as expired."""
+
+
+class AuthAccessRevoked(AuthError):
+    """The local access table no longer grants this identity access."""
 
 
 #: Identity verified from the provider token, kept for one script run only.
@@ -65,6 +77,34 @@ class _NoRedirect(HTTPRedirectHandler):
 _ENDPOINTS = re.compile(r"(otp|verify|user|logout|factors|factors/[A-Za-z0-9-]{1,64}(/challenge|/verify)?)")
 
 
+#: Provider (GoTrue) error codes the app may act on. Only allowlisted codes
+#: from the provider's error JSON are interpreted; the body's raw message is
+#: never surfaced, since it can echo request data such as the token itself.
+_EXPIRED_CODES = frozenset({"session_expired"})
+
+
+def _provider_code(error: HTTPError) -> str | None:
+    """The allowlisted provider error code from a bounded, JSON-only body."""
+    try:
+        raw = error.read(1 << 16)  # Error bodies are tiny; cap regardless.
+        data = json.loads(raw) if raw else {}
+    except (OSError, HTTPException, ValueError):
+        return None
+    code = data.get("error_code") if isinstance(data, dict) else None
+    return code if isinstance(code, str) and code in _EXPIRED_CODES else None
+
+
+def _http_error(error: HTTPError) -> AuthError:
+    """Classify a provider HTTP answer without ever surfacing its body."""
+    if error.code == 429 or error.code >= 500:
+        return AuthTransientError("Anmeldedienst ist vorübergehend nicht erreichbar. Bitte erneut versuchen.")
+    # Expiry is marked only on explicit provider evidence; every other 4xx is
+    # an invalid session, never a transient fault and never authenticated.
+    if error.code in (401, 403) and _provider_code(error) == "session_expired":
+        return AuthSessionExpired("Sitzung abgelaufen. Bitte erneut anmelden.")
+    return AuthError("Anmeldung konnte nicht bestätigt werden. Bitte erneut versuchen.")
+
+
 def api(endpoint: str, payload: dict | None = None, token: str | None = None,
         method: str | None = None) -> dict:
     url, key = configuration()
@@ -85,8 +125,10 @@ def api(endpoint: str, payload: dict | None = None, token: str | None = None,
         if not isinstance(result, dict):
             raise ValueError()
         return result
+    except HTTPError as error:
+        raise _http_error(error) from None
     except (URLError, OSError, HTTPException, ValueError):
-        raise AuthError("Anmeldung konnte nicht bestätigt werden. Bitte erneut versuchen.") from None
+        raise AuthTransientError("Verbindung zum Anmeldedienst fehlgeschlagen. Bitte erneut versuchen.") from None
 
 
 def schema(con: sqlite3.Connection) -> None:
@@ -162,9 +204,9 @@ def verified_member(user: dict, db: str, *, bind: bool = False) -> dict:
         row = con.execute("SELECT m.*,a.auth_id,a.invited_until FROM organisation_members m "
                           "JOIN scope_access a ON a.member_id=m.id WHERE m.email=?", (email,)).fetchone()
         if not row or (row["auth_id"] and row["auth_id"] != auth_id):
-            raise AuthError("Kein gültiger Scope-Zugang.")
+            raise AuthAccessRevoked("Kein gültiger Scope-Zugang.")
         if row["auth_id"] and row["status"] != "active":
-            raise AuthError("Kein gültiger Scope-Zugang.")
+            raise AuthAccessRevoked("Kein gültiger Scope-Zugang.")
         if not row["auth_id"]:
             if not bind or row["invited_until"] <= time.time():
                 raise AuthError("Einladung ist nicht gültig.")
@@ -258,6 +300,8 @@ def mfa_verify(token: str, factor_id: str, code: str, email: str, db: str) -> st
         raise AuthError("Zweiter Faktor konnte nicht geprüft werden. Bitte erneut versuchen.")
     try:
         session = api(f"factors/{factor_id}/verify", {"challenge_id": challenge_id, "code": code}, token)
+    except AuthTransientError:
+        raise  # A transport fault is not a wrong code; let the UI offer a retry.
     except AuthError:
         raise AuthError("Code ist nicht gültig. Bitte den aktuellen Code aus der App eingeben.") from None
     new_token = session.get("access_token")
@@ -415,13 +459,20 @@ def check_transaction(con: sqlite3.Connection, actor: dict | None, *, owner: boo
         raise AuthError("Berechtigung wurde geändert. Bitte die Seite neu laden.")
 
 
-def logout() -> None:
+def _clear_local_session() -> None:
+    """Drop all per-user drafts/data locally, without calling the provider."""
     token = st.session_state.get("scope_access_token")
-    # Clear all per-user drafts/data even if the provider is temporarily offline.
     for key in list(st.session_state):
         del st.session_state[key]
     if token:
         _verified_identities.pop(token, None)
+
+
+def logout() -> None:
+    token = st.session_state.get("scope_access_token")
+    # Clear all per-user drafts/data even if the provider is temporarily offline.
+    _clear_local_session()
+    if token:
         try:
             api("logout", {}, token)
         except AuthError:
@@ -440,9 +491,25 @@ def gate(db: str) -> None:
     if st.session_state.get("scope_access_token"):
         try:
             member = current(db)
+        except AuthTransientError as error:
+            # Temporary provider/network fault: keep token and session, block
+            # protected rendering, and offer a retry instead of logging out.
+            with login_page.card("Persönlicher Zugang für eingeladene Mitglieder."):
+                st.error(str(error))
+                if st.button("Erneut versuchen", key="scope_retry", type="primary", width="stretch"):
+                    st.rerun()
+            st.stop()
+        except AuthSessionExpired as error:
+            # The provider already invalidated the token, so no provider
+            # logout is needed; only the local session is cleared.
+            _clear_local_session()
+            notice = str(error)
+        except AuthAccessRevoked:
+            logout()
+            notice = "Ihr Zugang wurde entzogen. Bitte wenden Sie sich an die Inhaberschaft."
         except AuthError:
             logout()
-            notice = "Sitzung abgelaufen oder Zugang nicht mehr gültig. Bitte erneut anmelden."
+            notice = "Sitzung ist nicht mehr gültig. Bitte erneut anmelden."
         else:
             # Required by the organisation, chosen by the member (a verified
             # factor is always challenged), or being set up from the menu.

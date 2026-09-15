@@ -1,6 +1,7 @@
 import io
 import sqlite3
 from unittest.mock import Mock
+from urllib.error import HTTPError, URLError
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -175,6 +176,132 @@ def test_auth_transport_rejects_redirects_and_redacts_errors(monkeypatch):
     assert "secret-test-token" not in str(error.value)
 
 
+def _http_error(code, body=b""):
+    return HTTPError("https://scope.supabase.co/auth/v1/user", code, "error", {}, io.BytesIO(body))
+
+
+def _provider_opener(monkeypatch, side_effect):
+    monkeypatch.setenv("SCOPE_SUPABASE_URL", "https://scope.supabase.co")
+    monkeypatch.setenv("SCOPE_SUPABASE_ANON_KEY", "test-key")
+    opener = Mock()
+    opener.open.side_effect = side_effect
+    monkeypatch.setattr(auth, "build_opener", lambda handler: opener)
+    return opener
+
+
+def test_http_expired_jwt_is_typed_and_never_leaks_provider_body(monkeypatch):
+    _provider_opener(monkeypatch, _http_error(
+        403, b'{"code":403,"error_code":"session_expired","msg":"secret-test-token is expired"}'))
+    with pytest.raises(auth.AuthSessionExpired) as error:
+        auth.api("user", token="test-token")
+    assert "abgelaufen" in str(error.value)
+    assert "secret-test-token" not in str(error.value)
+    assert isinstance(error.value, auth.AuthError)
+
+
+def test_http_invalid_token_is_invalid_session_not_expired_or_transient(monkeypatch):
+    for body in [b'{"code":401,"error_code":"bad_jwt","msg":"secret-test-token"}',
+                 b'{"code":403,"msg":"secret-test-token"}',
+                 b'not json at all']:
+        _provider_opener(monkeypatch, _http_error(401, body))
+        with pytest.raises(auth.AuthError) as error:
+            auth.api("user", token="test-token")
+        assert type(error.value) is auth.AuthError
+        assert "secret-test-token" not in str(error.value)
+
+
+def test_http_5xx_429_and_network_failures_are_transient(monkeypatch):
+    for failure in [_http_error(500), _http_error(503, b'{"msg":"secret-test-token"}'),
+                    _http_error(429), URLError("secret-test-token"), OSError("down")]:
+        _provider_opener(monkeypatch, failure)
+        with pytest.raises(auth.AuthTransientError) as error:
+            auth.api("user", token="test-token")
+        assert "erneut versuchen" in str(error.value)
+        assert "secret-test-token" not in str(error.value)
+
+
+def _gate_app(db):
+    return AppTest.from_string(
+        f"import scope_auth\nscope_auth.gate({db!r})\nimport streamlit as st\nst.write('PRIVATE DATA')")
+
+
+def test_gate_keeps_session_and_blocks_content_on_transient_failure(db, monkeypatch):
+    auth.verified_member(user(), db, bind=True)
+    monkeypatch.setattr(auth, "configuration", lambda: ("https://scope.supabase.co", "test-key"))
+    api = Mock(side_effect=auth.AuthTransientError(
+        "Anmeldedienst ist vorübergehend nicht erreichbar. Bitte erneut versuchen."))
+    monkeypatch.setattr(auth, "api", api)
+    app = _gate_app(db)
+    app.session_state["scope_access_token"] = "test-token"
+    app.run()
+    assert not app.exception
+    assert not app.markdown  # Protected content is never rendered.
+    assert app.session_state["scope_access_token"] == "test-token"  # Token retained.
+    assert "nicht erreichbar" in app.error[0].value
+    # The retry button re-runs the gate; once the provider recovers, access resumes.
+    api.side_effect = lambda endpoint, payload=None, token=None, method=None: user()
+    next(button for button in app.button if button.label == "Erneut versuchen").click().run()
+    assert not app.exception
+    assert any(item.value == "PRIVATE DATA" for item in app.markdown)
+
+
+def test_gate_clears_expired_session_without_provider_logout(db, monkeypatch):
+    auth.verified_member(user(), db, bind=True)
+    monkeypatch.setattr(auth, "configuration", lambda: ("https://scope.supabase.co", "test-key"))
+    calls = []
+
+    def api(endpoint, payload=None, token=None, method=None):
+        calls.append(endpoint)
+        if endpoint == "user":
+            raise auth.AuthSessionExpired("Sitzung abgelaufen. Bitte erneut anmelden.")
+        return {}
+    monkeypatch.setattr(auth, "api", api)
+    app = _gate_app(db)
+    app.session_state["scope_access_token"] = "test-token"
+    app.run()
+    assert not app.exception
+    assert "scope_access_token" not in app.session_state
+    assert calls == ["user"]  # No pointless logout call for a dead token.
+    assert "abgelaufen" in app.warning[0].value
+    assert not app.markdown
+
+
+def test_gate_reports_revoked_access_and_clears_session(db, monkeypatch):
+    auth.verified_member(user(), db, bind=True)
+    monkeypatch.setattr(auth, "configuration", lambda: ("https://scope.supabase.co", "test-key"))
+    calls = []
+
+    def api(endpoint, payload=None, token=None, method=None):
+        calls.append(endpoint)
+        return user() if endpoint == "user" else {}
+    monkeypatch.setattr(auth, "api", api)
+    with sqlite3.connect(db) as con:
+        con.execute("DELETE FROM scope_access")
+    app = _gate_app(db)
+    app.session_state["scope_access_token"] = "test-token"
+    app.run()
+    assert not app.exception
+    assert "scope_access_token" not in app.session_state
+    assert calls == ["user", "logout"]  # Live provider session is still closed.
+    assert "entzogen" in app.warning[0].value
+    assert not app.markdown
+
+
+def test_gate_clears_invalid_session_with_accurate_notice(db, monkeypatch):
+    auth.verified_member(user(), db, bind=True)
+    monkeypatch.setattr(auth, "configuration", lambda: ("https://scope.supabase.co", "test-key"))
+    api = Mock(side_effect=auth.AuthError("Anmeldung konnte nicht bestätigt werden. Bitte erneut versuchen."))
+    monkeypatch.setattr(auth, "api", api)
+    app = _gate_app(db)
+    app.session_state["scope_access_token"] = "test-token"
+    app.run()
+    assert not app.exception
+    assert "scope_access_token" not in app.session_state
+    assert "nicht mehr gültig" in app.warning[0].value
+    assert "abgelaufen" not in app.warning[0].value
+    assert not app.markdown
+
+
 def test_wrong_codes_are_rate_limited_across_sessions(db, monkeypatch):
     api = Mock(side_effect=auth.AuthError("Invalid code"))
     monkeypatch.setattr(auth, "api", api)
@@ -317,3 +444,10 @@ def test_team_dialog_uses_personal_wording_and_revoked_invite_offers_reinvite_on
     keys = {button.key for button in app.button}
     assert {f"org_resend_{member_id}", f"org_revoke_{member_id}"} <= keys
     assert f"org_reinvite_{member_id}" not in keys
+
+
+@pytest.mark.parametrize('body', [b'{"error_code":[]}', b'{"error_code":{}}', b'{"error_code":null}'])
+def test_malformed_provider_error_code_is_safe(body):
+    from urllib.error import HTTPError
+    error = HTTPError('https://scope.supabase.co/auth/v1/user', 401, 'error', {}, io.BytesIO(body))
+    assert type(auth._http_error(error)) is auth.AuthError
