@@ -77,21 +77,31 @@ class _NoRedirect(HTTPRedirectHandler):
 _ENDPOINTS = re.compile(r"(otp|verify|user|logout|factors|factors/[A-Za-z0-9-]{1,64}(/challenge|/verify)?)")
 
 
-#: Provider (GoTrue) error codes the app may act on. Only allowlisted codes
+#: Provider (GoTrue) evidence of an expired session. Only allowlisted codes
 #: from the provider's error JSON are interpreted; the body's raw message is
-#: never surfaced, since it can echo request data such as the token itself.
+#: matched, never surfaced, since it can echo request data such as the token.
+#: A plain access-token expiry is answered as bad_jwt with the JWT library's
+#: expiry wording (captured live 2026-09-18, docs/2026-09-18-jwt-expiry-
+#: real-provider.md); session_expired is the refresh-grant code, kept as
+#: explicit evidence. bad_jwt without that wording is a tampered/foreign token.
 _EXPIRED_CODES = frozenset({"session_expired"})
+_EXPIRED_JWT_WORDING = "token is expired"
 
 
-def _provider_code(error: HTTPError) -> str | None:
-    """The allowlisted provider error code from a bounded, JSON-only body."""
+def _provider_expired(error: HTTPError) -> bool:
+    """Whether a bounded, JSON-only error body is provider evidence of expiry."""
     try:
         raw = error.read(1 << 16)  # Error bodies are tiny; cap regardless.
         data = json.loads(raw) if raw else {}
     except (OSError, HTTPException, ValueError):
-        return None
-    code = data.get("error_code") if isinstance(data, dict) else None
-    return code if isinstance(code, str) and code in _EXPIRED_CODES else None
+        return False
+    if not isinstance(data, dict):
+        return False
+    code, msg = data.get("error_code"), data.get("msg")
+    if not isinstance(code, str):
+        return False
+    return code in _EXPIRED_CODES or (
+        code == "bad_jwt" and isinstance(msg, str) and _EXPIRED_JWT_WORDING in msg)
 
 
 def _http_error(error: HTTPError) -> AuthError:
@@ -100,7 +110,7 @@ def _http_error(error: HTTPError) -> AuthError:
         return AuthTransientError("Anmeldedienst ist vorübergehend nicht erreichbar. Bitte erneut versuchen.")
     # Expiry is marked only on explicit provider evidence; every other 4xx is
     # an invalid session, never a transient fault and never authenticated.
-    if error.code in (401, 403) and _provider_code(error) == "session_expired":
+    if error.code in (401, 403) and _provider_expired(error):
         return AuthSessionExpired("Sitzung abgelaufen. Bitte erneut anmelden.")
     return AuthError("Anmeldung konnte nicht bestätigt werden. Bitte erneut versuchen.")
 

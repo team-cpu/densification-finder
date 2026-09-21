@@ -18,3 +18,7 @@ Kimi implemented the main change and tests. Astra reviewed the diff, hardened ma
 Reviewed bounded provider error parsing, output redaction, fail-closed rendering, cache clearing and local session cleanup. Raw provider messages are never displayed; only the allowlisted session_expired code establishes the expiry notice. bad_jwt remains generic invalid-session evidence. Malformed list/object/null error codes are covered by regressions. No new dependencies or secrets introduced. Targeted insecure-pattern scan found no eval/exec, shell=True, verify=False or pickle.loads in scope_auth.py.
 
 Bandit/pip-audit and the security skill's referenced .ai checklist/report files were unavailable in prior inspection; code review and regression tests are the fallback. No claim of a full dependency security audit. Physical-phone inbox footer/tap verification remains separate and pending.
+
+## Superseded on 2026-09-18
+
+A live probe showed a plain access-token expiry is answered as `bad_jwt` with the wording `token is expired`, never as `session_expired`; the expiry notice was therefore unreachable. See `docs/2026-09-18-jwt-expiry-real-provider.md` for the evidence and the change.

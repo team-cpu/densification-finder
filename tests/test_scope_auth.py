@@ -199,8 +199,30 @@ def test_http_expired_jwt_is_typed_and_never_leaks_provider_body(monkeypatch):
     assert isinstance(error.value, auth.AuthError)
 
 
+#: Verbatim answer of the live provider (Supabase Auth) to GET /auth/v1/user
+#: with a real session's access token 15 s and 75 s after its `exp` claim,
+#: captured 2026-09-18 (docs/2026-09-18-jwt-expiry-real-provider.md). A plain
+#: JWT expiry is reported as bad_jwt, never as session_expired.
+REAL_EXPIRED_JWT_BODY = (b'{"code":403,"error_code":"bad_jwt","msg":"invalid JWT: unable to parse or '
+                         b'verify signature, token has invalid claims: token is expired"}')
+
+
+def test_http_real_expired_jwt_answer_is_typed_expired(monkeypatch):
+    _provider_opener(monkeypatch, _http_error(403, REAL_EXPIRED_JWT_BODY))
+    with pytest.raises(auth.AuthSessionExpired) as error:
+        auth.api("user", token="test-token")
+    assert "abgelaufen" in str(error.value)
+    assert "invalid JWT" not in str(error.value)  # Provider wording is matched, never shown.
+
+
 def test_http_invalid_token_is_invalid_session_not_expired_or_transient(monkeypatch):
     for body in [b'{"code":401,"error_code":"bad_jwt","msg":"secret-test-token"}',
+                 # A tampered token is bad_jwt too; only the expiry wording marks expiry.
+                 b'{"code":403,"error_code":"bad_jwt","msg":"invalid JWT: unable to parse or verify '
+                 b'signature, signature is invalid"}',
+                 # Expiry wording without the bad_jwt code is not expiry evidence.
+                 b'{"code":403,"msg":"token has invalid claims: token is expired"}',
+                 b'{"code":403,"error_code":"session_not_found","msg":"token is expired"}',
                  b'{"code":403,"msg":"secret-test-token"}',
                  b'not json at all']:
         _provider_opener(monkeypatch, _http_error(401, body))

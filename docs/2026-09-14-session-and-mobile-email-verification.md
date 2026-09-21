@@ -38,3 +38,7 @@ Kimi generated synthetic reminder/digest fixtures from the current `notification
 - Physical-phone inbox footer rendering and tapping the delivered message's button remain unverified. Existing phone screenshots do not include those actions/regions. Completing that check requires the user's phone or new evidence from it.
 
 No application code changed, no email resent, and no push. Synthetic fixture counts are layout data only, not production board evidence.
+
+## Follow-up 2026-09-18
+
+Exact JWT-expiry diagnosis completed against the live provider: token lifetime 3600 s, expiry answered as `403 bad_jwt` ("token is expired"). See `docs/2026-09-18-jwt-expiry-real-provider.md`.
