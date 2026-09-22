@@ -377,6 +377,15 @@ class Engine:
             transport_share = (
                 transport_index.share(g) if transport_index is not None else None
             )
+            # Mostly road, path or rail is not a development lead, so the
+            # exclusion belongs in the engine — a UI filter cannot keep such
+            # parcels out of downstream consumers of these results. An unknown
+            # share (transport layer unavailable) must never exclude on its own.
+            if (
+                transport_share is not None
+                and transport_share >= LC.MIN_TRANSPORT_SHARE
+            ):
+                continue
             # The AGIS map link works by simulated click: info=E,N pops the
             # parcel card at that LV95 coordinate (format from Philipp's own
             # browser, 2026-08-11 — there is no EGRID parameter). The
