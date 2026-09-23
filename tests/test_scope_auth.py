@@ -1,6 +1,7 @@
 import io
+import json
 import sqlite3
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -20,6 +21,7 @@ def db(tmp_path, monkeypatch):
         ingest.schema(con)
     monkeypatch.setenv("SCOPE_AUTH_MODE", "personal")
     monkeypatch.setenv("SCOPE_OWNER_EMAIL", "owner@example.com")
+    monkeypatch.setenv("SCOPE_NORMIQ_AUTH_URL", "https://normiq.example.com")
     auth.bootstrap_owner(database)
     return database
 
@@ -65,21 +67,72 @@ def test_legacy_member_does_not_gain_access(db):
 
 
 def test_requests_throttled_across_sessions_and_unknown_email_does_not_send(db, monkeypatch):
-    api = Mock(return_value={})
-    monkeypatch.setattr(auth, "api", api)
+    normiq_api = Mock(return_value={})
+    monkeypatch.setattr(auth, "normiq_api", normiq_api)
     auth.request_code("unknown@example.com", db)
-    api.assert_not_called()
+    normiq_api.assert_not_called()
     auth.request_code("owner@example.com", db)
     auth.request_code("owner@example.com", db)
-    assert api.call_count == 1
+    assert normiq_api.call_count == 1
+
+
+def test_passcode_request_uses_normiq_api_with_signup_disabled(db, monkeypatch):
+    """Login codes come from Normiq's own passcode API: the request must use
+    `isSignup: false`, which only permits existing Normiq users, so Scope can
+    never silently register strangers in Normiq's auth directory."""
+    normiq_api = Mock(return_value={})
+    monkeypatch.setattr(auth, "normiq_api", normiq_api)
+    auth.request_code("owner@example.com", db)
+    assert normiq_api.call_args_list == [
+        call("request-passcode", {"email": "owner@example.com", "isSignup": False})
+    ]
+
+
+def test_shared_provider_identity_without_scope_access_remains_denied(db):
+    """A valid Normiq Auth identity is authenticated, but without a local
+    `scope_access` invitation it must never enter Scope."""
+    normiq_user = user(
+        "member@example.com", uid="normiq-user-0000-0000-000000000001"
+    )
+    with pytest.raises(auth.AuthError):
+        auth.verified_member(normiq_user, db, bind=True)
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "INSERT INTO organisation_members(email,role,status) "
+            "VALUES ('member@example.com','Bearbeiter','pending')"
+        )
+        member_id = con.execute(
+            "SELECT id FROM organisation_members WHERE email='member@example.com'"
+        ).fetchone()[0]
+        auth.grant(con, member_id)
+    bound = auth.verified_member(normiq_user, db, bind=True)
+    assert bound["role"] == "Bearbeiter"
+    with sqlite3.connect(db) as con:
+        bound_id = con.execute("SELECT auth_id FROM scope_access a JOIN organisation_members m "
+                               "ON m.id=a.member_id WHERE m.email='member@example.com'").fetchone()[0]
+    assert bound_id == normiq_user["id"]  # Immutable provider UUID is bound.
+    with pytest.raises(auth.AuthError):
+        auth.verified_member(user("member@example.com", uid="different-normiq-uuid"), db)
 
 
 def test_verification_checks_provider_user_before_binding(db, monkeypatch):
-    api = Mock(side_effect=[{"access_token": "test-token"}, user()])
+    normiq_api = Mock(return_value={"access_token": "test-token"})
+    monkeypatch.setattr(auth, "normiq_api", normiq_api)
+    api = Mock(return_value=user())
     monkeypatch.setattr(auth, "api", api)
     assert auth.verify_code("owner@example.com", "123456", db) == "test-token"
-    assert api.call_args_list[1].args == ("user",)
-    assert api.call_args_list[1].kwargs == {"token": "test-token"}
+    assert normiq_api.call_args_list == [
+        call("verify-passcode", {"email": "owner@example.com", "passcode": "123456", "rememberMe": False})
+    ]
+    assert api.call_args_list[0].args == ("user",)
+    assert api.call_args_list[0].kwargs == {"token": "test-token"}
+    # Only the locally invited member is bound: an authenticated Normiq
+    # identity without `scope_access` never reaches token validation.
+    api.reset_mock()
+    with pytest.raises(auth.AuthError):
+        auth.verify_code("outsider@example.com", "123456", db)
+    api.assert_not_called()
+    normiq_api.assert_called_once()
 
 
 def test_editor_cannot_change_team_or_settings(db, monkeypatch):
@@ -325,12 +378,12 @@ def test_gate_clears_invalid_session_with_accurate_notice(db, monkeypatch):
 
 
 def test_wrong_codes_are_rate_limited_across_sessions(db, monkeypatch):
-    api = Mock(side_effect=auth.AuthError("Invalid code"))
-    monkeypatch.setattr(auth, "api", api)
+    normiq_api = Mock(side_effect=auth.AuthError("Invalid code"))
+    monkeypatch.setattr(auth, "normiq_api", normiq_api)
     for _ in range(6):
         with pytest.raises(auth.AuthError):
             auth.verify_code("owner@example.com", "123456", db)
-    assert api.call_count == 5
+    assert normiq_api.call_count == 5
 
 
 def test_member_removal_revokes_old_session(db, monkeypatch):
@@ -378,9 +431,9 @@ def test_stale_owner_authorization_is_rechecked_inside_write_transaction(db, mon
 
 def test_login_and_logout_through_widgets_clear_private_session(db, monkeypatch):
     monkeypatch.setattr(auth, "configuration", lambda: ("https://scope.supabase.co", "test-key"))
-    def api(endpoint, payload=None, token=None):
-        if endpoint == "verify":
-            return {"access_token": "test-session-token"}
+    monkeypatch.setattr(auth, "normiq_api",
+                        lambda action, payload: {"access_token": "test-session-token"})
+    def api(endpoint, payload=None, token=None, method=None):
         if endpoint == "user":
             return user()
         return {}
@@ -473,3 +526,125 @@ def test_malformed_provider_error_code_is_safe(body):
     from urllib.error import HTTPError
     error = HTTPError('https://scope.supabase.co/auth/v1/user', 401, 'error', {}, io.BytesIO(body))
     assert type(auth._http_error(error)) is auth.AuthError
+
+
+# --- Normiq custom passcode API ----------------------------------------------
+
+
+@pytest.mark.parametrize('raw', [
+    "",
+    "not a url",
+    "ftp://normiq.example.com",
+    "http://normiq.example.com",                      # plain http off localhost
+    "http://192.168.1.10:3000",                       # plain http off localhost
+    "https://normiq.example.com/path",
+    "https://normiq.example.com/?x=1",
+    "https://normiq.example.com/#frag",
+    "https://user@normiq.example.com",                # userinfo
+    "https://user:pw@normiq.example.com",
+    "https://normiq.example.com:444",
+    "http://localhost",                               # local dev needs a port
+    "http://127.0.0.1:notaport",
+    "http://127.0.0.1:99999",
+    "https://.example.com",
+])
+def test_invalid_normiq_auth_url_is_rejected(db, monkeypatch, raw):
+    monkeypatch.setenv("SCOPE_NORMIQ_AUTH_URL", raw)
+    with pytest.raises(auth.AuthError):
+        auth.normiq_configuration()
+    with pytest.raises(auth.AuthError):
+        auth.request_code("owner@example.com", db)
+
+
+@pytest.mark.parametrize('raw,origin', [
+    ("https://normiq.example.com", "https://normiq.example.com"),
+    ("https://normiq.example.com/", "https://normiq.example.com"),
+    ("https://Normiq.Example.COM", "https://normiq.example.com"),
+    ("http://127.0.0.1:3000", "http://127.0.0.1:3000"),
+    ("http://localhost:3000", "http://localhost:3000"),
+])
+def test_valid_normiq_auth_url_forms(db, monkeypatch, raw, origin):
+    monkeypatch.setenv("SCOPE_NORMIQ_AUTH_URL", raw)
+    assert auth.normiq_configuration() == origin
+
+
+def _normiq_opener(monkeypatch, response, url="https://normiq.example.com"):
+    monkeypatch.setenv("SCOPE_NORMIQ_AUTH_URL", url)
+    opener = Mock()
+    if isinstance(response, Exception):
+        opener.open.side_effect = response
+    else:
+        opener.open.return_value = response
+    monkeypatch.setattr(auth, "build_opener", lambda handler: opener)
+    return opener
+
+
+def test_normiq_api_posts_json_to_passcode_endpoint(monkeypatch):
+    opener = _normiq_opener(monkeypatch, io.BytesIO(b'{"access_token":"t"}'))
+    assert auth.normiq_api("verify-passcode", {"email": "e@x.ch", "passcode": "123456",
+                                               "rememberMe": False}) == {"access_token": "t"}
+    request = opener.open.call_args.args[0]
+    assert request.full_url == "https://normiq.example.com/api/auth/verify-passcode"
+    assert request.method == "POST"
+    assert json.loads(request.data) == {"email": "e@x.ch", "passcode": "123456", "rememberMe": False}
+    assert request.headers["Content-type"] == "application/json"
+
+
+def test_normiq_api_rejects_unknown_action(monkeypatch):
+    _normiq_opener(monkeypatch, io.BytesIO(b"{}"))
+    with pytest.raises(auth.AuthError):
+        auth.normiq_api("anything-else", {})
+
+
+def test_normiq_verify_missing_access_token_is_invalid(db, monkeypatch):
+    normiq_api = Mock(return_value={"unexpected": "shape"})
+    monkeypatch.setattr(auth, "normiq_api", normiq_api)
+    api = Mock()
+    monkeypatch.setattr(auth, "api", api)
+    with pytest.raises(auth.AuthError):
+        auth.verify_code("owner@example.com", "123456", db)
+    api.assert_not_called()  # A token that was never issued is never validated.
+
+
+def test_normiq_verify_error_is_generic_and_never_leaks_body(db, monkeypatch):
+    for failure in [_http_error(400, b'{"error":"user not found: secret-test-token"}'),
+                    _http_error(401, b'{"error":"secret-test-token"}'),
+                    _http_error(410, b'{"error":"expired secret-test-token"}')]:
+        _normiq_opener(monkeypatch, failure)
+        with pytest.raises(auth.AuthError) as error:
+            auth.normiq_api("verify-passcode", {"email": "e@x.ch", "passcode": "123456",
+                                                "rememberMe": False})
+        assert type(error.value) is auth.AuthError
+        assert "nicht gültig oder abgelaufen" in str(error.value)
+        assert "secret-test-token" not in str(error.value)
+
+
+def test_normiq_request_error_is_generic_for_unknown_users(db, monkeypatch):
+    """Normiq only permits existing users; the failure must not reveal whether
+    an email is a Normiq account (no enumeration oracle)."""
+    _normiq_opener(monkeypatch, _http_error(404, b'{"error":"no such Normiq user"}'))
+    with pytest.raises(auth.AuthError) as error:
+        auth.normiq_api("request-passcode", {"email": "e@x.ch", "isSignup": False})
+    assert type(error.value) is auth.AuthError
+    assert "Normiq" not in str(error.value)
+    assert "no such" not in str(error.value)
+
+
+def test_normiq_429_5xx_and_network_failures_are_transient(monkeypatch):
+    for failure in [_http_error(429), _http_error(500, b'{"msg":"secret-test-token"}'),
+                    _http_error(503), URLError("secret-test-token"), OSError("down")]:
+        _normiq_opener(monkeypatch, failure)
+        with pytest.raises(auth.AuthTransientError) as error:
+            auth.normiq_api("request-passcode", {"email": "e@x.ch", "isSignup": False})
+        assert "erneut versuchen" in str(error.value)
+        assert "secret-test-token" not in str(error.value)
+
+
+def test_normiq_api_never_follows_redirects(monkeypatch):
+    _normiq_opener(monkeypatch, _http_error(307, b""))
+    with pytest.raises(auth.AuthError) as error:
+        auth.normiq_api("request-passcode", {"email": "e@x.ch", "isSignup": False})
+    assert type(error.value) is auth.AuthError  # A redirect is a config fault, not transient.
+    assert "307" not in str(error.value)
+    # _NoRedirect is installed, so urllib refuses the redirect before it fires.
+    assert auth._NoRedirect().redirect_request(None, None, 302, "", {}, "https://elsewhere.example") is None

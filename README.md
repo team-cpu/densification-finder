@@ -63,10 +63,16 @@ planned member roles, pending invitations and setting preferences persist in
 Schema changes are additive and do not reseed parcel results or lead decisions.
 
 The default remains single-organisation shared-password access. Opt-in personal
-mode uses a **separate Scope Supabase project**, local invitation membership and
-owner/editor/reader permission checks. See [Scope account setup](docs/scope-accounts.md)
-before enabling it. Resend sends invitation notifications; Supabase sends login
-codes through Resend SMTP. Neither sends anything just by starting the app.
+mode verifies members against **Normiq's shared Supabase Auth project** and logs
+them in through **Normiq's custom passcode API** — the same six-digit code
+Normiq emails via its own Resend template (no Supabase Magic Link template or
+redirect URL is involved, and the shared project's email templates stay
+untouched). `isSignup: false` means invitations require an existing Normiq
+account. Access is granted only through local invitation membership with an
+immutable provider-UUID binding, and owner/editor/reader permission checks are
+enforced. See [Scope account setup](docs/scope-accounts.md) before enabling it.
+Resend sends invitation notifications. Neither sends anything just by starting
+the app.
 In personal mode owners can enforce a TOTP second factor and switch on the
 daily due-date reminder and the Monday digest (07:00 Europe/Zurich, sent by
 `python -m scheduler`, which the container starts beside Streamlit). Shared

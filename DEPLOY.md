@@ -64,6 +64,25 @@ downloads itself on first run; the GWR extract comes from
 `public.madd.bfs.admin.ch/ag.zip`; the six AGIS GeoPackages are manual downloads
 listed in the README.
 
+## Optional: personal member accounts
+
+Opt-in personal mode replaces the shared password with per-member login against
+Normiq's shared Supabase Auth project. Set `SCOPE_AUTH_MODE=personal`,
+`SCOPE_NORMIQ_AUTH_URL` (the canonical HTTPS origin of the Normiq app whose
+custom passcode API issues the six-digit login codes; `http://127.0.0.1:<port>`
+or `http://localhost:<port>` is accepted for local development),
+`SCOPE_SUPABASE_URL` and `SCOPE_SUPABASE_ANON_KEY` (copied from Normiq's
+`NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`), plus
+`SCOPE_OWNER_EMAIL` (an existing Normiq user), `SCOPE_PUBLIC_URL` and the
+Resend variables. The app needs no service-role key. Login codes come from
+Normiq's own passcode API/Resend template (`isSignup: false`), never from the
+Supabase Magic Link template, and Scope never creates provider users — so
+invitations work only for people who already have a Normiq account.
+`SCOPE_SUPABASE_URL`/`SCOPE_SUPABASE_ANON_KEY` remain in use for access-token
+validation and the TOTP second factor. See `docs/scope-accounts.md` for
+behavior, rollout and rollback; rollback is `SCOPE_AUTH_MODE=shared` with the
+personal variables removed.
+
 ## Local development is unaffected
 
 Both path variables default to the repository, and the gate is inert while

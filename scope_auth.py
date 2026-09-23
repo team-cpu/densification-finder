@@ -1,7 +1,15 @@
-"""Separate Scope identities, verified by the configured Scope Supabase project.
+"""Scope identities, verified against Normiq's shared Supabase Auth project.
 
+Phase 1 reuses the existing Normiq Supabase Auth project and user directory, so
+Normiq users can have individual Scope accounts. Login codes are requested and
+verified through Normiq's own custom passcode API (the same six-digit Resend
+code Normiq sends), never through the Supabase email template; Scope only talks
+to Supabase Auth directly to validate the resulting access token and for the
+TOTP factor lifecycle. Authentication (proving a Normiq identity) never grants
+Scope access by itself: only the local `scope_access` invitation with its
+immutable provider-user binding authorizes an identity, and passcode requests
+never create a new provider user.
 Legacy shared access is retained only when personal mode is explicitly disabled.
-The local access table, not Supabase signup or user metadata, grants Scope access.
 """
 from __future__ import annotations
 
@@ -14,7 +22,7 @@ import sqlite3
 import time
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import streamlit as st
@@ -71,10 +79,13 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
-#: The only provider paths the app may call: e-mail code login, session, and
-#: the TOTP factor lifecycle (enrol, challenge, verify, unenrol). Factor ids
-#: are provider UUIDs; anything else is refused before a request is built.
-_ENDPOINTS = re.compile(r"(otp|verify|user|logout|factors|factors/[A-Za-z0-9-]{1,64}(/challenge|/verify)?)")
+#: The only provider paths the app may call: the session user record and the
+#: TOTP factor lifecycle (enrol, challenge, verify, unenrol). Passcodes are
+#: requested and verified via Normiq's custom API (`normiq_api`), not these
+#: Supabase endpoints, so the Magic Link/OTP template and redirect URL of the
+#: shared project are irrelevant to Scope login. Factor ids are provider
+#: UUIDs; anything else is refused before a request is built.
+_ENDPOINTS = re.compile(r"(user|logout|factors|factors/[A-Za-z0-9-]{1,64}(/challenge|/verify)?)")
 
 
 #: Provider (GoTrue) evidence of an expired session. Only allowlisted codes
@@ -141,6 +152,78 @@ def api(endpoint: str, payload: dict | None = None, token: str | None = None,
         raise AuthTransientError("Verbindung zum Anmeldedienst fehlgeschlagen. Bitte erneut versuchen.") from None
 
 
+# --- Normiq passcode API (server-side client) --------------------------------
+#
+# Scope is a server-side client of Normiq's existing custom passcode API, the
+# same endpoint Normiq's own login form uses. It sends Normiq's six-digit
+# Resend code and only permits existing Normiq users, so Scope never depends
+# on the shared project's Supabase email template or redirect URL and never
+# creates a provider user.
+
+
+def normiq_configuration() -> str:
+    """The canonical Normiq origin, strictly validated.
+
+    Normal use is an HTTPS origin without path, query, fragment or userinfo.
+    For local development `http://127.0.0.1:<port>` and `http://localhost:<port>`
+    are permitted; plain-http origins on any other host are refused so the
+    passcode and token can never travel in clear text.
+    """
+    raw = os.environ.get("SCOPE_NORMIQ_AUTH_URL", "").strip()
+    try:
+        parts = urlsplit(raw)
+        host, port = parts.hostname, parts.port  # .port raises on a bad port
+    except ValueError:
+        raise AuthError("Scope-Anmeldung ist noch nicht konfiguriert.") from None
+    local = host in ("127.0.0.1", "localhost") and parts.scheme == "http" and port is not None
+    secure = (parts.scheme == "https" and port in (None, 443) and host
+              and "." in host and not host.startswith(".") and not host.endswith(".")
+              and re.fullmatch(r"[a-z0-9.-]+", host))
+    if not (local or secure) or parts.username or parts.password or parts.query or parts.fragment \
+            or parts.path not in ("", "/"):
+        raise AuthError("Scope-Anmeldung ist noch nicht konfiguriert.")
+    return f"{parts.scheme}://{host}:{port}" if local else f"{parts.scheme}://{host}"
+
+
+#: The only Normiq passcode actions the app may call.
+_NORMIQ_ACTIONS = frozenset({"request-passcode", "verify-passcode"})
+
+
+def _normiq_http_error(action: str, error: HTTPError) -> AuthError:
+    """Classify a Normiq API answer without ever surfacing its body."""
+    try:
+        error.read(1 << 16)  # Drain so the connection can close; never inspect.
+    except (OSError, HTTPException):
+        pass
+    if error.code == 429 or error.code >= 500:
+        return AuthTransientError("Anmeldedienst ist vorübergehend nicht erreichbar. Bitte erneut versuchen.")
+    if action == "verify-passcode":
+        # Wrong, unknown or expired code: one generic answer, no enumeration.
+        return AuthError("Anmeldecode ist nicht gültig oder abgelaufen.")
+    return AuthError("Anmeldecode konnte nicht angefordert werden. Bitte erneut versuchen.")
+
+
+def normiq_api(action: str, payload: dict) -> dict:
+    """Call one Normiq passcode endpoint; returns the bounded JSON object."""
+    origin = normiq_configuration()
+    if action not in _NORMIQ_ACTIONS:
+        raise AuthError("Ungültige Authentifizierungsanfrage.")
+    request = Request(f"{origin}/api/auth/{action}", headers={"Content-Type": "application/json"},
+                      data=json.dumps(payload).encode(), method="POST")
+    try:
+        with build_opener(_NoRedirect()).open(request, timeout=15) as response:
+            # The verify answer carries an access token; a few KB bound is plenty.
+            raw = response.read(1 << 16)
+        result = json.loads(raw) if raw else {}
+        if not isinstance(result, dict):
+            raise ValueError()
+        return result
+    except HTTPError as error:
+        raise _normiq_http_error(action, error) from None
+    except (URLError, OSError, HTTPException, ValueError):
+        raise AuthTransientError("Verbindung zum Anmeldedienst fehlgeschlagen. Bitte erneut versuchen.") from None
+
+
 def schema(con: sqlite3.Connection) -> None:
     con.executescript("""
         CREATE TABLE IF NOT EXISTS scope_access (
@@ -199,8 +282,12 @@ def request_code(email: str, db: str) -> None:
             return
         con.execute("INSERT INTO scope_auth_requests VALUES (?,?) ON CONFLICT(email) "
                     "DO UPDATE SET requested_at=excluded.requested_at", (email, now))
-    # Signup can create a provider identity, but never grants local access.
-    api("otp", {"email": email, "create_user": True})
+    # Phase 1: never create a provider user in the shared Normiq project —
+    # invitations must target an existing Normiq Auth user, because Normiq
+    # treats auth-user existence as sufficient for self-provisioning. The
+    # Normiq API sends its six-digit Resend code and rejects unknown users;
+    # failures keep the same generic UI response (no enumeration).
+    normiq_api("request-passcode", {"email": email, "isSignup": False})
 
 
 def verified_member(user: dict, db: str, *, bind: bool = False) -> dict:
@@ -260,7 +347,7 @@ def verify_code(email: str, code: str, db: str) -> str:
         if not access or (not access[0] and access[1] <= now):
             raise AuthError("Anmeldecode ist nicht gültig oder abgelaufen.")
         _count_attempt(con, email, now)
-    result = api("verify", {"email": email, "token": code, "type": "email"})
+    result = normiq_api("verify-passcode", {"email": email, "passcode": code, "rememberMe": False})
     token = result.get("access_token")
     if not isinstance(token, str) or not token:
         raise AuthError("Kein gültiger Scope-Zugang.")
