@@ -1319,7 +1319,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         hide_transport = st.checkbox(
             "Strassen-/Bahnparzellen",
             key="screening_hide_transport",
-            **_initial_widget_value("screening_hide_transport", value=False),
+            **_initial_widget_value("screening_hide_transport", value=True),
         )
     query = query_area.text_input(
         "Parzellen-Nr. suchen",

@@ -183,16 +183,28 @@ class AppRegressionTest(unittest.TestCase):
         self.assertGreater(len(frame), 0)
         self.assertTrue(frame["Ziffer"].round(3).eq(0.8).all())
 
-    def test_confirmed_transport_filter_is_opt_in_and_hides_matching_parcels(self):
+    def test_transport_filter_is_on_by_default_and_hides_confirmed_parcels(self):
         app = AppTest.from_file(
             os.path.join(paths.HERE, "app.py"), default_timeout=30
         ).run()
         first = app.dataframe[0].value.iloc[0]
+        second = app.dataframe[0].value.iloc[1]
+        transport_filter = next(
+            checkbox
+            for checkbox in app.checkbox
+            if checkbox.label == "Strassen-/Bahnparzellen"
+        )
+        self.assertTrue(transport_filter.value)
         with sqlite3.connect(self.database) as connection:
             connection.execute(
                 "UPDATE parcel_results SET transport_share = 0.95 "
                 "WHERE municipality = ? AND parcel = ?",
                 (first["Gemeinde"], str(first["Parzelle"])),
+            )
+            connection.execute(
+                "UPDATE parcel_results SET transport_share = NULL "
+                "WHERE municipality = ? AND parcel = ?",
+                (second["Gemeinde"], str(second["Parzelle"])),
             )
         st.cache_data.clear()
 
@@ -202,20 +214,15 @@ class AppRegressionTest(unittest.TestCase):
             (visible["Gemeinde"] == first["Gemeinde"])
             & (visible["Parzelle"].astype(str) == str(first["Parzelle"]))
         )
-        self.assertTrue(match.any())
-
-        transport_filter = next(
-            checkbox
-            for checkbox in app.checkbox
-            if checkbox.label == "Strassen-/Bahnparzellen"
-        )
-        transport_filter.check().run()
-        visible = app.dataframe[0].value
-        match = (
-            (visible["Gemeinde"] == first["Gemeinde"])
-            & (visible["Parzelle"].astype(str) == str(first["Parzelle"]))
-        )
         self.assertFalse(match.any())
+
+        # transport_share NULL means unclassified, not a confirmed road: the
+        # conservative rule keeps those rows visible even with the filter on.
+        null_match = (
+            (visible["Gemeinde"] == second["Gemeinde"])
+            & (visible["Parzelle"].astype(str) == str(second["Parzelle"]))
+        )
+        self.assertTrue(null_match.any())
 
     def test_saved_contact_state_is_shown_and_hidden_leads_leave_the_hotlist(self):
         app = AppTest.from_file(
