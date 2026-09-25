@@ -76,8 +76,11 @@ or `http://localhost:<port>` is accepted for local development),
 `SCOPE_OWNER_EMAIL` (an existing Normiq user), `SCOPE_PUBLIC_URL` and the
 Resend variables. The app needs no service-role key. Login codes come from
 Normiq's own passcode API/Resend template (`isSignup: false`), never from the
-Supabase Magic Link template, and Scope never creates provider users — so
-invitations work only for people who already have a Normiq account.
+Supabase Magic Link template. Without `SCOPE_NORMIQ_PROVISIONING_SECRET`,
+invitations work only for people who already have a Normiq account; with it
+(the same value as Normiq's `SCOPE_PROVISIONING_SECRET`), an invited member's
+first code request asks Normiq to create an identity without any Normiq
+product access, and an existing Normiq account is left untouched.
 `SCOPE_SUPABASE_URL`/`SCOPE_SUPABASE_ANON_KEY` remain in use for access-token
 validation and the TOTP second factor. See `docs/scope-accounts.md` for
 behavior, rollout and rollback; rollback is `SCOPE_AUTH_MODE=shared` with the

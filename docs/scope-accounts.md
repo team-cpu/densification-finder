@@ -20,17 +20,52 @@ These are deliberately separate and both are required:
 JWT payloads and editable user metadata are never trusted for roles; the
 bound provider UUID is the only identity anchor.
 
-## Phase-1 limitation: existing Normiq users only
+## Phase 1: existing Normiq users only
 
 The passcode request is sent with `isSignup: false`, so Normiq's API only
-permits existing Normiq users and Scope never registers a new user in the
-shared Normiq project. That is intentional: Normiq currently treats auth-user
-existence as sufficient to self-provision its `public.users` row on passcode
-request, and Scope must not silently create Normiq users. Consequence:
-**invitations only work for people who already have a Normiq Auth account.**
-Support for Scope-only users (product entitlement decides who may exist in
-Normiq's directory) is a prerequisite for phase 2, not an automatic by-product
-of phase 1.
+permits existing Normiq users. Without `SCOPE_NORMIQ_PROVISIONING_SECRET` this
+is still the behavior: **invitations only work for people who already have a
+Normiq Auth account.**
+
+## Phase 2: Scope-first accounts (2026-09-23)
+
+One identity directory, product access decided separately: a Normiq identity
+proves who someone is and grants nothing in either product. Scope access comes
+only from the Scope invitation (above); Normiq access comes only from Normiq's
+capability claim (`app_metadata.project_capability_groups`).
+
+With `SCOPE_NORMIQ_PROVISIONING_SECRET` set (the same value as Normiq's
+`SCOPE_PROVISIONING_SECRET`), the first code request of an invited, not yet
+bound member first calls `POST {SCOPE_NORMIQ_AUTH_URL}/api/auth/scope/provision`
+with `{"email"}` and `Authorization: Bearer <secret>`:
+
+- No Normiq account yet: Normiq creates an identity with
+  `project_capability_groups: []` and `signup_source: "scope"`. The empty group
+  array is Normiq's zero-access claim — no meeting notes, documents, regulations
+  or chat, in the app and in RLS, whatever Normiq's enforcement flag says. No
+  onboarding, no checkout, no default project.
+- Normiq account exists: nothing is changed. An existing customer keeps the
+  Normiq access they have.
+
+Scope then requests the code with `isSignup: false` exactly as in phase 1.
+Scope never uses Normiq's self-sign-up (`isSignup: true`), which would create a
+regular Normiq customer account with meeting-notes access. Provisioning happens
+only after the local invitation check, so uninvited, expired and revoked
+addresses never create an identity. A bound member is never provisioned again.
+
+The secret travels only on that one call, only to the validated
+`SCOPE_NORMIQ_AUTH_URL` origin, and never follows redirects. A leaked secret
+lets its holder create zero-access identities; it cannot grant access to either
+product. Giving a Scope-only person Normiq access later is a Normiq superadmin
+decision (group picker on `/dashboard/users`).
+
+Rollout prerequisite on the Normiq side: until `normiq-frontend` ships
+`fix/passcode-login-keeps-sessions`, every Normiq passcode login rotates the
+account's password and the provider ends all other sessions of that person, so
+someone who uses both products is signed out of Scope when they sign in to
+Normiq (and the other way round); Scope then shows "Sitzung ist nicht mehr
+gültig. Bitte erneut anmelden." With the fix both sessions stay valid. See
+`docs/2026-09-23-scope-first-accounts.md`.
 
 Scope keeps no service-role key; it only ever uses the anon/publishable key,
 and only for the allowlisted Supabase auth endpoints (user, logout, TOTP
@@ -78,6 +113,7 @@ Keep the app-specific names; copy the values from Normiq's configuration
 | `SCOPE_NORMIQ_AUTH_URL` | Canonical HTTPS origin of the Normiq app            |
 | `SCOPE_SUPABASE_URL`    | `NEXT_PUBLIC_SUPABASE_URL`                          |
 | `SCOPE_SUPABASE_ANON_KEY` | `NEXT_PUBLIC_SUPABASE_ANON_KEY`                   |
+| `SCOPE_NORMIQ_PROVISIONING_SECRET` (optional, phase 2) | `SCOPE_PROVISIONING_SECRET` (same value, 32+ printable characters) |
 
 - `SCOPE_NORMIQ_AUTH_URL`: origin of the Normiq deployment whose custom
   passcode API Scope calls (validated strictly: HTTPS origin only, no
@@ -112,7 +148,13 @@ Keep the app-specific names; copy the values from Normiq's configuration
 3. Deploy to a staging instance and verify with authorized test recipients:
    login, invitation of an existing Normiq user, role change, revocation,
    logout, second factor.
-4. Invite real members only after their Normiq accounts exist.
+4. Phase 1: invite real members only after their Normiq accounts exist.
+   Phase 2: generate one secret, set it as `SCOPE_PROVISIONING_SECRET` on the
+   Normiq deployment and as `SCOPE_NORMIQ_PROVISIONING_SECRET` in Scope, then
+   check `POST {SCOPE_NORMIQ_AUTH_URL}/api/auth/scope/provision` with the secret
+   and `{"email":"x"}` answers 400. 404 = the route is deployed but Normiq has
+   no secret; 401 = the values differ, or that Normiq deployment does not have
+   the route yet (its middleware answers 401 for unknown API paths).
 5. Roll out production. Rollback is `SCOPE_AUTH_MODE=shared` plus removing the
    personal variables; the shared password gate then applies again. Switching
    to shared mode removes personal role enforcement, so it is an operator
@@ -131,6 +173,10 @@ live shared-project login. No external change, deployment or push was performed
 for this phase-1 preparation. Live verification (login, invitation, revocation,
 roles, logout, second factor) with authorized test recipients is part of the
 rollout above.
+
+Phase 2 was run on 2026-09-23 against the real staging Normiq Auth project,
+with Normiq's provisioning route running locally and login mail captured
+instead of sent: record in `docs/2026-09-23-scope-first-accounts.md`.
 
 Official references:
 - Normiq custom passcode API: `/api/auth/request-passcode`,

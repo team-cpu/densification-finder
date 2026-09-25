@@ -22,8 +22,12 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setenv("SCOPE_AUTH_MODE", "personal")
     monkeypatch.setenv("SCOPE_OWNER_EMAIL", "owner@example.com")
     monkeypatch.setenv("SCOPE_NORMIQ_AUTH_URL", "https://normiq.example.com")
+    monkeypatch.delenv("SCOPE_NORMIQ_PROVISIONING_SECRET", raising=False)
     auth.bootstrap_owner(database)
     return database
+
+
+PROVISIONING_SECRET = "scope-provisioning-test-secret-0123456789abcdef"
 
 
 def user(email="owner@example.com", uid="scope-user-1"):
@@ -86,6 +90,66 @@ def test_passcode_request_uses_normiq_api_with_signup_disabled(db, monkeypatch):
     assert normiq_api.call_args_list == [
         call("request-passcode", {"email": "owner@example.com", "isSignup": False})
     ]
+
+
+def test_first_code_provisions_identity_when_configured(db, monkeypatch):
+    """Phase 2: an invited member without a Normiq account gets an identity
+    from Normiq's provisioning endpoint first — never via `isSignup: true`,
+    which would create a regular Normiq customer account with meeting notes."""
+    monkeypatch.setenv("SCOPE_NORMIQ_PROVISIONING_SECRET", PROVISIONING_SECRET)
+    normiq_api = Mock(return_value={})
+    monkeypatch.setattr(auth, "normiq_api", normiq_api)
+    auth.request_code("owner@example.com", db)
+    assert normiq_api.call_args_list == [
+        call("scope/provision", {"email": "owner@example.com"}),
+        call("request-passcode", {"email": "owner@example.com", "isSignup": False}),
+    ]
+
+
+def test_bound_member_is_never_provisioned_again(db, monkeypatch):
+    monkeypatch.setenv("SCOPE_NORMIQ_PROVISIONING_SECRET", PROVISIONING_SECRET)
+    auth.verified_member(user(), db, bind=True)
+    normiq_api = Mock(return_value={})
+    monkeypatch.setattr(auth, "normiq_api", normiq_api)
+    auth.request_code("owner@example.com", db)
+    assert normiq_api.call_args_list == [
+        call("request-passcode", {"email": "owner@example.com", "isSignup": False})
+    ]
+
+
+def test_uninvited_expired_and_revoked_emails_are_never_provisioned(db, monkeypatch):
+    monkeypatch.setenv("SCOPE_NORMIQ_PROVISIONING_SECRET", PROVISIONING_SECRET)
+    monkeypatch.setattr(auth, "current", lambda db=None: {"role": "Inhaber", "id": 1})
+    expired = organisation.invite_member("expired@example.com", db=db)
+    revoked = organisation.invite_member("revoked@example.com", db=db)
+    with sqlite3.connect(db) as con:
+        con.execute("UPDATE scope_access SET invited_until=0 WHERE member_id=?", (expired,))
+    organisation.revoke_invite(revoked, db)
+    normiq_api = Mock(return_value={})
+    monkeypatch.setattr(auth, "normiq_api", normiq_api)
+    for email in ["stranger@example.com", "expired@example.com", "revoked@example.com"]:
+        auth.request_code(email, db)
+    normiq_api.assert_not_called()
+
+
+def test_failed_provisioning_sends_no_code(db, monkeypatch):
+    monkeypatch.setenv("SCOPE_NORMIQ_PROVISIONING_SECRET", PROVISIONING_SECRET)
+    normiq_api = Mock(side_effect=auth.AuthTransientError("down"))
+    monkeypatch.setattr(auth, "normiq_api", normiq_api)
+    with pytest.raises(auth.AuthTransientError):
+        auth.request_code("owner@example.com", db)
+    assert normiq_api.call_args_list == [call("scope/provision", {"email": "owner@example.com"})]
+
+
+@pytest.mark.parametrize("raw", ["short", "x" * 31, "with space " + "x" * 32, "x" * 32 + "é", "x" * 513])
+def test_malformed_provisioning_secret_is_a_config_fault(db, monkeypatch, raw):
+    monkeypatch.setenv("SCOPE_NORMIQ_PROVISIONING_SECRET", raw)
+    normiq_api = Mock(return_value={})
+    monkeypatch.setattr(auth, "normiq_api", normiq_api)
+    with pytest.raises(auth.AuthError) as error:
+        auth.request_code("owner@example.com", db)
+    assert "nicht konfiguriert" in str(error.value)
+    normiq_api.assert_not_called()
 
 
 def test_shared_provider_identity_without_scope_access_remains_denied(db):
@@ -594,6 +658,50 @@ def test_normiq_api_rejects_unknown_action(monkeypatch):
     _normiq_opener(monkeypatch, io.BytesIO(b"{}"))
     with pytest.raises(auth.AuthError):
         auth.normiq_api("anything-else", {})
+
+
+def test_provisioning_secret_travels_only_on_the_provision_call(monkeypatch):
+    monkeypatch.setenv("SCOPE_NORMIQ_PROVISIONING_SECRET", PROVISIONING_SECRET)
+    opener = _normiq_opener(monkeypatch, io.BytesIO(b'{"ok":true}'))
+    assert auth.normiq_api("scope/provision", {"email": "e@x.ch"}) == {"ok": True}
+    request = opener.open.call_args.args[0]
+    assert request.full_url == "https://normiq.example.com/api/auth/scope/provision"
+    assert request.method == "POST"
+    assert json.loads(request.data) == {"email": "e@x.ch"}
+    assert request.headers["Authorization"] == f"Bearer {PROVISIONING_SECRET}"
+
+    for action, payload in [("request-passcode", {"email": "e@x.ch", "isSignup": False}),
+                            ("verify-passcode", {"email": "e@x.ch", "passcode": "123456", "rememberMe": False})]:
+        opener = _normiq_opener(monkeypatch, io.BytesIO(b"{}"))
+        auth.normiq_api(action, payload)
+        request = opener.open.call_args.args[0]
+        assert "Authorization" not in request.headers
+        assert PROVISIONING_SECRET not in json.dumps(request.header_items())
+
+
+def test_provision_without_secret_is_refused_before_any_request(monkeypatch):
+    monkeypatch.delenv("SCOPE_NORMIQ_PROVISIONING_SECRET", raising=False)
+    opener = _normiq_opener(monkeypatch, io.BytesIO(b"{}"))
+    with pytest.raises(auth.AuthError):
+        auth.normiq_api("scope/provision", {"email": "e@x.ch"})
+    opener.open.assert_not_called()
+
+
+def test_provision_errors_are_generic_and_never_echo_the_secret(monkeypatch):
+    monkeypatch.setenv("SCOPE_NORMIQ_PROVISIONING_SECRET", PROVISIONING_SECRET)
+    for failure in [_http_error(401, f'{{"error":"{PROVISIONING_SECRET}"}}'.encode()),
+                    _http_error(404, b'{"error":"Not found"}'),
+                    _http_error(400, b'{"error":"A valid email is required"}')]:
+        _normiq_opener(monkeypatch, failure)
+        with pytest.raises(auth.AuthError) as error:
+            auth.normiq_api("scope/provision", {"email": "e@x.ch"})
+        assert type(error.value) is auth.AuthError
+        assert PROVISIONING_SECRET not in str(error.value)
+    for failure in [_http_error(500), _http_error(429), URLError(PROVISIONING_SECRET)]:
+        _normiq_opener(monkeypatch, failure)
+        with pytest.raises(auth.AuthTransientError) as error:
+            auth.normiq_api("scope/provision", {"email": "e@x.ch"})
+        assert PROVISIONING_SECRET not in str(error.value)
 
 
 def test_normiq_verify_missing_access_token_is_invalid(db, monkeypatch):

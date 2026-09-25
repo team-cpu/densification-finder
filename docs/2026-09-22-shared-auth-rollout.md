@@ -48,4 +48,5 @@ password gate applies again. Local data and invitations persist.
 
 Scope-only users require a product entitlement deciding who may exist in
 Normiq's auth directory; until then invitations work only for existing Normiq
-users.
+users. Implemented 2026-09-23 behind `SCOPE_NORMIQ_PROVISIONING_SECRET`: see
+`docs/scope-accounts.md` (Phase 2) and `docs/2026-09-23-scope-first-accounts.md`.

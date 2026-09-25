@@ -9,6 +9,10 @@ TOTP factor lifecycle. Authentication (proving a Normiq identity) never grants
 Scope access by itself: only the local `scope_access` invitation with its
 immutable provider-user binding authorizes an identity, and passcode requests
 never create a new provider user.
+Phase 2 (only with `SCOPE_NORMIQ_PROVISIONING_SECRET`): before the first login
+code of an invited member, Normiq's Scope provisioning endpoint creates the
+identity if it is missing — with no Normiq product access — and leaves an
+existing Normiq account untouched.
 Legacy shared access is retained only when personal mode is explicitly disabled.
 """
 from __future__ import annotations
@@ -157,8 +161,9 @@ def api(endpoint: str, payload: dict | None = None, token: str | None = None,
 # Scope is a server-side client of Normiq's existing custom passcode API, the
 # same endpoint Normiq's own login form uses. It sends Normiq's six-digit
 # Resend code and only permits existing Normiq users, so Scope never depends
-# on the shared project's Supabase email template or redirect URL and never
-# creates a provider user.
+# on the shared project's Supabase email template or redirect URL. The one
+# call that can create a provider user is `scope/provision`, authenticated by
+# the shared provisioning secret and made only for an invited member.
 
 
 def normiq_configuration() -> str:
@@ -185,8 +190,23 @@ def normiq_configuration() -> str:
     return f"{parts.scheme}://{host}:{port}" if local else f"{parts.scheme}://{host}"
 
 
-#: The only Normiq passcode actions the app may call.
-_NORMIQ_ACTIONS = frozenset({"request-passcode", "verify-passcode"})
+def normiq_provisioning_secret() -> str | None:
+    """Shared secret for Normiq's Scope provisioning endpoint, or None.
+
+    Unset keeps phase 1: only people who already have a Normiq account can
+    sign in. Set, it must match Normiq's `SCOPE_PROVISIONING_SECRET`; a
+    malformed value is a configuration fault, never a silent fallback.
+    """
+    secret = os.environ.get("SCOPE_NORMIQ_PROVISIONING_SECRET", "").strip()
+    if not secret:
+        return None
+    if not re.fullmatch(r"[\x21-\x7e]{32,512}", secret):
+        raise AuthError("Scope-Anmeldung ist noch nicht konfiguriert.")
+    return secret
+
+
+#: The only Normiq auth actions the app may call.
+_NORMIQ_ACTIONS = frozenset({"request-passcode", "verify-passcode", "scope/provision"})
 
 
 def _normiq_http_error(action: str, error: HTTPError) -> AuthError:
@@ -204,11 +224,19 @@ def _normiq_http_error(action: str, error: HTTPError) -> AuthError:
 
 
 def normiq_api(action: str, payload: dict) -> dict:
-    """Call one Normiq passcode endpoint; returns the bounded JSON object."""
+    """Call one Normiq auth endpoint; returns the bounded JSON object."""
     origin = normiq_configuration()
     if action not in _NORMIQ_ACTIONS:
         raise AuthError("Ungültige Authentifizierungsanfrage.")
-    request = Request(f"{origin}/api/auth/{action}", headers={"Content-Type": "application/json"},
+    headers = {"Content-Type": "application/json"}
+    if action == "scope/provision":
+        # The secret only ever travels to the validated Normiq origin, and
+        # only on this call; redirects are refused below.
+        secret = normiq_provisioning_secret()
+        if not secret:
+            raise AuthError("Scope-Anmeldung ist noch nicht konfiguriert.")
+        headers["Authorization"] = f"Bearer {secret}"
+    request = Request(f"{origin}/api/auth/{action}", headers=headers,
                       data=json.dumps(payload).encode(), method="POST")
     try:
         with build_opener(_NoRedirect()).open(request, timeout=15) as response:
@@ -282,11 +310,17 @@ def request_code(email: str, db: str) -> None:
             return
         con.execute("INSERT INTO scope_auth_requests VALUES (?,?) ON CONFLICT(email) "
                     "DO UPDATE SET requested_at=excluded.requested_at", (email, now))
-    # Phase 1: never create a provider user in the shared Normiq project —
-    # invitations must target an existing Normiq Auth user, because Normiq
-    # treats auth-user existence as sufficient for self-provisioning. The
-    # Normiq API sends its six-digit Resend code and rejects unknown users;
-    # failures keep the same generic UI response (no enumeration).
+        unbound = not row[0]
+    # Never Normiq's self-sign-up (`isSignup: true`): that creates a regular
+    # Normiq customer account with meeting-notes access. An invited member who has
+    # not signed in yet may have no Normiq account; with provisioning
+    # configured, Normiq creates an identity without Normiq product access and
+    # leaves an existing account untouched. A bound member's identity exists by
+    # definition. Without the secret (phase 1) only existing Normiq users get a
+    # code. The Normiq API sends its six-digit Resend code and rejects unknown
+    # users; failures keep the same generic UI response (no enumeration).
+    if unbound and normiq_provisioning_secret():
+        normiq_api("scope/provision", {"email": email})
     normiq_api("request-passcode", {"email": email, "isSignup": False})
 
 
