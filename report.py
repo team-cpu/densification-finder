@@ -15,7 +15,7 @@ median rather than an appraisal.
 import io
 import re
 from datetime import datetime
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape  # nosec B406 # output-side encoding helper for PDF text, never an XML parser; defusedxml has no escape equivalent. See docs/2026-09-29-bandit-review.md
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_RIGHT

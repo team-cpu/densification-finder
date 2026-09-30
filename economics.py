@@ -301,7 +301,13 @@ def evaluate(inputs: dict, overrides: Mapping[str, float] | None = None) -> list
     manual = validate_overrides(overrides)
     steps = []
     for rule in PATH:
-        value = eval(rule.expr, {"__builtins__": {}}, values)  # noqa: S307 — our own literals
+        # The evaluated strings are the fixed arithmetic literals in PATH
+        # above (frozen dataclass constants in this file, never user input),
+        # and `__builtins__` is emptied, so no name resolves to a builtin.
+        # Justified in docs/2026-09-29-bandit-review.md; regression coverage
+        # in tests/test_bandit_helpers.py (formulas reference only known
+        # symbols).
+        value = eval(rule.expr, {"__builtins__": {}}, values)  # noqa: S307  # nosec B307
         overridden = rule.key in manual
         if overridden:
             value = manual[rule.key]

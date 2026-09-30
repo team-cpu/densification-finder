@@ -16,11 +16,11 @@ import os
 import re
 import time
 import urllib.parse
-import urllib.request
 
 from shapely.geometry import Polygon
 from shapely.strtree import STRtree
 
+import http_fetch
 import paths
 
 
@@ -72,8 +72,7 @@ def fetch(bfs, retries=3):
     )
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(f"{WFS}?{query}", timeout=300) as response:
-                body = response.read()
+            body = http_fetch.get(f"{WFS}?{query}", timeout=300)
             if b"<ms:LCSF" not in body and b'numberReturned="0"' not in body:
                 raise RuntimeError("unexpected LCSF WFS payload")
             os.makedirs(os.path.dirname(path), exist_ok=True)

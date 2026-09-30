@@ -21,10 +21,11 @@ NEWSFEED.md.
 import json
 import threading
 import time
-import urllib.request
 from dataclasses import dataclass
 from datetime import date
 from typing import Optional
+
+import http_fetch
 
 URL = "https://oereblex.ag.ch/api/edicts.json"
 BASE = "https://oereblex.ag.ch"
@@ -54,8 +55,7 @@ class Edict:
 
 
 def fetch(timeout=30):
-    with urllib.request.urlopen(URL, timeout=timeout) as r:
-        return json.load(r)
+    return json.loads(http_fetch.get(URL, timeout=timeout))
 
 
 def parse(towns) -> list[Edict]:

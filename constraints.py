@@ -18,6 +18,8 @@ from shapely import from_wkb
 from shapely.geometry import Point
 from shapely.strtree import STRtree
 
+from sqlquote import ident
+
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 # Hard: demolition is not permitted. Soft: constrained, but a replacement can
@@ -69,7 +71,7 @@ def load_heritage():
     ):
         db = sqlite3.connect(_one(path))
         t = _table(db)
-        for e, n in db.execute(f'SELECT E_Koord, N_Koord FROM "{t}" WHERE E_Koord IS NOT NULL'):
+        for e, n in db.execute(f"SELECT E_Koord, N_Koord FROM {ident(t)} WHERE E_Koord IS NOT NULL"):  # nosec B608 # identifier quoted via sqlquote.ident; docs/2026-09-29-bandit-review.md
             items.append(Point(float(e), float(n)))
             tiers.append(tier)
 
@@ -77,7 +79,7 @@ def load_heritage():
     db = sqlite3.connect(_one("are_DNPUPolygon_*.gpkg"))
     t = _table(db)
     for shape, label in db.execute(
-        f"SELECT SHAPE, KTBez FROM \"{t}\" WHERE KTBez LIKE 'Geb%schutz'"
+        f"SELECT SHAPE, KTBez FROM {ident(t)} WHERE KTBez LIKE 'Geb%schutz'"  # nosec B608 # identifier quoted via sqlquote.ident; docs/2026-09-29-bandit-review.md
     ):
         g = _gpkg(shape)
         items.append(g if g.is_valid else g.buffer(0))
@@ -98,7 +100,7 @@ def load_planning_freezes():
     db = sqlite3.connect(_one("are_Planungszonen_*.gpkg"))
     t = _table(db)
     out = []
-    for shape, status in db.execute(f'SELECT SHAPE, Rechtsstatus FROM "{t}"'):
+    for shape, status in db.execute(f"SELECT SHAPE, Rechtsstatus FROM {ident(t)}"):  # nosec B608 # identifier quoted via sqlquote.ident; docs/2026-09-29-bandit-review.md
         if (status or "").strip() != "inKraft":
             continue  # only a freeze actually in force blocks anything
         g = _gpkg(shape)
@@ -121,7 +123,7 @@ def load_design_plans():
     t = _table(db)
     out = []
     for (shape,) in db.execute(
-        f"SELECT SHAPE FROM \"{t}\" WHERE KTBez LIKE '%Gestaltungspl%'"
+        f"SELECT SHAPE FROM {ident(t)} WHERE KTBez LIKE '%Gestaltungspl%'"  # nosec B608 # identifier quoted via sqlquote.ident; docs/2026-09-29-bandit-review.md
     ):
         g = _gpkg(shape)
         out.append(g if g.is_valid else g.buffer(0))

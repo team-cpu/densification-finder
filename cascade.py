@@ -23,6 +23,7 @@ import constraints as C
 import land_cover as LC
 import metrics as M
 from shapely import from_wkb
+from sqlquote import ident
 
 
 def gpkg_geom(blob):
@@ -187,7 +188,9 @@ class Engine:
         t = [r[0] for r in db.execute("SELECT table_name FROM gpkg_contents")][0]
         cols = M.columns_for(canton)
         by_bfs = {}
-        for row in db.execute(f'SELECT SHAPE, {",".join(cols)} FROM "{t}"'):
+        for row in db.execute(
+            f"SELECT SHAPE, {','.join(ident(c) for c in cols)} FROM {ident(t)}"  # nosec B608 # every interpolated identifier passes through sqlquote.ident; docs/2026-09-29-bandit-review.md
+        ):
             attrs = dict(zip(cols, row[1:]))
             zone = M.read_zone(canton, attrs)
             if zone is None:

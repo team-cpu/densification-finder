@@ -68,3 +68,31 @@ def test_shared_gate_uses_card_and_form_button(tmp_path, monkeypatch):
     assert not app.exception
     assert app.session_state["_ok"] is True
     assert "Passwort" not in [item.label for item in app.text_input]  # gate gone, app rendered
+
+
+@pytest.mark.parametrize("mode", [None, "shared"])
+def test_shared_mode_makes_no_auth_or_provisioning_calls(tmp_path, monkeypatch, mode):
+    # Shared (default) mode must never talk to Supabase Auth or Normiq's
+    # passcode/provisioning API — a single bad network call would be a defect.
+    database = str(tmp_path / "results.sqlite")
+    shutil.copy2(paths.SEED_DB, database)
+    monkeypatch.setattr(paths, "DB", database)
+    monkeypatch.setenv("APP_PASSWORD", "geheim")
+    if mode is None:
+        monkeypatch.delenv("SCOPE_AUTH_MODE", raising=False)
+    else:
+        monkeypatch.setenv("SCOPE_AUTH_MODE", mode)
+    for name in ("api", "normiq_api"):
+        monkeypatch.setattr(auth, name, Mock(side_effect=AssertionError(f"{name} called in shared mode")))
+
+    app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=60).run()
+    assert not app.exception
+    app.text_input[0].set_value("falsch")
+    next(button for button in app.button if button.label == "Anmelden").click().run()
+    assert [item.value for item in app.error] == ["Falsches Passwort."]
+    app.text_input[0].set_value("geheim")
+    next(button for button in app.button if button.label == "Anmelden").click().run()
+    assert not app.exception
+    assert app.session_state["_ok"] is True
+    auth.api.assert_not_called()
+    auth.normiq_api.assert_not_called()

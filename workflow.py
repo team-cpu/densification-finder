@@ -178,7 +178,7 @@ def update(
             parcel_keys,
         )
         connection.executemany(
-            f"UPDATE parcel_workflow SET {', '.join(assignments)} "
+            f"UPDATE parcel_workflow SET {', '.join(assignments)} "  # nosec B608 # assignments are fixed SQL fragments plus keys of the validated field dict, all values bound as parameters; docs/2026-09-29-bandit-review.md
             "WHERE bfs = ? AND parcel = ?",
             [tuple(values) + key for key in parcel_keys],
         )

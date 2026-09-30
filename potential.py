@@ -26,6 +26,8 @@ from shapely import from_wkb
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
+from sqlquote import ident
+
 BFS = int(sys.argv[1]) if len(sys.argv) > 1 else 4012
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = __import__("paths").DATA
@@ -92,7 +94,8 @@ def load_zones():
     t = [r[0] for r in db.execute("SELECT table_name FROM gpkg_contents")][0]
     out = []
     for shape, az, name in db.execute(
-        f'SELECT SHAPE, AZmax, GDEBez FROM "{t}" WHERE GDENR=? AND AZmax>0', (BFS,)
+        f"SELECT SHAPE, AZmax, GDEBez FROM {ident(t)} WHERE GDENR=? AND AZmax>0",  # nosec B608 # identifier quoted via sqlquote.ident; docs/2026-09-29-bandit-review.md
+        (BFS,),
     ):
         out.append({"geom": valid(gpkg_geom(shape)), "az": round(float(az), 2), "name": name})
     return out

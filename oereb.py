@@ -24,7 +24,9 @@ path, the identifier is a query parameter, and the trailing slash matters.
 already known.
 """
 import json
-import urllib.request
+import urllib.parse
+
+import http_fetch
 
 BASE = "https://api.geo.ag.ch/v2/oereb"
 
@@ -69,9 +71,10 @@ def text(value, default=""):
 
 
 def fetch(egrid, timeout=60):
-    url = f"{BASE}/extract/json/?EGRID={egrid}"
-    with urllib.request.urlopen(url, timeout=timeout) as r:
-        return json.load(r)
+    # urlencode, never f-string interpolation: the EGRID arrives from parcel
+    # XML and must stay one opaque query value.
+    query = urllib.parse.urlencode({"EGRID": egrid})
+    return json.loads(http_fetch.get(f"{BASE}/extract/json/?{query}", timeout=timeout))
 
 
 def restrictions(doc):

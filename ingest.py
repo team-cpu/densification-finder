@@ -25,13 +25,14 @@ import sqlite3
 import sys
 import time
 import urllib.parse
-import urllib.request
 
 import paths
 import email_outbox
+import http_fetch
 import scope_auth
 import land_cover as LC
 import workflow as WF
+from sqlquote import ident
 
 HERE = paths.HERE
 DATA = paths.DATA
@@ -63,10 +64,13 @@ def municipalities_with_az(canton="AG"):
     cfg = M.CANTONS[canton]
     db = sqlite3.connect(glob.glob(os.path.join(DATA, cfg.dataset))[0])
     t = [r[0] for r in db.execute("SELECT table_name FROM gpkg_contents")][0]
-    any_metric = " OR ".join(f"COALESCE({M.METRICS[k].column},0)>0" for k in cfg.metrics)
+    any_metric = " OR ".join(
+        f"COALESCE({ident(M.METRICS[k].column)},0)>0" for k in cfg.metrics
+    )
+    bfs_col = ident(cfg.bfs_column)
     rows = db.execute(
-        f'SELECT {cfg.bfs_column}, COUNT(*) FROM "{t}" WHERE {any_metric} '
-        f'GROUP BY {cfg.bfs_column} ORDER BY {cfg.bfs_column}'
+        f"SELECT {bfs_col}, COUNT(*) FROM {ident(t)} WHERE {any_metric} "  # nosec B608 # identifiers quoted via sqlquote.ident; docs/2026-09-29-bandit-review.md
+        f"GROUP BY {bfs_col} ORDER BY {bfs_col}"
     )
     names = municipality_names()
     return [(int(r[0]), names.get(int(r[0]), f"BFS {r[0]}"), r[1]) for r in rows]
@@ -95,8 +99,7 @@ def fetch_parcels(bfs, retries=3):
     )
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(f"{WFS}?{q}", timeout=300) as r:
-                body = r.read()
+            body = http_fetch.get(f"{WFS}?{q}", timeout=300)
             if b"<ms:RESF" not in body and b'numberReturned="0"' not in body:
                 raise RuntimeError("unexpected WFS payload")
             open(path, "wb").write(body)
@@ -224,7 +227,7 @@ def _column_definitions(columns):
 
 def _add_missing_columns(con, table, columns):
     """Widen a table created by an older application release in place."""
-    have = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+    have = {row[1] for row in con.execute(f"PRAGMA table_info({ident(table)})")}
     for name, declaration in columns:
         if name not in have:
             # SQLite cannot add NOT NULL or PRIMARY KEY constraints to a
@@ -233,7 +236,9 @@ def _add_missing_columns(con, table, columns):
             compatible = declaration.replace(" NOT NULL", "").replace(
                 " PRIMARY KEY", ""
             ).replace(" DEFAULT CURRENT_TIMESTAMP", "")
-            con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {compatible}")
+            con.execute(
+                f"ALTER TABLE {ident(table)} ADD COLUMN {ident(name)} {compatible}"
+            )
 
 
 def _workflow_statuses(con):
@@ -270,14 +275,16 @@ def _rebuild_workflow_check(con):
 
     have = {row[1] for row in con.execute("PRAGMA table_info(parcel_workflow)")}
     carried = [name for name, _ in WORKFLOW_COLUMNS if name in have]
-    carried_cols = ", ".join(carried)
+    carried_cols = ", ".join(ident(name) for name in carried)
     # `_add_missing_columns` strips `DEFAULT CURRENT_TIMESTAMP` when it widens a
     # table (SQLite's ADD COLUMN only accepts a constant default), so a legacy
     # row that just gained `updated_at` there carries NULL, not a timestamp.
     # The rebuilt table declares the column NOT NULL, so that NULL has to be
     # replaced on the way across rather than copied straight through.
     select_exprs = ", ".join(
-        f"COALESCE({name}, CURRENT_TIMESTAMP)" if name == "updated_at" else name
+        f"COALESCE({ident(name)}, CURRENT_TIMESTAMP)"
+        if name == "updated_at"
+        else ident(name)
         for name in carried
     )
     statuses = ", ".join(f"'{status}'" for status in WF.CONTACT_STATUS_LABELS)
@@ -308,7 +315,7 @@ def _rebuild_workflow_check(con):
             # diverge, and the shift would be invisible until someone read a
             # phone number out of the note field.
             con.execute(
-                f"INSERT INTO parcel_workflow_new ({carried_cols}) "
+                f"INSERT INTO parcel_workflow_new ({carried_cols}) "  # nosec B608 # column names quoted via sqlquote.ident; docs/2026-09-29-bandit-review.md
                 f"SELECT {select_exprs} FROM parcel_workflow"
             )
             after = con.execute(
@@ -491,7 +498,16 @@ def recompute(progress=None, built_after=None):
         try:
             LC.fetch(bfs)
             res = engine.run(bfs)
-        except Exception:
+        except Exception as exc:
+            # Municipalities without downloaded parcel data are skipped above;
+            # a failure here means the cascade itself broke on this commune.
+            # Log the id and the exception CLASS only — no message: an extract
+            # body or path can carry user data, and the log is not the place
+            # for it.
+            print(
+                f"  recompute: BFS {bfs} failed ({type(exc).__name__})",
+                file=sys.stderr,
+            )
             continue
         con.execute("DELETE FROM parcel_results WHERE bfs=?", (bfs,))
         con.executemany(

@@ -24,6 +24,8 @@ import struct
 import sys
 from collections import defaultdict
 
+from sqlquote import ident
+
 BFS = int(sys.argv[1]) if len(sys.argv) > 1 else 4012
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("DENSIFICATION_DATA", "")
@@ -148,7 +150,8 @@ def load_zones(bfs):
     idx = Index()
     n = 0
     for shape, az, name in db.execute(
-        f'SELECT SHAPE, AZmax, GDEBez FROM "{t}" WHERE GDENR=? AND AZmax>0', (bfs,)
+        f"SELECT SHAPE, AZmax, GDEBez FROM {ident(t)} WHERE GDENR=? AND AZmax>0",  # nosec B608 # identifier quoted via sqlquote.ident; docs/2026-09-29-bandit-review.md
+        (bfs,),
     ):
         for ring in poly_rings(shape):
             if ring:
