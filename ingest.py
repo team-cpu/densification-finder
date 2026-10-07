@@ -408,9 +408,12 @@ def schema(con):
     _add_missing_columns(con, "saved_searches", SAVED_SEARCH_COLUMNS)
     _add_missing_columns(con, "organisation_profile", ORGANISATION_PROFILE_COLUMNS)
     _add_missing_columns(con, "organisation_members", ORGANISATION_MEMBER_COLUMNS)
-    con.execute(
-        "INSERT OR IGNORE INTO organisation_profile (id, name) VALUES (1, '')"
-    )
+    # Even an ignored INSERT acquires a write lock. On a current database,
+    # startup should only read; retain OR IGNORE for concurrent initializers.
+    if not con.execute("SELECT 1 FROM organisation_profile WHERE id=1").fetchone():
+        con.execute(
+            "INSERT OR IGNORE INTO organisation_profile (id, name) VALUES (1, '')"
+        )
     # One-time data fixes, each recorded by name so it runs exactly once.
     # The mail switches shipped as disabled placeholders defaulting to 1; a
     # stored 1 from that time is the old default, not a decision, and must not
@@ -419,13 +422,17 @@ def schema(con):
         "CREATE TABLE IF NOT EXISTS schema_migrations ("
         "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
     )
-    if con.execute(
+    if not con.execute(
+        "SELECT 1 FROM schema_migrations WHERE name='mail_switches_opt_in'"
+    ).fetchone() and con.execute(
         "INSERT OR IGNORE INTO schema_migrations (name) VALUES ('mail_switches_opt_in')"
     ).rowcount == 1:
         con.execute("UPDATE organisation_profile SET weekly_digest = 0, due_reminders = 0")
     import shared_calculations
     shared_calculations.schema(con)
-    if con.execute(
+    if not con.execute(
+        "SELECT 1 FROM schema_migrations WHERE name='shared_calculations_opt_in'"
+    ).fetchone() and con.execute(
         "INSERT OR IGNORE INTO schema_migrations (name) VALUES ('shared_calculations_opt_in')"
     ).rowcount == 1:
         con.execute("UPDATE organisation_profile SET shared_calculations = 0")

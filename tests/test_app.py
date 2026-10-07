@@ -1,19 +1,26 @@
+import functools
+import json
 import os
 import shutil
 import sqlite3
 import tempfile
 import unittest
 
+from unittest.mock import patch
+
 import pandas as pd
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 import acquisition
+import bootstrap
 import ingest
 import merkliste
 import navigation
+import oereb
 import paths
 import screening
+import scope_auth
 import searches
 import workflow
 
@@ -29,6 +36,179 @@ def area(app, label):
     """The same, for the two fields that are text areas: Adresse and Notizen
     are blocks of text that grow, not one-liners."""
     return next(w for w in app.text_area if w.label == label)
+
+
+class StartupDatabaseLockTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.database = os.path.join(directory.name, "results.sqlite")
+        shutil.copy2(paths.SEED_DB, self.database)
+        connection = sqlite3.connect(self.database)
+        try:
+            ingest.schema(connection)
+        finally:
+            connection.close()
+        self.enterContext(patch.object(paths, "DB", self.database))
+        self.enterContext(patch.dict(os.environ, {
+            "SCOPE_AUTH_MODE": "shared", "APP_PASSWORD": "", "DENSIFICATION_RESEED": "0",
+        }))
+        st.cache_data.clear()
+        self.addCleanup(st.cache_data.clear)
+        connect = sqlite3.connect
+        self.holder = connect(self.database, check_same_thread=False)
+        self.addCleanup(self.holder.close)
+        self.enterContext(patch.object(sqlite3, "connect", functools.partial(connect, timeout=0.1)))
+
+    def app(self):
+        return AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=60)
+
+    def assert_blocked(self, app):
+        self.assertFalse(app.exception)
+        self.assertTrue(any("gesperrt" in w.value for w in app.warning))
+        self.assertFalse(app.dataframe)
+        self.assertFalse(app.segmented_control)
+        self.assertEqual(app.button(key="database_retry").label, "Erneut versuchen")
+
+    def retry(self, app):
+        self.holder.rollback()
+        app.button(key="database_retry").click().run()
+        self.assertFalse(app.exception)
+        self.assertTrue(app.dataframe)
+        self.assertFalse(any("gesperrt" in w.value for w in app.warning))
+
+    def test_current_shared_page_loads_while_another_writer_holds_database(self):
+        self.holder.execute("BEGIN IMMEDIATE")
+        self.holder.execute("UPDATE organisation_profile SET name='Uncommitted'")
+        app = self.app().run()
+        self.assertFalse(app.exception)
+        self.assertTrue(app.dataframe)
+        self.assertTrue(self.holder.in_transaction)
+
+    def test_exclusive_lock_stops_before_private_rendering_and_retry_recovers(self):
+        self.holder.execute("BEGIN EXCLUSIVE")
+        app = self.app().run()
+        self.assert_blocked(app)
+        self.retry(app)
+
+    def test_shared_cache_table_lock_is_retryable(self):
+        connect = sqlite3.connect
+
+        def shared_connect(database, **kwargs):
+            if database == self.database:
+                return connect(f"file:{database}?cache=shared", uri=True, **kwargs)
+            return connect(database, **kwargs)
+
+        self.holder.close()
+        self.enterContext(patch.object(sqlite3, "connect", shared_connect))
+        self.holder = sqlite3.connect(self.database)
+        self.addCleanup(self.holder.close)
+        self.holder.execute("BEGIN IMMEDIATE")
+        self.holder.execute("UPDATE organisation_profile SET name='Uncommitted'")
+        # Shared-cache table contention uses SQLITE_LOCKED_SHAREDCACHE (262),
+        # rather than SQLITE_BUSY (5) from an ordinary second writer.
+        reader = sqlite3.connect(self.database)
+        try:
+            with self.assertRaises(sqlite3.OperationalError) as caught:
+                reader.execute("SELECT * FROM organisation_profile")
+            self.assertEqual(caught.exception.sqlite_errorcode, sqlite3.SQLITE_LOCKED_SHAREDCACHE)
+        finally:
+            reader.close()
+        app = self.app().run()
+        self.assert_blocked(app)
+        self.retry(app)
+
+    def test_pending_migration_is_retried_without_resetting_other_preferences(self):
+        self.holder.execute("DELETE FROM schema_migrations WHERE name='mail_switches_opt_in'")
+        self.holder.execute("UPDATE organisation_profile SET weekly_digest=1, "
+                            "due_reminders=1, shared_calculations=1, name='Preserve me'")
+        self.holder.commit()
+        self.holder.execute("BEGIN IMMEDIATE")
+        app = self.app().run()
+        self.assert_blocked(app)
+        self.assertIsNone(self.holder.execute("SELECT 1 FROM schema_migrations "
+                                             "WHERE name='mail_switches_opt_in'").fetchone())
+        self.retry(app)
+        self.assertEqual(self.holder.execute("SELECT name,weekly_digest,due_reminders,shared_calculations "
+                                            "FROM organisation_profile").fetchone(), ("Preserve me", 0, 0, 1))
+        self.holder.execute("UPDATE organisation_profile SET weekly_digest=1")
+        self.holder.commit()
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertEqual(self.holder.execute("SELECT weekly_digest FROM organisation_profile").fetchone(), (1,))
+
+    def test_pandas_read_lock_after_schema_check_is_retryable(self):
+        prepare = bootstrap.prepare_database
+
+        def lock_after_preparing():
+            result = prepare()
+            self.holder.execute("BEGIN EXCLUSIVE")
+            return result
+
+        with patch.object(bootstrap, "prepare_database", lock_after_preparing):
+            app = self.app().run()
+        self.assert_blocked(app)
+        self.retry(app)
+
+    def test_personal_startup_lock_keeps_session_and_rechecks_access_on_retry(self):
+        self.enterContext(patch.dict(os.environ, {
+            "SCOPE_AUTH_MODE": "personal", "SCOPE_OWNER_EMAIL": "owner@example.com",
+            "SCOPE_SUPABASE_URL": "https://scope.supabase.co", "SCOPE_SUPABASE_ANON_KEY": "test-key",
+        }))
+        identity = {"email": "owner@example.com", "id": "test-owner", "email_confirmed_at": "2026-09-01"}
+        scope_auth.bootstrap_owner(self.database)
+        scope_auth.verified_member(identity, self.database, bind=True)
+        provider = self.enterContext(patch.object(scope_auth, "api", return_value=identity))
+        self.holder.execute("BEGIN IMMEDIATE")
+        app = self.app()
+        app.session_state["scope_access_token"] = "test-session-token"
+        app.run()
+        self.assert_blocked(app)
+        self.assertEqual(app.session_state["scope_access_token"], "test-session-token")
+        provider.assert_not_called()
+        # Revoking access while blocked must still take effect after retry.
+        self.holder.execute("DELETE FROM scope_access")
+        self.holder.commit()
+        app.button(key="database_retry").click().run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.dataframe)
+        self.assertNotIn("scope_access_token", app.session_state)
+        self.assertTrue(any(w.label == "E-Mail-Adresse" for w in app.text_input))
+
+    def test_personal_session_recovers_after_lock_without_logging_in_again(self):
+        self.enterContext(patch.dict(os.environ, {
+            "SCOPE_AUTH_MODE": "personal", "SCOPE_OWNER_EMAIL": "owner@example.com",
+            "SCOPE_SUPABASE_URL": "https://scope.supabase.co", "SCOPE_SUPABASE_ANON_KEY": "test-key",
+        }))
+        identity = {"email": "owner@example.com", "id": "test-owner", "email_confirmed_at": "2026-09-01"}
+        scope_auth.bootstrap_owner(self.database)
+        scope_auth.verified_member(identity, self.database, bind=True)
+        self.enterContext(patch.object(scope_auth, "api", return_value=identity))
+        self.holder.execute("BEGIN IMMEDIATE")
+        app = self.app()
+        app.session_state["scope_access_token"] = "test-session-token"
+        app.run()
+        self.assert_blocked(app)
+        self.retry(app)
+        self.assertEqual(app.session_state["scope_access_token"], "test-session-token")
+
+    def test_locked_database_does_not_run_before_shared_password_gate(self):
+        self.enterContext(patch.dict(os.environ, {"APP_PASSWORD": "test-password"}))
+        self.holder.execute("BEGIN EXCLUSIVE")
+        app = self.app().run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.dataframe)
+        self.assertFalse(app.warning)
+        self.assertTrue(any(w.label == "Passwort" for w in app.text_input))
+
+    def test_non_lock_database_error_is_not_disguised_as_retryable(self):
+        self.holder.executescript("DROP TABLE schema_migrations; "
+                                 "CREATE VIEW schema_migrations AS SELECT 'different_migration' AS name;")
+        app = self.app().run()
+        self.assertTrue(app.exception)
+        self.assertIn("view", app.exception[0].message)
+        self.assertFalse(any("gesperrt" in w.value for w in app.warning))
+        self.assertFalse(app.dataframe)
 
 
 class AppRegressionTest(unittest.TestCase):
@@ -492,6 +672,19 @@ class AppRegressionTest(unittest.TestCase):
         )
         self.assertEqual(list(screening.with_extract(cache)), [])
         self.assertEqual(list(screening.failed_egrids(cache)), [])
+
+    def test_an_extract_stored_before_the_legal_status_was_kept_is_asked_again(self):
+        """Once: a fresh answer carries the marker, with or without a status."""
+        import screening
+
+        cache = pd.DataFrame(
+            {"details": ['{"provisions": []}', '{"provisions": [], "lawstatus_kept": true}', ""],
+             "error": ["", "", "HTTP Error 502: Bad Gateway"]},
+            index=pd.Index(["CH_OLD", "CH_NEW", "CH_FAILED"], name="egrid"),
+        )
+        self.assertEqual(list(screening.stale_extracts(cache)), ["CH_OLD"])
+        self.assertEqual(screening.oereb_targets(["CH_OLD", "CH_NEW", "CH_FAILED", "CH_NONE", ""], cache),
+                         ["CH_OLD", "CH_FAILED", "CH_NONE"])
 
     def test_the_board_renders_a_saved_lead_with_its_acquisition_fields(self):
         """The whole path: a decision in `parcel_workflow`, joined to a parcel
@@ -983,6 +1176,296 @@ class AppRegressionTest(unittest.TestCase):
         self.assertNotIn(
             "Keine Parzelle", " ".join(element.value for element in app.info)
         )
+
+
+
+class OerebRefreshTest(unittest.TestCase):
+    """"ÖREB prüfen" on a scratch database: a stored extract without the legal
+    status is fetched again; a failed fetch keeps it; an answer still without
+    a status is not fetched again."""
+
+    STORED = {"provisions": [{"title": "Gestaltungsplan Giessi", "number": "21.259"}],
+              "created": "2026-08-18T10:49:35"}
+
+    def setUp(self):
+        import screening
+        import scope_auth
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.database = os.path.join(self.tempdir.name, "scratch.sqlite")
+        with sqlite3.connect(self.database) as con:
+            con.execute("CREATE TABLE oereb_cache (egrid TEXT PRIMARY KEY, hard TEXT, notable TEXT, "
+                        "error TEXT, checked_at TEXT, details TEXT)")
+            con.execute("INSERT INTO oereb_cache VALUES (?,?,?,?,?,?)",
+                        ("CH_OLD", "", "Waldabstand (12 m²)", "", "2026-08-18 10:50:00",
+                         json.dumps(self.STORED)))
+        patcher = patch.object(paths, "DB", self.database)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        auth = patch.object(scope_auth, "require_write", lambda db=None: None)
+        auth.start()
+        self.addCleanup(auth.stop)
+        self.screening = screening
+
+    def doc(self, lawstatus):
+        provision = {"Type": {"Code": "LegalProvision"},
+                     "Title": [{"Language": "de", "Text": "Gestaltungsplan Giessi"}],
+                     "OfficialNumber": [{"Language": "de", "Text": "21.259"}]}
+        if lawstatus:
+            provision["Lawstatus"] = {"Code": lawstatus}
+        return {"GetExtractByIdResponse": {"extract": {"CreationDate": "2026-10-05T08:10:14",
+                "RealEstate": {"RestrictionOnLandownership": [{"LegalProvisions": [provision]}]}}}}
+
+    def stored(self):
+        with sqlite3.connect(self.database) as con:
+            return con.execute("SELECT notable, error, checked_at, details FROM oereb_cache "
+                               "WHERE egrid='CH_OLD'").fetchone()
+
+    def test_a_refresh_stores_the_legal_status(self):
+        self.assertEqual(self.screening.oereb_targets(["CH_OLD"], self.screening.read_oereb_cache()),
+                         ["CH_OLD"])
+        with patch.object(oereb, "assess", lambda egrid: ([], [], None, oereb.details(self.doc("inForce")))):
+            self.screening.check_oereb(["CH_OLD"])
+        details = json.loads(self.stored()[3])
+        self.assertEqual([p["lawstatus"] for p in details["provisions"]], ["inForce"])
+        self.assertEqual(self.screening.oereb_targets(["CH_OLD"], self.screening.read_oereb_cache()), [])
+
+    def test_a_failed_refresh_keeps_the_stored_extract(self):
+        before = self.stored()
+        with patch.object(oereb, "assess", lambda egrid: ([], [], "HTTP Error 502: Bad Gateway", None)):
+            self.screening.check_oereb(["CH_OLD"])
+        self.assertEqual(self.stored(), before)
+        # Asked again on the next click — the user's, not a loop.
+        self.assertEqual(self.screening.oereb_targets(["CH_OLD"], self.screening.read_oereb_cache()),
+                         ["CH_OLD"])
+
+    def test_an_answer_that_is_no_extract_keeps_the_stored_extract(self):
+        before = self.stored()
+        with patch.object(oereb, "fetch", lambda egrid: {"message": "Service temporarily unavailable"}):
+            self.screening.check_oereb(["CH_OLD"])
+        self.assertEqual(self.stored(), before)
+
+    def test_a_failed_call_keeps_a_legacy_row_and_its_exclusion(self):
+        with sqlite3.connect(self.database) as con:
+            con.execute("INSERT INTO oereb_cache VALUES (?,?,?,?,?,?)",
+                        ("CH_LEGACY", "Planungszone Ortskern", "", "", "2026-08-11 09:00:00", None))
+        with patch.object(oereb, "assess", lambda egrid: ([], [], "HTTP Error 502: Bad Gateway", None)):
+            summary = self.screening.check_oereb(["CH_LEGACY", "CH_NEW"])
+        with sqlite3.connect(self.database) as con:
+            legacy = con.execute("SELECT hard, error FROM oereb_cache WHERE egrid='CH_LEGACY'").fetchone()
+            new = con.execute("SELECT hard, error FROM oereb_cache WHERE egrid='CH_NEW'").fetchone()
+        self.assertEqual(legacy, ("Planungszone Ortskern", ""))
+        self.assertEqual(new, ("", "HTTP Error 502: Bad Gateway"))
+        self.assertEqual(summary, {"asked": 2, "failed": 2})
+
+    def test_an_answer_still_without_a_status_is_not_asked_again(self):
+        calls = []
+        def assess(egrid):
+            calls.append(egrid)
+            return [], [], None, oereb.details(self.doc(None))
+        with patch.object(oereb, "assess", assess):
+            for _ in range(3):
+                self.screening.check_oereb(self.screening.oereb_targets(
+                    ["CH_OLD"], self.screening.read_oereb_cache()))
+        self.assertEqual(calls, ["CH_OLD"])
+        details = json.loads(self.stored()[3])
+        self.assertEqual([p["lawstatus"] for p in details["provisions"]], [""])
+
+    def test_a_call_that_raises_keeps_the_stored_extract(self):
+        before = self.stored()
+        with patch.object(oereb, "assess", side_effect=RuntimeError("timed out")):
+            summary = self.screening.check_oereb(["CH_OLD"])
+        self.assertEqual(self.stored(), before)
+        self.assertEqual(summary, {"asked": 1, "failed": 1})
+
+    def test_a_failure_never_replaces_a_row_another_run_stored_meanwhile(self):
+        """Two clicks at once: the parcel was not cached when this run began,
+        and another run stored its extract before this one's call failed."""
+        good = ("", "", "", "2026-10-05 08:00:00", json.dumps({"lawstatus_kept": True}))
+        def assess(egrid):
+            with sqlite3.connect(self.database) as con:
+                con.execute("INSERT OR REPLACE INTO oereb_cache VALUES (?,?,?,?,?,?)", (egrid,) + good)
+            return [], [], "HTTP Error 502: Bad Gateway", None
+        with patch.object(oereb, "assess", assess):
+            summary = self.screening.check_oereb(["CH_NEW"])
+        with sqlite3.connect(self.database) as con:
+            row = con.execute("SELECT hard, notable, error, checked_at, details FROM oereb_cache "
+                              "WHERE egrid='CH_NEW'").fetchone()
+        self.assertEqual(row, good)
+        self.assertEqual(summary, {"asked": 1, "failed": 1})
+
+
+class OerebButtonUiTest(unittest.TestCase):
+    """"ÖREB prüfen" as the user meets it, on a scratch copy of the seed
+    database: a failed run warns once and leaves every cached row as it was;
+    the next, successful run shows no warning, nor does the render after it."""
+
+    STORED = json.dumps({"provisions": [{"title": "Gestaltungsplan Alt", "number": "05.120"}],
+                         "created": "2026-08-18T10:00:00"})
+    DOC = {"GetExtractByIdResponse": {"extract": {"CreationDate": "2026-10-05T08:00:00", "RealEstate": {
+        "RestrictionOnLandownership": [{"LegalProvisions": [{
+            "Type": {"Code": "LegalProvision"},
+            "Title": [{"Language": "de", "Text": "Gestaltungsplan Alt"}],
+            "OfficialNumber": [{"Language": "de", "Text": "05.120"}],
+            "Lawstatus": {"Code": "inForce"}}]}]}}}}
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.database = os.path.join(self.tempdir.name, "results.sqlite")
+        shutil.copy2(paths.SEED_DB, self.database)
+        with sqlite3.connect(self.database) as con:
+            con.execute("DELETE FROM oereb_cache")
+            ingest.schema(con)
+            egrids = [row[0] for row in con.execute(
+                "SELECT egrid FROM parcel_results WHERE egrid IS NOT NULL AND egrid != '' "
+                "ORDER BY delta DESC LIMIT 400")]
+            # Stored before the legal status was kept: "ÖREB prüfen" asks again.
+            con.executemany(
+                "INSERT INTO oereb_cache (egrid, hard, notable, error, checked_at, details) "
+                "VALUES (?,?,?,?,?,?)",
+                [(e, "", "Waldabstand (12 m²)", "", "2026-08-18 10:50:00", self.STORED)
+                 for e in egrids])
+        self.seeded = set(egrids)
+        original = paths.DB
+        paths.DB = self.database
+        self.addCleanup(setattr, paths, "DB", original)
+        st.cache_data.clear()
+        self.addCleanup(st.cache_data.clear)
+        # The hosted case: no geodata, so the button reads "ÖREB prüfen".
+        geodata = patch.object(ingest, "geodata_available", lambda canton="AG": False)
+        geodata.start()
+        self.addCleanup(geodata.stop)
+        self.calls = []
+
+    def cached(self):
+        with sqlite3.connect(self.database) as con:
+            return {row[0]: row[1:] for row in con.execute(
+                "SELECT egrid, hard, notable, error, checked_at, details FROM oereb_cache")}
+
+    def click(self, app, assess):
+        with patch.object(oereb, "assess", assess):
+            app.button(key="screening_oereb_refresh").click().run()
+        self.assertFalse(app.exception)
+
+    @staticmethod
+    def warnings(app):
+        return [w.value for w in app.warning if "fehlgeschlagen" in w.value]
+
+    def test_a_failed_run_warns_once_keeps_the_cache_and_a_good_run_clears_it(self):
+        def failing(egrid):
+            self.calls.append(egrid)
+            return [], [], "HTTP Error 502: Bad Gateway", None
+
+        def answering(egrid):
+            self.calls.append(egrid)
+            return [], [], None, oereb.details(self.DOC)
+
+        before = self.cached()
+        app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=120).run()
+        self.assertFalse(app.exception)
+
+        self.click(app, failing)
+        asked = self.seeded & set(self.calls)
+        self.assertTrue(asked, "the run asked for none of the stored extracts")
+        self.assertEqual(len(self.warnings(app)), 1, self.warnings(app))
+        after = self.cached()
+        self.assertEqual({e: after[e] for e in self.seeded}, {e: before[e] for e in self.seeded})
+        app.run()  # shown once, not on every render after
+        self.assertEqual(self.warnings(app), [])
+
+        self.calls.clear()
+        self.click(app, answering)
+        self.assertEqual(self.warnings(app), [])
+        refreshed = self.cached()
+        self.assertTrue(all('"lawstatus_kept": true' in refreshed[e][4] for e in asked))
+
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertEqual(self.warnings(app), [])
+
+    def test_the_refresh_above_the_list_asks_the_cadastre_only(self):
+        """Visible beside the export, for members who may write. With geodata
+        at hand it still asks the cadastre only — no recompute of the cascade."""
+        def answering(egrid):
+            self.calls.append(egrid)
+            return [], [], None, oereb.details(self.DOC)
+
+        def recompute(**_):
+            raise AssertionError("ÖREB prüfen must not recompute the cascade")
+
+        app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=120).run()
+        with patch.object(ingest, "geodata_available", lambda canton="AG": True), \
+                patch.object(ingest, "recompute", recompute):
+            app.run()
+            button = app.button(key="screening_oereb_refresh")
+            self.assertEqual(button.label, "ÖREB prüfen")
+            self.click(app, answering)
+        self.assertTrue(self.seeded & set(self.calls))
+        self.assertTrue(any("ÖREB-Abfrage abgeschlossen" in s.value for s in app.success),
+                        [s.value for s in app.success])
+        app.run()
+        self.assertFalse(any("ÖREB-Abfrage abgeschlossen" in s.value for s in app.success))
+
+    def test_a_database_another_writer_holds_stops_the_run_with_a_message(self):
+        """Another session writing while the run writes: a real lock, held by
+        a second connection for exactly the run, with SQLite's wait cut to a
+        tenth of a second. The page says why the run stopped instead of
+        failing, and every cached row stays as it was."""
+        def answering(egrid):
+            self.calls.append(egrid)
+            return [], [], None, oereb.details(self.DOC)
+
+        connect, run = sqlite3.connect, screening.check_oereb
+        holder = connect(self.database, isolation_level=None, check_same_thread=False)
+        self.addCleanup(holder.close)
+
+        def while_another_writes(egrids, progress=None):
+            holder.execute("BEGIN IMMEDIATE")
+            try:
+                with patch.object(sqlite3, "connect", functools.partial(connect, timeout=0.1)):
+                    return run(egrids, progress)
+            finally:
+                holder.rollback()
+
+        before = self.cached()
+        app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=120).run()
+        self.assertFalse(app.exception)
+        with patch.object(screening, "check_oereb", while_another_writes):
+            self.click(app, answering)
+        self.assertTrue(self.calls)
+        self.assertTrue(any("Datenbank gesperrt" in e.value for e in app.error), [e.value for e in app.error])
+        self.assertEqual(self.cached(), before)
+
+    def test_a_reader_is_not_offered_the_refresh(self):
+        import scope_auth
+        with patch.object(scope_auth, "may_write", lambda db=None: False):
+            app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=120).run()
+        self.assertFalse(app.exception)
+        self.assertNotIn("screening_oereb_refresh", [b.key for b in app.button])
+
+    def test_after_a_recompute_the_shortlist_as_recomputed_is_asked(self):
+        """With geodata the button recomputes first; the cadastre is then asked
+        for the shortlist as recomputed, not as the app had it cached."""
+        def recompute(**_):
+            with sqlite3.connect(self.database) as con:
+                con.execute("UPDATE parcel_results SET egrid = 'CH_FRESH_' || egrid "
+                            "WHERE egrid IS NOT NULL AND egrid != ''")
+
+        def answering(egrid):
+            self.calls.append(egrid)
+            return [], [], None, oereb.details(self.DOC)
+
+        app = AppTest.from_file(os.path.join(paths.HERE, "app.py"), default_timeout=120).run()
+        self.assertFalse(app.exception)
+        with patch.object(ingest, "geodata_available", lambda canton="AG": True), \
+                patch.object(ingest, "recompute", recompute), patch.object(oereb, "assess", answering):
+            app.run()
+            next(b for b in app.button if "Neu berechnen" in b.label).click().run()
+        self.assertFalse(app.exception)
+        self.assertTrue(self.calls)
+        self.assertEqual([e for e in self.calls if not e.startswith("CH_FRESH_")], [])
+
 
 if __name__ == "__main__":
     unittest.main()

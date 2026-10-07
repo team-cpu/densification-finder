@@ -293,6 +293,39 @@ class WorkflowStatusRebuildTest(unittest.TestCase):
 
 
 class DatabaseBootstrapTest(unittest.TestCase):
+    def test_current_schema_needs_no_writes_and_preserves_opt_ins(self):
+        con = sqlite3.connect(":memory:")
+        self.addCleanup(con.close)
+        ingest.schema(con)
+        con.execute("UPDATE organisation_profile SET name='Saved', weekly_digest=1, "
+                    "due_reminders=1, shared_calculations=1")
+        con.commit()
+        before = con.iterdump()
+        before = list(before)
+        con.execute("PRAGMA query_only=ON")
+
+        ingest.schema(con)
+
+        self.assertEqual(list(con.iterdump()), before)
+
+    def test_current_schema_can_be_checked_while_another_connection_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = os.path.join(directory, "current.sqlite")
+            con = sqlite3.connect(database, timeout=0.1)
+            holder = sqlite3.connect(database)
+            try:
+                ingest.schema(con)
+                holder.execute("BEGIN IMMEDIATE")
+                holder.execute("UPDATE organisation_profile SET name='In progress'")
+
+                ingest.schema(con)
+
+                self.assertEqual(con.execute("SELECT name FROM organisation_profile").fetchone(), ("",))
+                self.assertTrue(holder.in_transaction)
+            finally:
+                holder.close()
+                con.close()
+
     def test_bootstrap_migrates_a_persistent_legacy_database(self):
         with tempfile.TemporaryDirectory() as directory:
             seed = os.path.join(directory, "seed.sqlite")

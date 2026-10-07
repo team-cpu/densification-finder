@@ -154,6 +154,12 @@ def details(doc):
                     # before cantonal, and by subject. Reproducing it keeps the
                     # document recognisable next to the official one.
                     "index": p.get("Index") or 0,
+                    # `inForce`, or a change the cadastre lists ahead of time
+                    # (`changeWithPreEffect`). Block E shows it beside a plan of
+                    # the same name — as the listing's status, never as the
+                    # status of the revision the Amtsblatt published.
+                    "lawstatus": ((p.get("Lawstatus") or x.get("Lawstatus") or {})
+                                  .get("Code") or ""),
                 }
                 seen_docs[key] = entry
                 documents[bucket].append(entry)
@@ -183,6 +189,11 @@ def details(doc):
         "laws": documents["laws"],
         "office": office,
         "created": e.get("CreationDate", ""),
+        # Written since documents keep their `lawstatus`: an extract stored
+        # without this marker predates it and is asked again by "ÖREB prüfen"
+        # (`screening.stale_extracts`) — once, whether or not the answer then
+        # states a status.
+        "lawstatus_kept": True,
     }
 
 
@@ -198,6 +209,12 @@ def assess(egrid):
         items = restrictions(doc)
     except Exception as exc:  # network, 404 on an unknown EGRID, malformed body
         return [], [], str(exc), None
+    # A 200 that is no extract ("service unavailable" as JSON) is a failure,
+    # not an extract with nothing on the parcel.
+    extract = doc.get("GetExtractByIdResponse", {}).get("extract", doc.get("extract", doc)) \
+        if isinstance(doc, dict) else {}
+    if not isinstance(extract, dict) or not extract.get("RealEstate"):
+        return [], [], "Antwort ist kein ÖREB-Auszug", None
 
     hard, notable = [], []
     for code, legend, share in items:

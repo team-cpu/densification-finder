@@ -1,0 +1,63 @@
+{
+  "term": "",
+  "pagination": {
+    "page": 0,
+    "size": 10
+  },
+  "sort": [
+    {
+      "field": "validFrom",
+      "direction": "desc"
+    }
+  ],
+  "filter": {
+    "operator": "and",
+    "filters": [
+      {
+        "operator": "or",
+        "filters": [
+          {
+            "operator": "gt",
+            "field": "validUntil",
+            "value": "2026-10-06T05:13:52.731Z"
+          },
+          {
+            "operator": "and",
+            "filters": [
+              {
+                "operator": "eq",
+                "field": "validUntil",
+                "value": null
+              },
+              {
+                "operator": "lt",
+                "field": "validFrom",
+                "value": "2026-10-06T05:13:52.731Z"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "filters": [
+          {
+            "filters": [
+              {
+                "field": "tagIds",
+                "value": "063d5a66-595b-4a2b-9279-7e62b48d2815",
+                "operator": "eq"
+              },
+              {
+                "field": "tagIds",
+                "value": "f0040d54-5b61-460d-9e8f-a4d8281d20a0",
+                "operator": "eq"
+              }
+            ],
+            "operator": "or"
+          }
+        ],
+        "operator": "and"
+      }
+    ]
+  }
+}

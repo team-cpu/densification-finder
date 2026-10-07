@@ -107,9 +107,27 @@ Streamlit on `127.0.0.1:${SCOPE_PORT:-8521}`.
 
 `results.sqlite` is committed — 36,274 candidates across 165 municipalities
 (20,659 built and 15,615 vacant) — so a fresh clone opens a working list without
-downloading anything. **Neu berechnen** re-runs the cascade over the stored
-parcel geometry and then queries the ÖREB cadastre for the shortlist: about two
-minutes.
+downloading anything. **ÖREB prüfen**, beside the CSV export above the list,
+asks the ÖREB cadastre for the shortlist on screen — the parcels without a
+stored extract, and those whose extract predates the documents' legal status
+(`lawstatus`) — and nothing else: it never recomputes the cascade. It is offered
+only to members who may write (`scope_auth.may_write`), and
+`screening.check_oereb` checks again: before the run, and — since a run takes
+minutes — under each write's own lock (`scope_auth.check_transaction`), so a
+member whose access is revoked meanwhile writes nothing more. Progress shows
+under the page header, then what the run did: done, how many failed, nothing to
+ask, or stopped. It stops — with a message, not an error page — when access is
+revoked or another writer holds the database past SQLite's wait, wherever the
+lock meets it (access check, write or commit); that parcel's write is rolled
+back, the answers stored before it stay. A failed call — or an answer that is no
+extract — leaves every cached row as it was (a failure is written only where no
+row exists); an answer that still states no status is stored with a marker and
+not asked again (`screening.oereb_targets`). Checked in the browser on
+2026-10-06: a live run of 16 parcels stored their legal status; a simulated
+cadastre outage on 100 left all 78 earlier rows byte for byte, and its warning
+showed once. **Neu berechnen**, for operators in the hidden "Daten
+aktualisieren" section, recomputes the cascade over the stored parcel geometry
+first: about two minutes.
 
 The **Parzellenfläche** control covers every stored area, from 109 m² to
 412,503 m², and its upper end is open — *ohne Limite* rather than a number. It
@@ -272,13 +290,89 @@ Philipp's own rate settles it.
   This needs no name matching: the cadastre names the documents for *this*
   EGRID, and the BNO's official number is the municipality's BFS number. One
   request answers both "is this parcel excluded" and "which rules apply".
-* **E · Neueste Änderungen** — what block D cannot say: *since when*. The ÖREB
-  extract marks each document `inForce` and carries no date. `oereblex.ag.ch` —
-  the same platform block D's links point into — answers that for the whole
-  canton in one 76 KB request, so the panel opens with this parcel's own
-  regulation and its in-force date, then the three most recent changes anywhere
-  in Aargau, with the remaining ~224 folded away. Fetched once every twelve
-  hours; one to two municipalities put a new BNO in force per month.
+* **E · Regulatorische Änderungen** — the parcel's municipality and the
+  relevant canton-level changes, nothing else: Philipp asked for exactly that on
+  2026-10-05, and a list of 227 regulations in force across Aargau is not a list
+  of changes to this parcel. A canton notice counts only for the municipality it
+  names; another municipality's project is not this parcel's because the canton
+  published it.
+
+  **Version 1 (the default)** shows two things side by side and draws no
+  conclusion from one to the other: OEREBlex's rules in force, and the
+  Amtsblatt's publications as printed. Philipp's three labels (2026-10-05)
+  appear only where a source supports them on the day shown: **In Kraft
+  getreten** on OEREBlex rows, and on a publication checked as in force;
+  **Entwurf in Auflage** while a checked display period runs; **Genehmigt,
+  Rechtskraft ausstehend** while a checked approval's appeal period, or a
+  stated date of legal force, lies ahead. Nothing is read from a title for it.
+  A person records the stage per publication and Gemeinde, with the source,
+  the date and how it was checked (`planning.Verified`, in the store's
+  `verified`), and the panel shows the badge only inside the window that
+  source supports (`planning.stage_badge`). Outside it — and for every row no
+  one checked — the row reads **Publikation**, with what is known: "Öffentliche
+  Auflage … beendet — heutiger Stand nicht geprüft", "Genehmigt am … —
+  Rechtskraft nach dem … nicht geprüft", "Genehmigung verweigert am …". A
+  canton notice for several Gemeinden is one row per Gemeinde, each with its
+  own check: one Gemeinde's approval is never another's. An OEREBlex edition
+  with its date ahead reads **Künftig in Kraft** (our wording). So Philipp's
+  labels work as far as stages are checked; no source states them on its own
+  yet (below).
+
+  * **Vorschriften (OEREBlex)** — the municipality's regulation in force with
+    its date (fetched once every twelve hours for the canton, filtered here):
+    **In Kraft getreten** (grey), or, for an edition OEREBlex lists with its
+    date ahead, **Künftig in Kraft** (yellow) — the date is all OEREBlex says,
+    not that an approval is final.
+  * **Publikationen im Amtsblatt** — each publication its own row, as printed:
+    its date (captioned "publiziert"), its Publ.-Nr., its title (for a canton
+    notice naming several municipalities, the part naming this one, whole and as
+    printed — 'Gestaltungsplan "Giessi"; Genehmigung verweigert' — with the notice's own
+    title beside it; `planning.publication_title`), the badge **Publikation**,
+    and an arrow (↗) to the original; a source that is only a search opens as
+    **Suche ↗**, any other page as **Link ↗**. No step is read from a title
+    or from a part's text: reading it from the wording kept turning refusals
+    and negations into confident steps ("Verweigerung der Genehmigung" showed
+    "Genehmigung"), so version 1 claims none until a source states it. What a
+    publication announced is in its title, on its date — not where the plan
+    stands today: an Auflage published last year does not show that anything
+    is open now, and the card says so. Publications are not chained into one
+    revision, no status of today is inferred, no date from their text is
+    shown, and the parcel's ÖREB extract is not matched to them. (The fields
+    only the inference path uses are still parsed when the store loads; should
+    that fail, the card reads "Verzeichnis nicht auswertbar" and the page stays
+    up.) Canton-wide changes (a title naming the
+    Baugesetz, the Bauverordnung or the Richtplan, and no municipality,
+    municipal plan or zone) follow in their own group. A publication that
+    names the municipality but cannot be attributed is counted ("nicht
+    zuordenbar"), and "none" is said with the period the directory covers.
+
+  Everything but the OEREBlex rows comes from the Amtsblatt (facts as of
+  2026-10-06 in `NEWSFEED.md` §5): its search and publications are disallowed
+  to every crawler in `robots.txt`, its legal notice reserves reuse beyond the
+  legally permitted cases to the Staatskanzlei's written consent, and it
+  documents no API, feed or data export — only the website, a search
+  subscription mailed daily or weekly, and a PDF export. The explicit-run local
+  metadata collectors described below can read the search interfaces; their
+  staging output is separate from this panel and its production store.
+  Without a store the card shows a **temporary fallback**: a line saying so and
+  the Amtsblatt search filtered to the municipality and the canton. With a
+  store (`SCOPE_PLANNING_PUBLICATIONS`) the publication rows appear, filled by
+  `python -m amtsblatt_import` from a batch an operator wrote (below); the card
+  says what the list covers and since when, and warns when it is more than a
+  week old or its last update failed — the last valid list stays. Tested with
+  real publications for Seon, Oberrüti, Killwangen and Hallwil on 2026-10-06
+  (`NEWSFEED.md` §5); the store is not configured in production.
+
+  **The inference path is OFF.** It chains publications into revisions,
+  derives a status of today from them (Philipp's "Entwurf in Auflage" and
+  "Genehmigt, Rechtskraft ausstehend" for Amtsblatt plans, "Beschlossen",
+  "Planungszone in Kraft/beendet", "Stand unbestätigt"), reads decision and
+  in-force dates from the text, ends Planungszonen by the plan they secure and
+  matches the parcel's ÖREB extract by name. Its text heuristics kept giving
+  confident labels from sentences they misread — four review rounds, each
+  finding new wordings (`NEWSFEED.md` §5) — so it is not part of version 1. It
+  runs only with `SCOPE_PLANNING_INFERENCE=1`, for testing against fixtures;
+  its rules are in `NEWSFEED.md` §5 and `planning.py`.
 
   The join is **by municipality name, never by number**. `syst_nr` looks like
   the BFS number and equals it in 162 of our 163 municipalities — Dintikon is
@@ -287,22 +381,28 @@ Philipp's own rate settles it.
   on all 163; the number is a cross-check, and a disagreement is printed rather
   than resolved silently.
 
-  A failed fetch says so, with the reason. An empty change list would read as
-  "nothing has changed lately", which is the opposite of "the canton did not
-  answer" — and block D is unaffected either way, since it comes from the
-  parcel's own extract. The panel records what is **in force**; revisions still
-  in consultation appear only in the Amtsblatt, which forbids automated access
-  (`NEWSFEED.md`).
+  A failed fetch says so, with the reason. An empty list would read as "nothing
+  has changed lately", which is the opposite of "the canton did not answer" —
+  and block D is unaffected either way, since it comes from the parcel's own
+  extract. The same holds for procedures: "not tracked", "could not read the
+  store" and "none" are three different lines.
 
 **Als PDF exportieren**, top right beside the back link, writes blocks A–D, the
-whole calculation path, and the parcel's own regulation with its in-force date
-to a data sheet — one page, two once several assumptions carry an overridden
-value and its source. Only that one line of block E goes on the paper: the
-canton-wide change list is news rather than a fact about this parcel, and 227
-rows would bury the sheet. A printed analysis that does not say which edition of
-the building regulation it assumed cannot be checked a year later, which is why
-the not-found and could-not-ask cases print a line of their own rather than the
-block quietly disappearing.
+whole calculation path, and block E as text to a data sheet. Block E prints the
+edition of the building regulation the sheet assumed and any edition approved
+for later, the publications as printed — one row each, with date, Philipp's
+label where a checked stage supports it on the print date (else
+"Publikation"), title, Publ.-Nr., a link to the original, and the check's note
+with its evidence link; a row of any length runs over pages — with a line
+saying that a step is shown only when checked and supported on that date and
+that the list is not today's state, canton-wide publications, publications
+that could not be attributed, how old the list is and whether its last update
+failed — or that the Amtsblatt was not tracked, with the address to check. A printed analysis that
+does not say which rules it assumed cannot be checked a year later, which is
+why the not-found and could-not-ask cases print a line of their own rather than
+the block quietly disappearing. The sheet is built while the page draws; should
+it fail, the button is disabled and names the error, and the analysis on screen
+stays as it is.
 
 Economic edits in the detail calculation live in the session and are gone on
 reload. The lead workflow is different: saved/hidden decisions, manually entered
@@ -378,11 +478,264 @@ Each of these cost a wrong answer first.
 ## Regulation changes as a feed
 
 `NEWSFEED.md` records what is actually available if the tool is to show building
-regulation changes next to a parcel: the Amtsblatt has the right content but
-forbids automated access, while `oereblex.ag.ch` answers "which BNO governs this
-municipality, in force since when, PDF here" for the whole canton in one request.
-Findings, measured volumes, the one join that does not hold, and a staged
-proposal are in that file. Nothing is wired into the app yet.
+regulation changes next to a parcel: `oereblex.ag.ch` answers "which BNO governs
+this municipality, in force since when, PDF here" for the whole canton in one
+request. The Amtsblatt carries notices of plans decided or under way; the canton
+also publishes consultation search metadata on ag.ch. Amtsblatt terms reserve
+reuse beyond the legally permitted cases to the Staatskanzlei's written consent;
+whether Scope's use is such a case remains an open legal question
+(`NEWSFEED.md` §§5–6).
+Block E is built on both: OEREBlex live, the Amtsblatt as links until a
+publication store is configured. A store is filled by the importer from a CSV or
+JSON batch — one row per publication and Gemeinde, only number, office,
+Gemeinde, date, title, link and an optional checked stage; the contract is in
+`amtsblatt_import.py`:
+
+```bash
+.venv/bin/python -m amtsblatt_import path/to/publications.json batch.csv --von 2026-09-01 --bis 2026-10-05 --gemeinden Seon,Oberrüti --quelle "manuell aus amtsblatt.ag.ch"
+```
+
+It replaces the store only with a valid one, atomically: a batch that would
+leave a gap after the store's `stand`, covers other Gemeinden, names none (a
+missing, blank or `null` coverage — only an explicit `alle` covers every
+Gemeinde), contradicts itself or carries one bad row changes nothing, and every
+attempt is recorded beside the store (`publications.json.status.json`) for the
+panel to show. Run twice, it adds nothing; a corrected row replaces its
+predecessor. No adapter for the subscription e-mail exists: nobody here has seen
+one. Check a store before pointing the app at it:
+
+```bash
+.venv/bin/python -m planning check path/to/publications.json
+```
+
+It fails on what would make the panel wrong rather than incomplete: a record it
+cannot read, a notice it cannot attribute to exactly one municipality, a
+publication imported twice (overlapping pages), a store more than a week old, a
+store that does not say since when it looks (`since`) — without that, "no
+procedure under way" means nothing.
+
+### Local planning-source candidate collectors
+
+`planning_collect.py` provides explicit-run metadata collection without an email
+subscription. It reads the municipality-filtered Amtsblatt search HTML and the
+canton's consultation widget/search JSON interface. It follows search pagination
+only, without fetching notice details or PDFs:
+
+```bash
+python -m planning_collect amtsblatt --municipality Seon --kind municipal --output /tmp/seon-candidates.json
+python -m planning_collect amtsblatt --municipality Seon --kind canton-approvals --output /tmp/seon-canton-candidates.json
+python -m planning_collect consultations --output /tmp/ag-consultation-candidates.json
+python -m planning_collect consultations --mode archive --term Richtplan --max-pages 10 --output /tmp/ag-archive-candidates.json
+```
+
+Unknown municipalities are rejected. The default limit is five search-result
+pages, configurable with `--max-pages` up to a hard cap of 50 for explicit manual reads; a larger search
+fails explicitly. Each request has a 20-second deadline (`--timeout`, at most
+120 seconds) and a 2 MiB response limit. Only the fixed official HTTPS search
+origins/paths are allowed; redirects preserve selection filters and cannot turn
+the consultation POST into GET. Ambient proxy settings and cookies are unused.
+No scheduler, app integration or production synchronization is configured.
+
+The versioned `scope.planning-candidates` envelope contains `candidates`, source
+and query parameters, one UTC run timestamp, counts and page traversal metadata.
+It preserves provider IDs in distinct namespaces: Amtsblatt publication numbers
+and ag.ch dynamic-content UUIDs. Only title, source link, original publication
+date, authority/rubric, any official publication version marker and the
+consultation's explicitly named CMS validity
+fields are retained. Teaser/article bodies and request/response headers are not
+stored. A municipality search is a query hint, not evidence of territorial scope;
+consultation matches include subjects unrelated to building regulation. CMS
+`cms_valid_from`/`cms_valid_until` and current/archive placement do not establish a legal
+stage, appeal deadline or entry into force.
+
+Every candidate needs review of relevance, territorial scope and legal stage.
+Traversing every result page establishes a search snapshot, not complete
+historical/legal coverage. Staging has no `records`, `since` or `stand` and is
+rejected by `amtsblatt_import`; an operator must separately prepare an attributed,
+reviewed batch and justify its coverage period. The collectors refuse existing
+production stores/import batches, unrelated output files and output symlinks.
+They atomically replace only a complete validated snapshot, leaving an earlier
+snapshot unchanged on fetch, parser, pagination or write failure. An advisory `OUTPUT.collect.lock` serializes replacement by cooperating
+collectors; a destination changed during collection is refused.
+
+These HTML and undocumented JSON interfaces can change; schema/filter drift
+fails explicitly. Technical access does not resolve the Amtsblatt's robots
+restrictions or reuse permission. See `NEWSFEED.md` §6. Offline regression tests
+use minimized public search fixtures:
+
+```bash
+python -m pytest -q tests/test_planning_collect.py tests/test_amtsblatt.py tests/test_amtsblatt_import.py tests/test_planning.py
+```
+
+### Opt-in local panel preview
+
+`planning_preview.py` keeps collector metadata in a separate local preview store.
+The app reads it only when `SCOPE_PLANNING_PREVIEW` is set in the local process;
+the example configuration leaves this empty. Import the three reviewed search
+snapshots, inspect the queue, and apply explicit relevance/territory decisions:
+
+```bash
+python -m planning_preview import /tmp/scope-planning-preview-20261006/preview.json /tmp/scope-seon-municipal-candidates-20261006.json /tmp/scope-seon-canton-candidates-20261006.json /tmp/scope-ag-consultation-candidates-20261006.json
+python -m planning_preview queue /tmp/scope-planning-preview-20261006/preview.json
+python -m planning_preview review /tmp/scope-planning-preview-20261006/preview.json /tmp/scope-preview-reviews.json
+SCOPE_PLANNING_PREVIEW=/tmp/scope-planning-preview-20261006/preview.json python -m streamlit run app.py
+```
+
+Create the output directory beforehand. `queue` prints each original source ID,
+current metadata fingerprint, source link, review state and a conservative title
+suggestion. Suggestions never include an item automatically. `queue --all`
+also lists current include/exclude decisions. The review batch is a JSON list;
+copy the exact `source_id` and `fingerprint` from the queue, inspect the original,
+and supply a current UTC review timestamp. For example, the shape is:
+
+```json
+[
+  {
+    "source_id": {"namespace": "amtsblatt.ag.ch:pub_nr", "value": "00.102.603"},
+    "fingerprint": "<exact current fingerprint from queue>",
+    "action": "include",
+    "municipalities": ["Seon"],
+    "canton_wide": false,
+    "evidence_url": "https://amtsblatt.ag.ch/ekab/00.102.603/publikation/",
+    "rationale": "<short evidence-based relevance and territory reason>",
+    "reviewed_at": "<actual ISO timestamp with timezone>"
+  }
+]
+```
+
+This template is not a prepared review decision. Include requires known exact
+municipalities or explicit `canton_wide: true` with an empty municipality list,
+plus evidence for that same source item and a short rationale. A publishing
+canton office, municipality query or planning-like title alone proves neither
+relevance nor territory. `exclude` and `hold` require evidence/rationale/timestamp
+but assert no territory; they remain outside the parcel preview. Reviews verify
+relevance and municipal/canton scope only, never legal stage or parcel coverage.
+
+Only includes pinned to the current metadata version appear in block E, with a
+neutral **Publikation** badge unless separately verified below, and original
+title/date/source. Official `Korrektur` or
+`ursprüngliche Version` markers are shown as source notes; no relationship or
+legal consequence is inferred. Original ag.ch consultation links open the item
+directly. Existing OEREBlex rows and production publications continue to work;
+the same Amtsblatt ID is shown once when it is in both stores. The local preview
+is excluded from PDF exports.
+
+An explicit refresh is available; it makes no requests during page rendering:
+
+```bash
+python -m planning_preview sync /tmp/scope-planning-preview-20261006/preview.json --municipality Seon --max-pages 5 --timeout 20
+```
+
+This refreshes municipal notices, canton approval matches for Seon and current
+canton consultations. Each selection records its attempt, last successful search
+and membership. A failed source exits nonzero and visibly retains its last good
+data/date; a new failed source has no fabricated success. Empty search,
+unqueried municipality, pending/changed reviews, stale searches (over seven
+days) and failed fetches are distinct. Missing from a newer search keeps reviewed
+last-known metadata with an absence note; it does not mean approved, withdrawn
+or in force. Repeated identical snapshots deduplicate and preserve reviews;
+corrected metadata invalidates earlier reviews until checked again. Older or
+conflicting versions are rejected rather than replacing newer evidence.
+
+The bounded JSON store uses atomic replacement and an advisory lock; corrupt,
+unrelated, production-schema and symlink destinations are refused. Preview and
+scheduled collection remain disabled in the production configuration. Amtsblatt
+reuse permission remains unresolved.
+
+Explicit legal verification is a separate operator command:
+
+```bash
+python -m planning_preview queue /tmp/scope-planning-preview-20261006/preview.json --all
+python -m planning_preview verify /tmp/scope-planning-preview-20261006/preview.json /tmp/scope-preview-legal-verifications.json
+```
+
+The batch is a JSON list. This is a shape template, not a legal decision:
+
+```json
+[
+  {
+    "source_id": {"namespace": "amtsblatt.ag.ch:pub_nr", "value": "<exact reviewed pub_nr>"},
+    "fingerprint": "<exact current fingerprint from queue>",
+    "municipality": "Seon",
+    "verified": {
+      "stage": "genehmigt",
+      "source": "<same item publication or PDF URL>",
+      "verified_on": "<actual review day YYYY-MM-DD>",
+      "method": "<exact municipal section and source facts checked>",
+      "approved_on": "<actual approval date in source YYYY-MM-DD>"
+    }
+  }
+]
+```
+
+Supply one proof per municipality in the current relevance-review scope.
+Alternatively, `canton_wide: true` replaces `municipality` only when the current
+include review is explicitly canton-wide. Held, excluded, unreviewed, stale,
+duplicate or unscoped proofs are refused as a whole batch. Evidence must be the
+same Amtsblatt ID's publication/PDF or the same ag.ch consultation ID; arbitrary
+document joins are not supported. `verified_on` is the actual Swiss review day,
+on or after the current metadata day and no later than the operation day.
+
+The existing `planning.Verified` verifier requires `auflage_from`/`auflage_to`
+for `auflage`, `approved_on` for `genehmigt`, `effective_on` for `in_kraft`, and
+`decided_on` for `verweigert`. Optional `appeal_until` and `rechtskraft_on` must
+be proved by the source. Its existing `stage_badge` shows a display/approval
+badge only while the checked dates support it today; expired periods or an
+approval without proved pending legal force remain **Publikation**, with the
+verified facts and source link in the note. Current Mitwirkung is never
+automatically Auflage. CMS validity is never legal validity.
+
+Metadata edits permanently invalidate legal proof, including a later return to
+the same fingerprint. Exclusion, hold or territory removal invalidates the
+affected proof. Re-inclusion or a rationale change cannot revive it; a new
+explicit verification is required. Proof for one municipality is never exposed
+to another. Existing version-1 preview files without legal proofs remain valid,
+and all preview rows remain excluded from PDF export.
+
+`planning_refresh.py` is the prepared daily metadata scheduler. The existing
+`python -m scheduler` sidecar launches one background refresh worker independently
+of personal authentication and email settings. Collection remains **off** by
+default. Enabling it requires an absolute `SCOPE_PLANNING_PREVIEW` path, an
+existing directory, 1–10 explicit comma-separated
+`SCOPE_PLANNING_REFRESH_MUNICIPALITIES`, `SCOPE_PLANNING_REFRESH_ENABLED=1`, and
+both `SCOPE_PLANNING_REUSE_AUTHORIZED=1` and a nonempty
+`SCOPE_PLANNING_REUSE_REFERENCE` documenting an obtained operational source-use
+basis. Setting these fields does not itself obtain permission. Do not enable
+them while that basis remains unresolved.
+
+The daily hour defaults to 08:00 Europe/Zurich (including DST), with
+`SCOPE_PLANNING_REFRESH_HOUR` in 0–23. `SCOPE_PLANNING_REFRESH_MAX_PAGES` defaults
+to 5 (at most 20 per source and 100 search pages for the whole pass);
+`SCOPE_PLANNING_REFRESH_TIMEOUT` defaults to 20 seconds (at most 30). Each town
+gets its municipal and canton-approval searches; current canton consultations
+are fetched once for the entire pass. Each source has a fresh observation time
+and commits independently, so a failed source preserves its last good data,
+memberships and reviews. Sources still require manual queue review and legal
+verification. No provider bodies or credentials are written to scheduler logs.
+
+`STORE.refresh.json` records the durable daily claim, completion counts and retry
+time; `STORE.refresh.lock` takes a nonblocking process lock. Successful passes
+are skipped for the same configuration/Swiss day after restarts. Failure or
+interrupted claims have at least a one-hour cooldown; completed failures wait
+one hour from completion. One refresh worker per scheduler loop avoids delaying
+reminders/digests. Existing explicit `planning_preview sync` is unchanged.
+
+```bash
+python -m planning_refresh --check
+python -m planning_refresh --once
+```
+
+`--check` makes no requests or disk mutations. Disabled configuration reports
+`off`; enabled configuration validates required gates and local file boundaries.
+`--once` only runs when enabled, authorized and due; failures exit nonzero and
+remain visible in the local source/store bookkeeping. This prepares a controlled
+local/operational path; it is not a production activation or permission grant.
+
+Verify locally with:
+
+```bash
+python -m pytest -q tests/test_planning_preview.py tests/test_planning_refresh.py tests/test_scheduler.py tests/test_detail_preview.py tests/test_detail.py tests/test_planning.py tests/test_amtsblatt_import.py tests/test_planning_collect.py
+```
 
 ## Deviations from the brief
 

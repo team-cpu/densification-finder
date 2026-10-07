@@ -756,3 +756,108 @@ def test_normiq_api_never_follows_redirects(monkeypatch):
     assert "307" not in str(error.value)
     # _NoRedirect is installed, so urllib refuses the redirect before it fires.
     assert auth._NoRedirect().redirect_request(None, None, 302, "", {}, "https://elsewhere.example") is None
+
+
+def oereb_answer():
+    import oereb
+    doc = {"GetExtractByIdResponse": {"extract": {"CreationDate": "2026-10-06T08:00:00", "RealEstate": {
+        "RestrictionOnLandownership": [{"LegalProvisions": [{
+            "Type": {"Code": "LegalProvision"}, "Title": [{"Language": "de", "Text": "BNO"}],
+            "Lawstatus": {"Code": "inForce"}}]}]}}}}
+    return [], [], None, oereb.details(doc)
+
+
+def test_may_write_offers_writes_only_to_writers(db, monkeypatch):
+    monkeypatch.setattr(auth.st, "session_state", {"scope_mfa": True})
+    for role, allowed in (("Inhaber", True), ("Bearbeiter", True), ("Leseweise", False)):
+        monkeypatch.setattr(auth, "current", lambda db=None, r=role: {"role": r, "id": 1})
+        assert auth.may_write(db) is allowed, role
+
+    def expired(db=None):
+        raise auth.AuthSessionExpired("Bitte erneut anmelden.")
+    monkeypatch.setattr(auth, "current", expired)
+    assert auth.may_write(db) is False
+    monkeypatch.setenv("SCOPE_AUTH_MODE", "shared")
+    assert auth.may_write(db) is True
+
+
+def test_a_reader_cannot_refresh_oereb_by_calling_the_handler(db, monkeypatch):
+    import oereb
+    import paths
+    import screening
+    monkeypatch.setattr(paths, "DB", db)
+    monkeypatch.setattr(auth, "current", lambda db=None: {"role": "Leseweise", "id": 42})
+    asked = []
+    monkeypatch.setattr(oereb, "assess", lambda egrid: asked.append(egrid) or oereb_answer())
+    with pytest.raises(auth.AuthError):
+        screening.check_oereb(["CH_1", "CH_2"])
+    assert asked == []
+    with sqlite3.connect(db) as con:
+        assert con.execute("SELECT COUNT(*) FROM oereb_cache").fetchone()[0] == 0
+
+
+def test_access_revoked_during_a_refresh_stops_its_writes(db, monkeypatch):
+    import oereb
+    import paths
+    import screening
+    member = auth.verified_member(user(), db, bind=True)
+    monkeypatch.setattr(auth, "current", lambda db=None: member)
+    monkeypatch.setattr(auth.st, "session_state", {})
+    monkeypatch.setattr(paths, "DB", db)
+    monkeypatch.setattr(oereb, "assess", lambda egrid: oereb_answer())
+
+    def revoke_after_the_first_write(fraction, text):
+        with sqlite3.connect(db) as con:
+            con.execute("UPDATE organisation_members SET role='Leseweise' WHERE id=?", (member["id"],))
+
+    summary = screening.check_oereb(["CH_1", "CH_2", "CH_3"], progress=revoke_after_the_first_write)
+    with sqlite3.connect(db) as con:
+        written = con.execute("SELECT COUNT(*) FROM oereb_cache").fetchone()[0]
+    assert written == 1
+    assert "Berechtigung" in summary["stopped"]
+
+
+def cached_rows(db):
+    with sqlite3.connect(db) as con:
+        return con.execute("SELECT * FROM oereb_cache ORDER BY egrid").fetchall()
+
+
+@pytest.mark.parametrize("mode, hold", [
+    # Shared mode checks no membership: the INSERT itself meets the writer.
+    ("shared", ["BEGIN EXCLUSIVE"]),
+    # Personal mode: BEGIN IMMEDIATE, the membership check's lock, meets it.
+    ("personal", ["BEGIN IMMEDIATE"]),
+    # Personal mode beside a reader: the check and the INSERT go through; the
+    # COMMIT waits for the reader and gives up.
+    ("personal", ["BEGIN", "SELECT COUNT(*) FROM oereb_cache"]),
+], ids=["shared-insert", "personal-begin", "personal-commit"])
+def test_a_locked_database_stops_the_refresh_and_keeps_the_cache(db, monkeypatch, mode, hold):
+    """A second connection holds a real SQLite lock; nothing is mocked but the
+    wait, cut from SQLite's five seconds to a tenth. Whichever statement meets
+    the lock, the run stops with a message, rolls back, and every cached row
+    stays as it was."""
+    import functools
+    import oereb
+    import paths
+    import screening
+    member = auth.verified_member(user(), db, bind=True)
+    monkeypatch.setenv("SCOPE_AUTH_MODE", mode)
+    monkeypatch.setattr(auth, "current", lambda db=None: member)
+    monkeypatch.setattr(auth.st, "session_state", {})
+    monkeypatch.setattr(paths, "DB", db)
+    monkeypatch.setattr(oereb, "assess", lambda egrid: oereb_answer())
+    monkeypatch.setattr(sqlite3, "connect", functools.partial(sqlite3.connect, timeout=0.1))
+    with sqlite3.connect(db) as con:
+        con.execute("INSERT INTO oereb_cache (egrid, hard, notable, error, checked_at, details) "
+                    "VALUES ('CH_1', '', 'Waldabstand', '', '2026-08-18 10:50:00', '{\"provisions\": []}')")
+    before = cached_rows(db)
+    holder = sqlite3.connect(db, isolation_level=None)
+    try:
+        for statement in hold:
+            holder.execute(statement)
+        summary = screening.check_oereb(["CH_1", "CH_2"])
+    finally:
+        holder.rollback()
+        holder.close()
+    assert "gesperrt" in summary.get("stopped", ""), summary
+    assert cached_rows(db) == before

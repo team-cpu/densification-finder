@@ -1,0 +1,35 @@
+{
+  "collectionName": "dynamiccontent",
+  "dynamiccontent": [
+    {
+      "id": "72340164-0417-4e86-9cf4-67284e15ce5b_de",
+      "queryId": "72340164-0417-4e86-9cf4-67284e15ce5b_de",
+      "title": "Einführungsgesetz zur Schweizerischen Strafprozessordnung (EG StPO); Änderung",
+      "organisation": "Departement Volkswirtschaft und Inneres",
+      "publicationDate": "2026-06-30T06:55:00Z",
+      "validFrom": "2026-06-30T06:55:00Z",
+      "validUntil": "2026-10-30T22:55:00Z",
+      "deactivated": false,
+      "urls": [
+        {
+          "type": "archivierte_anhoerungen_1",
+          "url": "/de/themen/staat-politik/anhoerungen-vernehmlassungen/archivierte-anhoerungen?dc=72340164-0417-4e86-9cf4-67284e15ce5b_de"
+        },
+        {
+          "type": "laufende_anhoerungen_2",
+          "url": "/de/themen/staat-politik/anhoerungen-vernehmlassungen/laufende-anhoerungen?dc=72340164-0417-4e86-9cf4-67284e15ce5b_de"
+        }
+      ]
+    }
+  ],
+  "control": {
+    "firstPage": false,
+    "lastPage": true,
+    "sort": [],
+    "numberOfElements": 1,
+    "pageNumber": 1,
+    "pageSize": 10,
+    "totalPages": 2,
+    "totalElements": 11
+  }
+}

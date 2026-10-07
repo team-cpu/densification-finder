@@ -1,3 +1,4 @@
+import copy
 import unittest
 
 import oereb as O
@@ -149,6 +150,21 @@ class ExtractDetailTest(unittest.TestCase):
                          {"name": "Egliswil", "url": "http://www.egliswil.ch"})
         self.assertEqual(self.details["created"], "2026-08-18T10:33:46")
 
+    def test_each_document_says_whether_it_is_in_force(self):
+        """The cadastre can list a change with pre-effect next to what is in
+        force. Block E reads "in force" from this list, so it has to know
+        which is which."""
+        self.assertEqual({p["lawstatus"] for p in self.details["provisions"]}, {"inForce"})
+        doc = copy.deepcopy(EXTRACT)
+        estate = doc["GetExtractByIdResponse"]["extract"]["RealEstate"]
+        pending = provision("Gestaltungsplan Giessi", "LegalProvision", "21.259")
+        pending["Lawstatus"] = {"Code": "changeWithPreEffect",
+                                "Text": multilingual("Änderung mit Vorwirkung")}
+        estate["RestrictionOnLandownership"][1]["LegalProvisions"].append(pending)
+        giessi = next(p for p in O.details(doc)["provisions"]
+                      if p["title"] == "Gestaltungsplan Giessi")
+        self.assertEqual(giessi["lawstatus"], "changeWithPreEffect")
+
     def test_an_empty_extract_does_not_raise(self):
         empty = O.details({"GetExtractByIdResponse": {"extract": {}}})
         self.assertEqual(empty["zones"], [])
@@ -186,6 +202,16 @@ class AssessTest(unittest.TestCase):
         self.assertEqual((hard, notable), ([], []))
         self.assertIn("502", error)
         self.assertIsNone(details)
+
+
+
+
+class LawstatusMarkerTest(unittest.TestCase):
+    def test_a_fresh_extract_says_the_legal_status_was_kept(self):
+        """Even when the cadastre states none: the marker tells "not stated"
+        from "stored before the status was kept" — and stops a refresh loop."""
+        details = O.details({"GetExtractByIdResponse": {"extract": {"RealEstate": {}}}})
+        self.assertIs(details["lawstatus_kept"], True)
 
 
 if __name__ == "__main__":

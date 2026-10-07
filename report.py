@@ -66,6 +66,12 @@ _LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _BOLD = re.compile(r"\*\*([^*]+)\*\*")
 
 
+def _attribute(url):
+    """A link target safe inside its attribute: a quote would end it and let
+    the rest of the address start another — "href=javascript:…"."""
+    return url.replace('"', "%22").replace("'", "%27")
+
+
 def _rich(value):
     """One string, two renderers.
 
@@ -78,12 +84,19 @@ def _rich(value):
     zone name aborts the build with a parse error rather than a wrong character.
     """
     out = escape(str(value))
-    out = _LINK.sub(lambda m: f'<link href="{m.group(2)}" color="#1a4fa0">{m.group(1)}</link>', out)
+    # Only web addresses become links: some values come from data files, and
+    # a `javascript:` target must stay text on the sheet.
+    out = _LINK.sub(
+        lambda m: (f'<link href="{_attribute(m.group(2))}" color="#1a4fa0">{m.group(1)}</link>'
+                   if m.group(2).lower().startswith(("https://", "http://")) else m.group(0)),
+        out)
     return _BOLD.sub(r"<b>\1</b>", out)
 
 
 def _table(rows, widths):
-    table = Table(rows, colWidths=widths, hAlign="LEFT")
+    # A row taller than a page — a long title, a long address — continues on
+    # the next one instead of failing the whole sheet.
+    table = Table(rows, colWidths=widths, hAlign="LEFT", splitInRow=1)
     table.setStyle(
         TableStyle(
             [

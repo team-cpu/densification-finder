@@ -1,3 +1,5 @@
 -r requirements.txt
 # PDF extraction assertions only; not installed by the production Dockerfile.
-pypdf==6.16.1
+# 6.19.0 fixes PYSEC-2026-4153 to -4160 (memory and runtime blow-ups on crafted
+# PDFs; the tests only read PDFs this tool wrote).
+pypdf==6.19.0

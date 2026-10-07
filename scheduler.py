@@ -19,6 +19,7 @@ import json
 import os
 import sqlite3
 import sys
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 
@@ -26,6 +27,7 @@ import email_outbox
 from email_templates import notification_html
 import organisation
 import paths
+import planning_refresh
 import scope_auth
 import workflow
 from email_delivery import EmailDeliveryError, ResendConfig
@@ -237,9 +239,25 @@ def run_once(db: str, now: datetime | None = None) -> dict[str, int]:
     return done
 
 
+def planning_tick() -> None:
+    """Independent of personal accounts and email configuration; default off."""
+    try:
+        result = planning_refresh.run_once()
+        if result["status"] not in ("off", "not-due", "cooldown", "busy"):
+            print(f"scheduler planning: {json.dumps(result)}", flush=True)
+    except planning_refresh.ConfigError as exc:
+        print(f"scheduler planning configuration: {exc}", file=sys.stderr, flush=True)
+    except Exception as exc:  # Keep the sidecar alive without leaking provider bodies.
+        print(f"scheduler planning failed ({type(exc).__name__}); inspect local configuration/state", file=sys.stderr, flush=True)
+
+
 def serve(interval: int = INTERVAL_SECONDS) -> None:
     """Loop forever; a failing pass is logged and retried at the next interval."""
+    planning_worker = None
     while True:
+        if planning_worker is None or not planning_worker.is_alive():
+            planning_worker = threading.Thread(target=planning_tick, name="planning-refresh", daemon=True)
+            planning_worker.start()
         try:
             done = run_once(paths.DB)
             if done:
@@ -251,6 +269,7 @@ def serve(interval: int = INTERVAL_SECONDS) -> None:
 
 if __name__ == "__main__":
     if "--once" in sys.argv[1:]:
+        planning_tick()
         print(json.dumps(run_once(paths.DB)))
     else:
         serve()

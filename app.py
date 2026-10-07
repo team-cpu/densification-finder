@@ -17,12 +17,14 @@ and a filter change stays instant.
 import hmac
 import os
 import sqlite3
+from contextlib import closing, contextmanager
 from datetime import date
 
 import pandas as pd
 import streamlit as st
 
 import acquisition as ACQ
+import bootstrap
 import detail
 import land_prices as LP
 import merkliste
@@ -33,13 +35,32 @@ import login_page
 import scope_auth
 import workflow as WF
 
-import ingest as _ingest
 import paths
 
 HERE = paths.HERE
 DB = paths.DB
 
 st.set_page_config(page_title="Verdichtungspotenzial Aargau", layout="wide")
+
+
+@contextmanager
+def database_access():
+    """A busy database stops startup before protected content is rendered."""
+    try:
+        yield
+    except (sqlite3.OperationalError, pd.errors.DatabaseError) as error:
+        # pandas wraps SQLite read failures. Only BUSY/LOCKED (including their
+        # extended codes) are transient; schema/I/O errors must remain visible.
+        cause = error.__cause__ if isinstance(error, pd.errors.DatabaseError) else error
+        code = getattr(cause, "sqlite_errorcode", None)
+        if not isinstance(cause, sqlite3.OperationalError) or code is None or (
+            code & 0xff
+        ) not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+            raise
+        st.warning("Die Datenbank ist vorübergehend gesperrt. Bitte versuchen Sie es erneut.")
+        if st.button("Erneut versuchen", key="database_retry", type="primary"):
+            st.rerun()
+        st.stop()
 
 
 def gate():
@@ -59,13 +80,12 @@ def gate():
         st.error(str(error))
         st.stop()
     if personal:
-        paths.ensure_db()
-        with sqlite3.connect(DB) as connection:
-            _ingest.schema(connection)
+        bootstrap.prepare_database()
         scope_auth.gate(DB)
         return
     secret = os.environ.get("APP_PASSWORD")
     if not secret or st.session_state.get("_ok"):
+        bootstrap.prepare_database()
         return
     with login_page.card("Gemeinsamer Zugang mit Passwort."):
         with st.form("shared_login", border=False):
@@ -81,16 +101,13 @@ def gate():
     st.stop()
 
 
-gate()
-
-
 @st.cache_data(ttl=60)
 def load():
     if not os.path.exists(DB):
         return None, None
-    con = sqlite3.connect(DB)
-    parcels = pd.read_sql_query("SELECT * FROM parcel_results", con)
-    runs = pd.read_sql_query("SELECT * FROM runs", con)
+    with closing(sqlite3.connect(DB)) as con:
+        parcels = pd.read_sql_query("SELECT * FROM parcel_results", con)
+        runs = pd.read_sql_query("SELECT * FROM runs", con)
     return parcels, runs
 
 
@@ -103,12 +120,11 @@ def load_land_prices():
 # its schema before any DataFrame reads it. Without the second step, adding a
 # result column in a new release leaves a populated volume on the old schema and
 # the UI crashes with a KeyError when it renders that column.
-paths.ensure_db()
-with sqlite3.connect(DB) as con:
-    _ingest.schema(con)
-parcels, runs = load()
+with database_access():
+    gate()
+    parcels, runs = load()
+    parcel_workflow = WF.load(DB)
 land_price_references = load_land_prices()
-parcel_workflow = WF.load(DB)
 
 
 def price_of(row):
@@ -142,7 +158,8 @@ if parcels is None or parcels.empty:
 page = shell.header(shell.data_as_of(runs))
 
 if page == "Screening":
-    screening.page(parcels, parcel_workflow, DB, price_of, land_price_references, runs)
+    screening.page(parcels, parcel_workflow, DB, price_of, land_price_references, runs,
+                   reload=load)
 elif page == "Merkliste":
     merkliste.page(parcels, parcel_workflow, DB, price_of)
 elif page == "Analyse":

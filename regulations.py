@@ -15,8 +15,8 @@ lately", which is the opposite of "we could not ask".
 
 `has_prepublications` is false for all 196 municipalities today, so this is a
 record of what is already in force, never a warning about a revision under way.
-Only the Amtsblatt carries those, and it forbids automated access — see
-NEWSFEED.md.
+Only the Amtsblatt carries those; `planning.py` handles them, and
+`amtsblatt.py` says why Scope links to the Amtsblatt rather than copying it.
 """
 import json
 import threading
@@ -33,7 +33,8 @@ BASE = "https://oereblex.ag.ch"
 
 @dataclass(frozen=True)
 class Edict:
-    """One regulation in force, and when it became so."""
+    """One regulation OEREBlex lists as active, and when it takes force — a
+    date already passed, or still ahead for an edition approved for later."""
 
     municipality: str
     title: str
@@ -59,7 +60,8 @@ def fetch(timeout=30):
 
 
 def parse(towns) -> list[Edict]:
-    """Every regulation currently in force, newest first.
+    """Every regulation OEREBlex lists as active (in force, or with its date
+    ahead), newest first.
 
     Superseded versions are in the feed too — `is_active` false, with an
     `outaction_date` — and are dropped: this answers "what governs the parcel
@@ -186,7 +188,15 @@ def reset_news_cache():
         _FETCHED_AT = None
 
 
-def for_municipality(edicts, name: str, bfs: Optional[int] = None):
+def in_municipality(edicts, name: str) -> list:
+    """Every active regulation of one municipality, newest first — including
+    one whose in-force date is still ahead. Exact name, the same join as
+    `for_municipality`: the feed is canton-wide, and block E shows one
+    municipality."""
+    return [e for e in edicts if e.municipality == name]
+
+
+def for_municipality(edicts, name: str, bfs: Optional[int] = None, today=None):
     """The regulation governing one municipality, and a note when its OEREBlex
     number disagrees with the BFS number this tool keys on.
 
@@ -196,8 +206,12 @@ def for_municipality(edicts, name: str, bfs: Optional[int] = None):
     would have attached a neighbour's building regulation to those parcels.
     Names match on all 163, so the number is only ever a cross-check, and a
     disagreement is reported rather than resolved silently.
+
+    Governing means in force today: an edition approved for next January is
+    not the one the parcel is computed under; block E lists it as "Künftig in Kraft".
     """
-    hits = [e for e in edicts if e.municipality == name]
+    today = today or date.today()
+    hits = [e for e in edicts if e.municipality == name and e.in_force <= today]
     if not hits:
         return None, ""
     best = hits[0]                      # already newest-first

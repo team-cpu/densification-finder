@@ -715,6 +715,29 @@ def with_extract(cache):
     return cache.index[_column(cache, "details") != ""]
 
 
+#: Session key: what the last "ÖREB prüfen" run reported, shown once after it.
+OEREB_RESULT = "oereb_last_result"
+
+
+def stale_extracts(cache):
+    """EGRIDs whose stored extract predates the documents' legal status being
+    kept: no `lawstatus_kept` marker. "ÖREB prüfen" asks for them again —
+    once, since a fresh answer carries the marker whether or not the cadastre
+    states a status in it."""
+    if cache.empty:
+        return cache.index[:0]
+    details = _column(cache, "details")
+    return cache.index[(details != "") & ~details.str.contains('"lawstatus_kept"', regex=False)]
+
+
+def oereb_targets(egrids, cache):
+    """What "ÖREB prüfen" asks the cadastre for, of the parcels the user put
+    on the shortlist: those without a complete extract, and those whose
+    stored extract lacks the legal status."""
+    done = set(with_extract(cache)) - set(stale_extracts(cache))
+    return [egrid for egrid in egrids if egrid and egrid not in done]
+
+
 def failed_egrids(cache):
     """EGRIDs whose last request failed. Reported rather than retried on every
     rerun: the cadastre answered once with an error, and hammering it from a
@@ -726,12 +749,21 @@ def failed_egrids(cache):
 
 def check_oereb(egrids, progress=None):
     """One call per parcel, eight at a time. Results are written as they arrive,
-    so an interrupted run keeps what it already paid for."""
+    so an interrupted run keeps what it already paid for. A failed call never
+    touches a row in the cache — an extract, or an older row's restrictions —
+    since the error would erase an answer the cadastre once gave, an exclusion
+    with it; it is asked again on the next click. Only a parcel without any
+    row gets an error row, and the database decides that as it writes: a row
+    another run stored meanwhile is kept, too. Returns {"asked", "failed"},
+    and "stopped" with the reason when revoked access or another writer's lock
+    ended the run early — rather than raising into the page."""
     import scope_auth
-    scope_auth.require_write(paths.DB)
+    actor = scope_auth.require_write(paths.DB)
     con = sqlite3.connect(paths.DB)
-    done = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+    done = failed = 0
+    stopped = ""
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+    try:
         futures = {pool.submit(O.assess, e): e for e in egrids}
         for fut in concurrent.futures.as_completed(futures):
             egrid = futures[fut]
@@ -739,20 +771,45 @@ def check_oereb(egrids, progress=None):
                 hard, notable, err, extract = fut.result()
             except Exception as exc:
                 hard, notable, err, extract = [], [], str(exc), None
-            con.execute(
-                "INSERT OR REPLACE INTO oereb_cache "
-                "(egrid, hard, notable, error, checked_at, details) "
-                "VALUES (?,?,?,?,datetime('now'),?)",
-                (
-                    egrid, "; ".join(hard), "; ".join(notable), err or "",
-                    json.dumps(extract, ensure_ascii=False) if extract else "",
-                ),
-            )
-            con.commit()
+            if extract is None:
+                failed += 1
+            # One transaction per parcel, guarded whole: another writer's lock
+            # can meet the access check, the INSERT or the COMMIT. Whichever
+            # it is, this parcel's write is undone and the run stops.
+            try:
+                # A run takes minutes: access is checked again under each
+                # write's own lock, so a member revoked meanwhile writes no more.
+                scope_auth.check_transaction(con, actor)
+                # An answer replaces the row; a failure is written only where
+                # there is none.
+                verb = "IGNORE" if extract is None else "REPLACE"
+                con.execute(
+                    f"INSERT OR {verb} INTO oereb_cache "
+                    "(egrid, hard, notable, error, checked_at, details) "
+                    "VALUES (?,?,?,?,datetime('now'),?)",
+                    (
+                        egrid, "; ".join(hard), "; ".join(notable), err or "",
+                        json.dumps(extract, ensure_ascii=False) if extract else "",
+                    ),
+                )
+                con.commit()
+            except (scope_auth.AuthError, sqlite3.OperationalError) as exc:
+                if con.in_transaction:
+                    con.rollback()
+                stopped = (str(exc) if isinstance(exc, scope_auth.AuthError)
+                           else f"Datenbank gesperrt oder nicht beschreibbar ({exc})")
+                break
             done += 1
             if progress:
                 progress(done / max(len(egrids), 1), f"ÖREB {done}/{len(egrids)}")
-    con.close()
+    finally:
+        # A stopped run asks nothing more: what has not started is cancelled.
+        pool.shutdown(wait=False, cancel_futures=True)
+        con.close()
+    summary = {"asked": len(egrids), "failed": failed}
+    if stopped:
+        summary["stopped"] = stopped
+    return summary
 
 
 def parcel_key(row):
@@ -1050,6 +1107,49 @@ def _initial_widget_value(key, state=None, **default):
     return {parameter: state.pop(key)}
 
 
+def _show_oereb_result(container, last) -> None:
+    """What the last "ÖREB prüfen" run did, on the render after it — once."""
+    if not last:
+        return
+    asked, failed = last.get("asked", 0), last.get("failed", 0)
+    if last.get("stopped"):
+        container.error(f"ÖREB-Abfrage abgebrochen: {last['stopped']} — schon gespeicherte Antworten "
+                        "bleiben, weitere wurden nicht geschrieben.")
+    elif not asked:
+        container.info("Alle Parzellen der Shortlist haben einen ÖREB-Auszug mit Rechtsstatus — "
+                       "nichts abzufragen.")
+    elif failed:
+        container.warning(f"Letzte Abfrage: {failed} von {asked} fehlgeschlagen — gespeicherte Daten "
+                          "unverändert, beim nächsten Mal erneut versucht.")
+    else:
+        container.success(f"ÖREB-Abfrage abgeschlossen: {asked} "
+                          f"{'Parzelle' if asked == 1 else 'Parzellen'} der Shortlist abgefragt.")
+
+
+def _render_oereb_refresh(header_actions, feedback, shortlist, cache, db) -> None:
+    """«ÖREB prüfen» beside the export: asks the cadastre for the shortlist on
+    screen — parcels without an extract, and extracts stored without the legal
+    status — and nothing else; never the cascade. Offered only to members who
+    may write; `check_oereb` checks again, before the run and before each
+    write."""
+    import scope_auth
+    if not scope_auth.may_write(db):
+        return
+    todo = oereb_targets([egrid for egrid in shortlist["egrid"] if isinstance(egrid, str)], cache)
+    if not header_actions.button(
+        "ÖREB prüfen",
+        key="screening_oereb_refresh",
+        help=(f"Fragt den ÖREB-Kataster für die Shortlist ab ({len(todo)} von {len(shortlist)} "
+              "Parzellen ohne Auszug oder ohne Rechtsstatus). Ein Fehler lässt gespeicherte "
+              "Daten unverändert."),
+    ):
+        return
+    bar = feedback.progress(0.0, "ÖREB-Kataster wird abgefragt …")
+    st.session_state[OEREB_RESULT] = check_oereb(todo, progress=lambda f, t: bar.progress(f, t))
+    bar.empty()
+    st.rerun()
+
+
 def _render_search_actions(header_actions, csv_data: bytes | None, db) -> None:
     # ── saved searches ───────────────────────────────────────────────────────────
     # Beside the export because both act on the filters just arrived at, not on
@@ -1160,8 +1260,15 @@ def _render_design_results(
         st.rerun()
 
 
-def page(parcels, decisions, db, price_of, land_price_references, runs):
-    """The screening list: filters, ranking, the ÖREB check and the table."""
+def page(parcels, decisions, db, price_of, land_price_references, runs, reload):
+    """The screening list: filters, ranking, the ÖREB check and the table.
+
+    `reload` is the app's cached loader (`app.load`): after a recompute the
+    ÖREB step needs the fresh table. It lives in `app.py`, so it is handed in
+    — called by name here, it was undefined and the button crashed."""
+    # What the last "ÖREB prüfen" run reported, taken before any early return
+    # below so it is shown on the render after the run or not at all.
+    last_oereb = st.session_state.pop(OEREB_RESULT, None)
     # Before any filter widget below is created — see PENDING_SEARCH.
     _apply_pending_search(parcels)
 
@@ -1177,6 +1284,9 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         header_actions = header_action_column.container(
             key="screening_header_actions", horizontal=True
         )
+    # Above the filters, where the button is: the run's progress, then what it did.
+    oereb_feedback = st.container(key="screening_oereb_feedback")
+    _show_oereb_result(oereb_feedback, last_oereb)
 
     workflow_by_key = {
         (int(row.bfs), str(row.parcel)): row
@@ -1607,6 +1717,7 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
         unsafe_allow_html=True,
     )
     _render_search_actions(header_actions, view.to_csv(index=False).encode("utf-8"), db)
+    _render_oereb_refresh(header_actions, oereb_feedback, shortlist, cache, db)
     _render_design_results(
         screening_table_rows(final, view), final, parcels, hidden_keys,
         price_of, cache, workflow_by_key, db,
@@ -1753,10 +1864,14 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             type="primary",
             help=(
                 f"Rechnet die Filterkaskade für alle {len(runs)} Gemeinden neu und "
-                "fragt anschliessend den ÖREB-Kataster für die Shortlist ab."
+                "fragt anschliessend den ÖREB-Kataster für Shortlist-Parzellen ohne "
+                "gespeicherten Auszug ab — und einmal neu für gespeicherte Auszüge ohne "
+                "Rechtsstatus. Ein Fehler lässt gespeicherte Daten unverändert."
                 if _full_run else
-                "Fragt den ÖREB-Kataster für die Shortlist ab. Die Kaskade kann "
-                "hier ohne die lokalen Geodaten nicht neu gerechnet werden."
+                "Fragt den ÖREB-Kataster für Shortlist-Parzellen ohne gespeicherten "
+                "Auszug ab — und einmal neu für gespeicherte Auszüge ohne Rechtsstatus. "
+                "Ein Fehler lässt gespeicherte Daten unverändert. Die Kaskade kann hier "
+                "ohne die lokalen Geodaten nicht neu gerechnet werden."
             ),
         )
         min_age = age_col.number_input(
@@ -1775,14 +1890,20 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
             **_initial_widget_value("screening_min_age", value=15),
         )
         retry = int(shortlist["egrid"].isin(failed_egrids(cache)).sum())
+        stale = int(shortlist["egrid"].isin(stale_extracts(cache)).sum())
+        button = "«Neu berechnen»" if _full_run else "«ÖREB prüfen»"
         if pending.empty:
             note_col.success(
                 f"Shortlist vollständig ÖREB-geprüft ({len(shortlist)} Parzellen)."
+                + (f" {stale} gespeicherte Auszüge ohne Rechtsstatus: {button} fragt "
+                   "sie neu ab." if stale else "")
             )
         else:
             note_col.info(
                 f"{len(shortlist) - len(pending)} von {len(shortlist)} geprüft. "
                 + (f"{retry} Abfrage(n) werden erneut versucht. " if retry else "")
+                + (f"{stale} gespeicherte Auszüge ohne Rechtsstatus fragt {button} neu ab. "
+                   if stale else "")
                 + "Ungeprüfte Parzellen bleiben sichtbar."
             )
 
@@ -1803,17 +1924,14 @@ def page(parcels, decisions, db, price_of, land_price_references, runs):
                 "Geodaten in dieser Umgebung nicht vorhanden — nur der "
                 "ÖREB-Kataster wird abgefragt."
             )
-        load.clear()
-        fresh, _ = load()
+        reload.clear()
+        fresh, _ = reload()
         fresh_short = select(fresh).head(SHORTLIST)
-        todo = fresh_short.loc[
-            ~fresh_short["egrid"].isin(with_extract(read_oereb_cache()))
-            & fresh_short["egrid"].notna()
-            & (fresh_short["egrid"] != ""),
-            "egrid",
-        ]
-        check_oereb(
-            list(todo),
+        todo = oereb_targets(
+            [egrid for egrid in fresh_short["egrid"] if isinstance(egrid, str)],
+            read_oereb_cache())
+        st.session_state[OEREB_RESULT] = check_oereb(
+            todo,
             progress=lambda f, t: bar.progress(0.2 + f * 0.8, t),
         )
         bar.empty()

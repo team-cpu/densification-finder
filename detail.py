@@ -19,13 +19,18 @@ open. Personal accounts can explicitly save and load a team snapshot when
 the organisation enables shared calculations; unsaved drafts remain local.
 """
 import json
+import re
+from datetime import date, datetime
 from functools import partial
 from html import escape
 
 import pandas as pd
 import streamlit as st
 
+import amtsblatt as AB
 import economics as E
+import planning as PL
+import planning_preview as PP
 import regulations as R
 import formatting as F
 import links as L
@@ -484,7 +489,7 @@ def _reference_card_html(extract, zone_rows, notes):
     if not documents:
         rows.append(
             '<div class="detail-reference-empty">Erst nach der ÖREB-Abfrage '
-            'verfügbar — geprüft wird die Shortlist über „Neu berechnen“.</div>'
+            'verfügbar.</div>'
         )
 
     if extract and (extract.get("office") or {}).get("name"):
@@ -530,118 +535,584 @@ def _reference_card_html(extract, zone_rows, notes):
     )
 
 
-def _regulation_card_html(row, edicts, own, own_note, *, loading=False, error=""):
-    """Current regulation news in the prototype's second compact card."""
+def _open_link(href):
+    """The arrow that opens the original — the Amtsblatt publication or the
+    regulation's own document. Nothing is copied into Scope. A link that opens
+    a search instead says so: the arrow promises the publication itself."""
+    kind = AB.link_kind(href)
+    href = _safe_href(href)
+    if not href:
+        return ""
+    if kind == "suche":
+        return (f'<a class="detail-regulation-open detail-regulation-open--search" href="{href}" '
+                'target="_blank" rel="noopener noreferrer" '
+                'title="Amtsblatt-Suche öffnen — keine Einzelpublikation">Suche ↗</a>')
+    if kind not in ("publikation", "dokument"):
+        return (f'<a class="detail-regulation-open detail-regulation-open--search" href="{href}" '
+                'target="_blank" rel="noopener noreferrer" '
+                'title="Quelle öffnen — keine Einzelpublikation">Link ↗</a>')
+    label = "Publikation öffnen" if kind == "publikation" else "Dokument öffnen"
+    return (f'<a class="detail-regulation-open" href="{href}" target="_blank" '
+            f'rel="noopener noreferrer" title="{label}" aria-label="{label}">↗</a>')
+
+
+def _status_badge(status):
+    return (f'<span class="detail-regulation-status '
+            f'detail-regulation-status--{PL.STATUS_TONES[status]}">'
+            f'{escape(PL.STATUS_LABELS[status])}</span>')
+
+
+def _regulation_row(date_text, title, details, status, href, date_kind="", badge=None, source_link=None):
+    """Date, title with what the sources say about it, status badge, arrow.
+    `details` are HTML fragments, each already escaped. `date_kind` says
+    which date the row is dated by: the notice's publication or the
+    regulation's entry into force — never one for the other."""
+    kind = f'<span class="detail-regulation-date-kind">{escape(date_kind)}</span>' if date_kind else ""
+    return (
+        '<div class="detail-regulation-row">'
+        f'<span class="detail-regulation-date">{escape(date_text)}{kind}</span>'
+        f'<div><div class="detail-reference-title">{escape(title)}</div>'
+        f'<div class="detail-reference-detail">{" · ".join(details)}</div></div>'
+        f'{_status_badge(status) if badge is None else badge}'
+        f'<div class="detail-regulation-arrow">{_open_link(href) if source_link is None else source_link}</div></div>'
+    )
+
+
+#: Version 1 reads no step from a publication. A row shows one of Philipp's
+#: badges only for a stage a person checked against a source, while that
+#: source supports it on the day shown (`planning.stage_badge`); every other
+#: row reads "Publikation".
+_PUBLICATION = "Publikation"
+_STEP_NOTE = ("Publikation im Amtsblatt, wie publiziert — kein geprüfter Verfahrensschritt, "
+              "nicht der heutige Stand")
+_PUBLICATIONS_NOTE = ("Je Publikation Titel und Datum, wie im Amtsblatt publiziert — was sie an "
+                      "diesem Tag bekanntgab, nicht der heutige Stand des Verfahrens. Einen Schritt "
+                      "zeigt eine Zeile nur, wenn er an einer Quelle geprüft und heute noch belegt "
+                      "ist; sonst steht «Publikation».")
+
+
+
+def _publication_title(pub):
+    """The notice's own title — for a canton notice naming several
+    municipalities, the part that concerns this one (`planning.publication_title`)."""
+    return PL.publication_title(pub)
+
+
+def _publication_row(pub, today):
+    """Version 1: one publication as the Amtsblatt printed it — its date, its
+    title, its number, the original. "Publikation", unless a person checked
+    its stage against a source that still supports it today; none merged
+    with another, no step read from its words."""
+    details = [escape(f"Amtsblatt · publiziert {pub.published_on:%d.%m.%Y}")]
+    if pub.pub_nr:
+        details.append(escape(f"Publ.-Nr. {pub.pub_nr}"))
+    if pub.level == "kanton" and pub.municipality:
+        details.append(escape(f"aus: {pub.title}"))
+    status, note = PL.stage_badge(pub, today)
+    if note:
+        href = _safe_href(pub.verified.source)
+        details.append(escape(note) + (f' · <a href="{href}" target="_blank" rel="noopener noreferrer">'
+                                       'Nachweis ↗</a>' if href else ""))
+    badge = None if status else (
+        f'<span class="detail-regulation-status detail-regulation-status--step" '
+        f'title="{escape(_STEP_NOTE)}">{_PUBLICATION}</span>')
+    return (pub.published_on, _regulation_row(
+        f"{pub.published_on:%d.%m.%Y}", _publication_title(pub), details, status or "", pub.url,
+        "publiziert", badge=badge))
+
+
+def _store_state(planning, today):
+    """(what the list covers, warnings): its period and last update — and,
+    when it is out of date or its last update failed, saying so. A list that
+    looks complete has to be complete as of a date the reader can see."""
+    covered = ", ".join(filter(None, [
+        f"erfasst seit {planning.since:%d.%m.%Y}" if planning.since else "Erfassungsbeginn nicht angegeben",
+        f"Stand {planning.stand:%d.%m.%Y}" if planning.stand else "",
+        f"aktualisiert {planning.updated_at:%d.%m.%Y %H:%M}" if planning.updated_at else ""]))
+    warnings = []
+    if planning.stand and (today - planning.stand).days > PL.STALE_DAYS:
+        warnings.append(f"Verzeichnis veraltet: Stand {planning.stand:%d.%m.%Y}, "
+                        f"{(today - planning.stand).days} Tage alt — neuere Publikationen fehlen hier.")
+    if planning.failed_at:
+        why = " ".join(planning.failure.split())[:240]
+        warnings.append(f"Letzte Aktualisierung am {planning.failed_at:%d.%m.%Y %H:%M} fehlgeschlagen "
+                        f"({why}) — gezeigt wird der letzte gültige Stand.")
+    return covered, warnings
+
+
+def _printed_link(url):
+    """A source on paper: the address, readable when printed and clickable on
+    screen — or nothing for anything but a web address."""
+    if not PL.web_link(url):
+        return ""
+    # Brackets would end the link's own markup; `web_link` lets no quote,
+    # space or angle bracket through.
+    href = re.sub(r"[()\[\]]", lambda m: f"%{ord(m.group()):02X}", url)
+    shown = re.sub(r"^https?://(www\.)?", "", url).replace("[", "").replace("]", "")
+    return f"[{shown}]({href})"
+
+
+def _printed_publication(pub, today):
+    """One publication on paper: date, badge or "Publikation", title, number
+    and link — and what the check shows, when there is one."""
+    status, note = PL.stage_badge(pub, today)
+    title = re.sub(r"[\[\]*]", "", _publication_title(pub))
+    number = re.sub(r"[\[\]*]", "", pub.pub_nr)
+    source = " · ".join(filter(None, [f"Publ.-Nr. {number}" if number else "", _printed_link(pub.url)]))
+    checked = re.sub(r"[\[\]*]", "", note)
+    if checked and pub.verified and _printed_link(pub.verified.source):
+        checked += f" · Nachweis {_printed_link(pub.verified.source)}"
+    label = PL.STATUS_LABELS[status] if status else _PUBLICATION
+    return " — ".join(filter(None, [f"{pub.published_on:%d.%m.%Y} {label}: {title}", source, checked]))
+
+
+def _edict_row(edict, approval, today):
+    """A regulation OEREBlex lists — in force, or with its in-force date ahead."""
+    title = edict.title or edict.label
+    if edict.abbreviation and edict.abbreviation not in title:
+        title += f" ({edict.abbreviation})"
+    upcoming = edict.in_force > today
+    details = [escape(f"OEREBlex · in Kraft {'ab' if upcoming else 'seit'} {edict.when}")]
+    if approval is not None:
+        href = _safe_href(approval.url)
+        note = f"Genehmigung publiziert {approval.published_on:%d.%m.%Y}"
+        if AB.link_kind(approval.url) != "publikation":
+            note += " (Suche)" if AB.link_kind(approval.url) == "suche" else " (Link)"
+        details.append(f'<a href="{href}" target="_blank" rel="noopener noreferrer">'
+                       f'{escape(note)} ↗</a>' if href else escape(note))
+    # A date ahead is all OEREBlex says — not that an approval is final.
+    return (edict.in_force, _regulation_row(
+        edict.when, title, details, "kuenftig" if upcoming else "in_kraft", edict.document,
+        "in Kraft ab" if upcoming else "in Kraft"))
+
+
+#: How a zone is linked to the plan whose force may have ended it.
+_ZONE_LINK = {
+    "explicit": "laut Publikation sichert die Planungszone diesen Plan (§ 29 Abs. 2 BauG)",
+    "name": "gleichnamiger Plan — ob die Planungszone ihn sichert, ist nicht belegt",
+    "kind": "die Planungszone sichert laut Publikation einen Plan dieser Art, ohne Namen — ob es "
+            "dieser ist, ist nicht belegt",
+    "general": "die Planungszone sichert laut Publikation die Nutzungsplanung — ob diese "
+               "Ausgabe sie umsetzt, ist nicht belegt",
+}
+
+
+def _zone_note(revision, today):
+    """Why a Planungszone is shown ended or open: the term it ran out of, or
+    what may be the entry into force of the plan it secures — and whether a
+    notice links that plan to the zone."""
+    kind, when, title, link = revision.zone_end or ("", None, "", "")
+    day = f"{when:%d.%m.%Y}" if when else ""
+    if kind == "frist":
+        return f"Höchstdauer (5 Jahre ab öffentlicher Auflage) am {day} abgelaufen (§ 29 Abs. 2 BauG)"
+    if kind == "frist_ca":
+        return (f"Höchstdauer (5 Jahre ab öffentlicher Auflage) abgelaufen — Auflage laut "
+                f"Publikation vom {day}, Beginn nicht angegeben (§ 29 Abs. 2 BauG)")
+    if kind == "teilaufhebung":
+        return (f"teilweise aufgehoben (publiziert {day}) — ob diese Parzelle im aufgehobenen Teil "
+                "liegt, zeigt die Publikation")
+    if kind == "frist_offen":
+        return (f"Höchstdauer (5 Jahre ab öffentlicher Auflage) endet um den {day}; Beginn der "
+                "Auflage nicht angegeben")
+    if kind == "befristet":
+        return f"laut Publikation befristet bis {day}"
+    if kind == "ab":
+        return f"wirksam erst ab der öffentlichen Auflage am {day}"
+    if kind == "offen":
+        return ("geltende Vorschriften (OEREBlex) nicht verfügbar — ob die gesicherte "
+                "Nutzungsplanung inzwischen gilt, ist offen")
+    event = {
+        "in_kraft": f"seit {day} in Kraft",
+        "oereb_unbestaetigt": f"im ÖREB-Auszug vom {day} ist ein gleichnamiger Plan verzeichnet, "
+                              "Zuordnung nicht belegt",
+        "genehmigung": f"Genehmigung publiziert am {day}, Inkrafttreten nicht belegt",
+        "inkraft": f"Inkraftsetzung publiziert am {day}, Datum nicht erkannt",
+        "ausgabe": f"seit {day} gilt eine neue Ausgabe",
+    }.get(kind, "")
+    return f"{event}: {title}; {_ZONE_LINK.get(link, '')}".rstrip("; ")
+
+
+def _zone_limit(revision):
+    """The latest day a zone in force can hold: the term its notice states,
+    or five years from its display."""
+    limit = PL._years_later(revision.zone_start, PL.PLANUNGSZONE_YEARS)
+    if revision.term_end and revision.term_end < limit:
+        return f"längstens bis {revision.term_end:%d.%m.%Y} (laut Publikation)"
+    if revision.steps[0].period_start:
+        return f"längstens bis {limit:%d.%m.%Y} (§ 29 Abs. 2 BauG)"
+    return (f"längstens bis etwa {limit:%d.%m.%Y} (§ 29 Abs. 2 BauG; Beginn der Auflage "
+            "nicht angegeben)")
+
+
+#: How the extract states a listing.
+_LAWSTATUS = {"inForce": "in Kraft", "changeWithPreEffect": "mit Vorwirkung"}
+
+
+def _oereb_note(revision):
+    """What the parcel's extract lists under this revision's name — with the
+    day the extract was read, and whether the listing is shown to be this
+    revision."""
+    listing = revision.oereb
+    day = f"{listing.checked_on:%d.%m.%Y}" if listing.checked_on else "unbekanntem Datum"
+    number = f" (Nr. {listing.number})" if listing.number else ""
+    state = _LAWSTATUS.get(listing.lawstatus)
+    listed = (f"im ÖREB-Auszug vom {day} ist ein Plan dieses Namens {state} verzeichnet{number}"
+              if state else
+              f"im ÖREB-Auszug vom {day} ist ein Plan dieses Namens verzeichnet{number}, "
+              "Rechtsstatus im gespeicherten Auszug nicht enthalten")
+    if revision.stage == "verfahren":
+        return f"{listed} — diese Revision ist im Amtsblatt nur als Entwurf publiziert"
+    if listing.checked_on and listing.checked_on < revision.published_on:
+        return f"{listed} — der Auszug ist älter als die letzte Publikation"
+    return f"{listed} — ob es diese Revision ist, ist nicht belegt"
+
+
+def _revision_row(revision, today, egrid=""):
+    """One plan at its latest step, from the Amtsblatt, with the evidence its
+    badge rests on — or the reason the badge claims no more."""
+    details = [f"Amtsblatt · {revision.history}"]
+    latest = revision.latest
+    status = revision.status
+    if latest.period_start and latest.period_end:
+        note = f"Frist {latest.period_start:%d.%m.%Y}–{latest.period_end:%d.%m.%Y}"
+        if latest.period_end < today:
+            details.append(note + " (abgelaufen)")
+            # Why a draft reads "Stand unbestätigt" — not a zone, which holds
+            # past its display.
+            if status == "unbestaetigt" and revision.step != "planungszone":
+                details.append("kein späterer Schritt im Verzeichnis")
+        elif latest.period_start > today:
+            details.append(note + " (noch nicht begonnen)")
+        else:
+            details.append(note)
+    elif revision.stage == "verfahren":
+        details.append("Zeitraum in der Publikation nicht erkannt")
+    if revision.step == "inkraft" and not revision.effective_on:
+        details.append("Datum des Inkrafttretens nicht erkannt")
+    if revision.effective_on:
+        verb = {"in_kraft": "in Kraft seit", "genehmigt": "in Kraft ab",
+                "inkraft_festgelegt": "in Kraft ab"}.get(status, "Inkrafttreten laut Publikation am")
+        details.append(f"{verb} {revision.effective_on:%d.%m.%Y}")
+    elif revision.planned_on:
+        # What a decision announced: the approval may still say otherwise.
+        details.append(f"Inkrafttreten vorgesehen ab {revision.planned_on:%d.%m.%Y} (laut Beschluss)")
+    if status == "genehmigt" and revision.appeal_until and not (
+            revision.effective_on and revision.effective_on > today):
+        details.append(f"Beschwerdefrist bis {revision.appeal_until:%d.%m.%Y}")
+    elif status == "genehmigt_unbelegt":
+        details.append("Inkrafttreten in den Quellen nicht belegt")
+    elif status == "beschlossen":
+        details.append("Genehmigung im Verzeichnis nicht gefunden")
+    elif revision.step == "planungszone" and status == "planungszone":
+        details.append(_zone_limit(revision))
+    elif revision.step == "planungszone" and revision.zone_end:
+        details.append(_zone_note(revision, today))
+    html = [escape(d) for d in details]
+    if revision.oereb:
+        note = escape(_oereb_note(revision))
+        # A listing not shown to be this revision: the current extract is one
+        # click away ("ÖREB prüfen" refreshes a stored extract without legal
+        # status once — `screening.oereb_targets`).
+        href = (_safe_href(f"https://api.geo.ag.ch/v2/oereb/extract/pdf/?EGRID={egrid}")
+                if egrid and revision.stage != "verfahren" else "")
+        html.append(note + (f' — <a href="{href}" target="_blank" rel="noopener noreferrer">'
+                            'aktuellen ÖREB-Auszug öffnen ↗</a>' if href else ""))
+    elif revision.scope == "gemeinde":
+        html.append(escape("ganze Gemeinde"))
+    elif revision.scope != "kanton":
+        html.append(escape(revision.scope_label))
+    return (revision.published_on, _regulation_row(
+        f"{revision.published_on:%d.%m.%Y}", revision.title, html, status, revision.url,
+        "publiziert"))
+
+
+def _amtsblatt_links(place):
+    links = (
+        (AB.municipal_planning_link(place), f"Amtsblatt-Suche: {place}, Bau- und Nutzungsordnung"),
+        (AB.canton_approvals_link(place), f"Amtsblatt-Suche: Genehmigungen des Kantons für {place}"),
+        (AB.canton_consultations_link(), "Amtsblatt-Suche: Anhörungen und Mitwirkungen des Kantons"),
+    )
+    return '<ul class="detail-regulation-links">' + "".join(
+        f'<li><a href="{_safe_href(href)}" target="_blank" rel="noopener noreferrer">'
+        f'{escape(label)} ↗</a></li>' for href, label in links) + "</ul>"
+
+
+def _note(text, error=False):
+    return (f'<div class="detail-reference-empty{" detail-reference-empty--error" if error else ""}">'
+            f'{text}</div>')
+
+
+def _regulation_card_html(row, edicts, own, own_note, *, loading=False, error="",
+                          planning=None, preview=None, today=None):
+    """Block E: the parcel's municipality and the canton, nothing else.
+
+    Version 1 (the default): OEREBlex's regulations as one group, then the
+    Amtsblatt publications as printed — date, title, the badge "Publikation",
+    the arrow to the original — no step read, none merged, no status of
+    today, no ÖREB match (`_publication_card_rows`). With `SCOPE_PLANNING_INFERENCE`
+    set, the inference path instead: revisions with status badges and the
+    parcel's ÖREB extract as a hint (`planning.py`). Another municipality's
+    regulation is never shown, and a canton notice counts only for the
+    municipality it names.
+
+    Without a publication store the Amtsblatt rows are missing. The card says
+    so — a temporary fallback, with the Amtsblatt search filtered to the
+    municipality — instead of reading as "nothing is changing".
+    """
     place = _text(row.get("municipality"))
     municipality = escape(place)
+    planning = planning or PL.View(status="off")
+    today = today or PP.swiss_today()
+    preview = preview or PP.View()
+    preview_enabled = preview.status != "off"
+    production_ids = {pub.pub_nr for pub in planning.publications + planning.canton_publications}
+    for revision in planning.in_force + planning.pending() + planning.ended:
+        production_ids.update(pub.pub_nr for pub in revision.steps)
+    preview_items = [item for item in preview.items if not (
+        item.candidate["source_id"]["namespace"] == PP.NS_AMTSBLATT
+        and item.candidate["source_id"]["value"] in production_ids)]
+    local = [] if loading or error else R.in_municipality(edicts, place)
+    in_force = [e for e in local if e.in_force <= today]
+    upcoming = [e for e in local if e.in_force > today]
+    pending = planning.pending()
+
     if loading:
         meta = "wird geladen"
-    elif error:
-        meta = "derzeit nicht abrufbar"
     else:
-        meta = f"{len(edicts)} Einträge im Kanton"
+        meta = ("OEREBlex nicht erreichbar" if error else
+                f"{len(in_force)} {'Vorschrift' if len(in_force) == 1 else 'Vorschriften'} in Kraft"
+                + (f" · {len(upcoming)} künftig in Kraft" if upcoming else ""))
+        if planning.status == "ok" and not planning.inference:
+            count = len(planning.publications) + len(planning.canton_publications)
+            parts = ([f"{count} {'Publikation' if count == 1 else 'Publikationen'} im "
+                      "Amtsblatt-Verzeichnis"] if count else []) + (
+                [f"{planning.unattributed} nicht zuordenbar"] if planning.unattributed else [])
+            meta += " · " + (" · ".join(parts) or "keine Publikationen im Amtsblatt-Verzeichnis")
+            _, warnings = _store_state(planning, today)
+            meta += "".join(" · " + flag for flag, hit in (
+                ("Verzeichnis veraltet", any(w.startswith("Verzeichnis veraltet") for w in warnings)),
+                ("Aktualisierung fehlgeschlagen", bool(planning.failed_at))) if hit)
+        elif planning.status == "ok":
+            count = (len(planning.in_force) + len(pending) + len(planning.ended)
+                     + len(planning.approvals))
+            parts = ([f"{count} Verfahren im Amtsblatt-Verzeichnis"] if count else []) + (
+                [f"{planning.unattributed} nicht zuordenbar"] if planning.unattributed else [])
+            meta += " · " + (" · ".join(parts) or "keine Verfahren im Amtsblatt-Verzeichnis")
+        elif planning.status == "error":
+            meta += " · Verfahren nicht lesbar"
+        elif not preview_enabled:
+            meta += " · Verfahren: Übergangslösung"
+        if preview_enabled:
+            meta += (f" · lokale Vorschau: {len(preview_items)} ausgewählte Publikationen" if preview.status == "ok"
+                     else " · lokale Vorschau nicht lesbar")
+            if any(source["error"] for source in preview.sources):
+                meta += " · Vorschau-Abfrage fehlgeschlagen"
+            if any(source["stale"] for source in preview.sources):
+                meta += " · Vorschau veraltet"
 
-    badge = (
-        '<span class="detail-reference-badge">1 relevant für diese Parzelle</span>'
-        if own else ""
-    )
-    rows = []
+    preview_rows = _preview_card_rows(preview, preview_items, place, today)
+    if not planning.inference:
+        return _regulation_card_shell(municipality, meta, _publication_card_rows(
+            planning, place, local, in_force, today, loading, error, preview_enabled=preview_enabled) + preview_rows, own_note, (
+            "Quellen: oereblex.ag.ch für die Vorschriften, amtsblatt.ag.ch für die "
+            "Publikationen — Titel und Datum wie publiziert; ein Verfahrensschritt nur, wenn "
+            "geprüft und belegt."))
+    dated = [_edict_row(e, planning.approvals.get(e), today) for e in local]
+    egrid = _text(row.get("egrid"))
+    dated += [_revision_row(r, today, egrid) for r in planning.in_force + pending + planning.ended]
+    rows = [f'<div class="detail-regulation-group">Gemeinde {municipality}</div>']
     if loading:
-        rows.append('<div class="detail-reference-empty">Änderungsliste wird geladen …</div>')
+        rows.append(_note("Geltende Vorschriften werden abgefragt …"))
     elif error:
-        rows.append(
-            '<div class="detail-reference-empty detail-reference-empty--error">'
-            f'Änderungsliste nicht abrufbar: {escape(error)}. Die Rechtsgrundlagen '
-            'aus dem ÖREB-Auszug sind davon nicht betroffen.</div>'
-        )
-    else:
-        if own:
-            own_href = _safe_href(own.document)
-            own_action = (
-                f'<a class="detail-reference-action" href="{own_href}" target="_blank" '
-                'rel="noopener noreferrer">PDF</a>' if own_href else "—"
-            )
-            rows.append(
-                '<div class="detail-regulation-row detail-regulation-row--relevant">'
-                f'<span class="detail-regulation-date">{escape(own.when)}</span>'
-                '<div><div class="detail-regulation-source">Diese Parzelle</div>'
-                f'<div class="detail-reference-title">{municipality} · {escape(own.label)}</div>'
-                '<div class="detail-reference-detail">Aktuell in Kraft</div></div>'
-                '<span class="detail-regulation-impact">Relevant</span>'
-                f'<div class="detail-reference-actions">{own_action}</div></div>'
-            )
-        else:
-            rows.append(
-                '<div class="detail-reference-empty">Für diese Gemeinde ist in '
-                'OEREBlex keine gültige Rechtsvorschrift verzeichnet.</div>'
-            )
+        rows.append(_note(f"Geltende Vorschriften nicht abrufbar: {escape(error)}. Die "
+                          "Rechtsgrundlagen aus dem ÖREB-Auszug sind davon nicht betroffen.",
+                          error=True))
+    rows += [html for _, html in sorted(dated, key=lambda item: item[0], reverse=True)]
+    if not loading and not error and not in_force:
+        rows.append(_note(f"Für {municipality} ist in OEREBlex keine gültige "
+                          "Rechtsvorschrift verzeichnet."))
 
-        # Only this municipality's own entries. The feed is canton-wide and
-        # sorted by date, so "the three newest" were three other municipalities'
-        # building regulations — under a heading that promises changes for this
-        # parcel, that is not merely noise but wrong. Everything else stays one
-        # click away in the fold below.
-        local = [e for e in edicts if e.municipality == place and e != own]
-        for edict in local[:3]:
-            href = _safe_href(edict.document)
-            action = (
-                f'<a class="detail-reference-action" href="{href}" target="_blank" '
-                'rel="noopener noreferrer">PDF</a>' if href else "—"
-            )
-            rows.append(
-                '<div class="detail-regulation-row">'
-                f'<span class="detail-regulation-date">{escape(edict.when)}</span>'
-                '<div><div class="detail-regulation-source">OEREBlex Aargau</div>'
-                f'<div class="detail-reference-title">{escape(edict.municipality)} · '
-                f'{escape(edict.label)}</div><div class="detail-reference-detail">'
-                'Rechtsvorschrift in Kraft</div></div>'
-                '<span class="detail-regulation-impact detail-regulation-impact--neutral">Gemeinde</span>'
-                f'<div class="detail-reference-actions">{action}</div></div>'
-            )
-        if own and not local:
-            rows.append(
-                '<div class="detail-reference-empty">Keine weiteren Änderungen '
-                f'für {municipality} verzeichnet.</div>'
-            )
+    if planning.status == "ok":
+        if planning.unattributed:
+            count = planning.unattributed
+            rows.append(_note(
+                f'{count} {"Publikation nennt" if count == 1 else "Publikationen nennen"} '
+                f'{municipality}, ohne sich einem Plan zuordnen zu lassen — im Amtsblatt '
+                'prüfen.', error=True))
+        elif not pending:
+            # "None" is only worth saying with the period it covers.
+            covered = ", ".join(filter(None, [
+                f"erfasst seit {planning.since:%d.%m.%Y}" if planning.since
+                else "Erfassungsbeginn nicht angegeben",
+                f"Stand {planning.stand:%d.%m.%Y}" if planning.stand else "",
+            ]))
+            rows.append(_note(f"Keine laufenden Verfahren für {municipality} im "
+                              f"Amtsblatt-Verzeichnis ({covered})."))
+        if planning.canton:
+            rows.append('<div class="detail-regulation-group">Kanton Aargau</div>')
+            canton = [_revision_row(r, today, egrid) for r in planning.canton]
+            rows += [html for _, html in sorted(canton, key=lambda item: item[0], reverse=True)]
+    elif not (preview_enabled and planning.status == "off"):
+        rows += _fallback_rows(planning, place, municipality)
+    rows += preview_rows
 
-        shown = set(local[:3]) | ({own} if own else set())
-        elsewhere = [e for e in edicts if e not in shown]
-        if elsewhere:
-            remaining = []
-            for edict in elsewhere:
-                href = _safe_href(edict.document)
-                document = (
-                    f' · <a href="{href}" target="_blank" rel="noopener noreferrer">Dokument</a>'
-                    if href else ""
-                )
-                remaining.append(
-                    '<li><span>{date}</span><span>{municipality} · {label}{document}</span></li>'.format(
-                        date=escape(edict.when),
-                        municipality=escape(edict.municipality),
-                        label=escape(edict.label),
-                        document=document,
-                    )
-                )
-            rows.append(
-                '<details class="detail-regulation-more"><summary>Alle '
-                f'{len(edicts)} Änderungen im Kanton</summary>'
-                f'<ul>{"".join(remaining)}</ul></details>'
-            )
+    return _regulation_card_shell(municipality, meta, rows, own_note, (
+        "Quellen: oereblex.ag.ch für geltende Vorschriften, amtsblatt.ag.ch für Verfahren, der "
+        "ÖREB-Auszug der Parzelle für Gebietspläne. Ein Gebietsplan gilt nur für sein Gebiet; ob "
+        "die Parzelle darin liegt, zeigt der Plan."))
 
+
+def _regulation_card_shell(municipality, meta, rows, own_note, sources):
     note = f'<div class="detail-regulation-note">{escape(own_note)}</div>' if own_note else ""
     return (
         '<details class="detail-reference-card detail-reference-card--regulations">'
         '<summary><span class="detail-reference-summary-copy">'
         f'<span class="detail-reference-summary-title">Regulatorische Änderungen · {municipality}</span>'
-        f'<span class="detail-reference-summary-meta">{escape(meta)}</span>{badge}'
+        f'<span class="detail-reference-summary-meta">{escape(meta)}</span>'
         '</span><span class="detail-reference-sign" aria-hidden="true"></span></summary>'
         '<div class="detail-reference-body">'
         + "".join(rows)
         + note
-        + '<div class="detail-regulation-note">Quelle: oereblex.ag.ch. Verzeichnet '
-          'Rechtsvorschriften, die bereits in Kraft sind; laufende Mitwirkungs- '
-          'und Revisionsverfahren sind nicht enthalten.</div></div></details>'
+        + f'<div class="detail-regulation-note">{escape(sources)}</div>'
+          '</div></details>'
     )
+
+
+def _fallback_rows(planning, place, municipality):
+    """No publications to show: say why, and give the Amtsblatt search."""
+    if planning.status == "error":
+        rows = [_note(f"Verfahrensliste nicht lesbar: {escape(planning.error)}. Ob "
+                      "etwas läuft, ist damit offen — direkt im Amtsblatt prüfen:", error=True)]
+    elif planning.status == "uncovered":
+        rows = [_note(f"Für {municipality} noch nicht erfasst — das "
+                      "Amtsblatt-Verzeichnis deckt diese Gemeinde nicht ab. "
+                      "Übergangslösung: direkt im Amtsblatt prüfen:")]
+    else:
+        rows = [_note(
+            "Übergangslösung: Entwürfe, Beschlüsse und Genehmigungen aus dem Amtsblatt "
+            "sind noch nicht angebunden. Bis dahin direkt im Amtsblatt prüfen — die "
+            f"Suche ist auf {municipality} und den Kanton gefiltert:")]
+    return rows + [_amtsblatt_links(place)]
+
+
+def _publication_card_rows(planning, place, local, in_force, today, loading, error, preview_enabled=False):
+    """Version 1: OEREBlex's regulations in force, then the publications as
+    printed — the municipality's, then the canton-wide ones. No chain, no
+    status of today, nothing matched by name."""
+    municipality = escape(place)
+    rows = [f'<div class="detail-regulation-group">Gemeinde {municipality} · Vorschriften '
+            '(OEREBlex)</div>']
+    if loading:
+        rows.append(_note("Geltende Vorschriften werden abgefragt …"))
+    elif error:
+        rows.append(_note(f"Geltende Vorschriften nicht abrufbar: {escape(error)}. Die "
+                          "Rechtsgrundlagen aus dem ÖREB-Auszug sind davon nicht betroffen.",
+                          error=True))
+    dated = [_edict_row(e, None, today) for e in local]
+    rows += [html for _, html in sorted(dated, key=lambda item: item[0], reverse=True)]
+    if not loading and not error and not in_force:
+        rows.append(_note(f"Für {municipality} ist in OEREBlex keine gültige "
+                          "Rechtsvorschrift verzeichnet."))
+    if planning.status != "ok":
+        return rows if preview_enabled and planning.status == "off" else rows + _fallback_rows(planning, place, municipality)
+    rows.append(f'<div class="detail-regulation-group">Gemeinde {municipality} · Publikationen im '
+                'Amtsblatt</div>')
+    covered, warnings = _store_state(planning, today)
+    rows += [_note(escape(warning), error=True) for warning in warnings]
+    if planning.publications or planning.canton_publications:
+        rows.append(_note(escape(f"Verzeichnis: {covered}.") + " " + _PUBLICATIONS_NOTE))
+    rows += [_publication_row(p, today)[1] for p in planning.publications]
+    if planning.unattributed:
+        count = planning.unattributed
+        rows.append(_note(
+            f'{count} {"Publikation nennt" if count == 1 else "Publikationen nennen"} '
+            f'{municipality}, ohne sich zuordnen zu lassen — im Amtsblatt prüfen.', error=True))
+    elif not planning.publications:
+        covered = ", ".join(filter(None, [
+            f"erfasst seit {planning.since:%d.%m.%Y}" if planning.since
+            else "Erfassungsbeginn nicht angegeben",
+            f"Stand {planning.stand:%d.%m.%Y}" if planning.stand else ""]))
+        rows.append(_note(f"Keine Publikationen für {municipality} im Amtsblatt-Verzeichnis "
+                          f"({covered})."))
+    if planning.canton_publications:
+        rows.append('<div class="detail-regulation-group">Kanton Aargau · Publikationen im '
+                    'Amtsblatt</div>')
+        rows += [_publication_row(p, today)[1] for p in planning.canton_publications]
+    return rows
+
+
+def _preview_card_rows(preview, items, place, today=None):
+    """Local review selections, with no legal-stage inference or PDF promotion."""
+    if preview.status == "off":
+        return []
+    today = today or PP.swiss_today()
+    rows = ['<div class="detail-regulation-group">Lokale Vorschau · ausgewählte Publikationen</div>']
+    rows.append(_note("Nach Relevanz und Bezug zur Gemeinde ausgewählt. Diese Suchauswahl ist keine "
+                      "vollständige Rechtsgeschichte. Einen bestätigten heutigen Verfahrensstand zeigt sie "
+                      "nur mit einem ausdrücklich geprüften, für diese Gemeinde und diesen Tag gültigen Quellenbeleg. "
+                      "Ob ein Gebietsplan diese Parzelle betrifft, muss am Original geprüft werden."))
+    if preview.status == "error":
+        return rows + [_note(escape(preview.error), error=True)]
+    if not preview.municipality_queried:
+        rows.append(_note(f"Für {escape(place)} wurde die Gemeindesuche noch nicht erfolgreich abgefragt. "
+                          "Allfällige kantonale Publikationen sind separat ausgewählt."))
+    for source in preview.sources:
+        selection = source["selection"]
+        if selection["provider"] == "amtsblatt.ag.ch":
+            label = ("Gemeindepublikationen" if selection["kind"] == "municipal" else "Kantonsgenehmigungen") + f" ({selection['municipality']})"
+        else:
+            label = "Anhörungen Kanton Aargau" + (" (Archiv)" if selection["mode"] == "archive" else "")
+        success = source["last_success_at"]
+        text = f"{label}: zuletzt erfolgreich abgefragt {success:%d.%m.%Y %H:%M} UTC." if success else f"{label}: bisher keine erfolgreiche Abfrage."
+        if source["empty"]:
+            text += " Die letzte Suchauswahl lieferte keine Treffer; daraus folgt kein Rechtsstatus."
+        if source["stale"]:
+            text += " Suchauswahl älter als sieben Tage; neuere Publikationen können fehlen."
+        if source["error"]:
+            text += f" Letzte Abfrage am {source['last_attempt_at']:%d.%m.%Y %H:%M} UTC fehlgeschlagen; die letzten gültigen Daten bleiben erhalten."
+        rows.append(_note(escape(text), error=bool(source["error"] or source["stale"])))
+    if preview.pending or preview.changed:
+        rows.append(_note(escape(f"Noch zu prüfen: {preview.pending} Publikationen. "
+                                 f"Nach Quellenänderung erneut zu prüfen: {preview.changed}. "
+                                 "Diese Einträge werden nicht als relevante Publikationen gezeigt.")))
+    for item in items:
+        candidate = item.candidate
+        canton = candidate["source_id"]["namespace"] == PP.NS_CANTON
+        published = datetime.fromisoformat(candidate["publication_date"].replace("Z", "+00:00")).date() if canton else date.fromisoformat(candidate["published_on"])
+        label = "ag.ch · Anhörung" if canton else "Amtsblatt"
+        details = [escape(f"{label} · publiziert {published:%d.%m.%Y}"), escape(candidate["authority"])]
+        if candidate.get("publication_version_label"):
+            details.append(escape("Quellenhinweis: " + candidate["publication_version_label"]))
+        if item.absent:
+            details.append(escape("In einer zuletzt erfolgreich abgefragten Suchauswahl nicht mehr enthalten — kein Nachweis einer Genehmigung oder Aufhebung."))
+        href = _safe_href(PP.source_href(candidate))
+        source_label = f"Originale Anhörung auf ag.ch öffnen: {candidate['title']}" if canton else f"Amtsblatt-Publikation öffnen: {candidate['title']}"
+        link = (f'<a class="detail-regulation-open{" detail-regulation-open--search" if canton else ""}" '
+                f'href="{href}" target="_blank" rel="noopener noreferrer" '
+                f'title="{escape(source_label, quote=True)}" aria-label="{escape(source_label, quote=True)}">'
+                f'{"Link ↗" if canton else "↗"}</a>') if href else ""
+        badge = '<span class="detail-regulation-status detail-regulation-status--step" title="Relevanz und Gemeinde-Bezug geprüft; kein bestätigter Rechtsstatus">Publikation</span>'
+        if item.verified is not None:
+            try:
+                proof = item.verified
+                raw = {"stage": proof.stage, "source": proof.source, "verified_on": proof.verified_on.isoformat(), "method": proof.method}
+                raw.update({name: getattr(proof, name).isoformat() for name in PL._STAGE_DATES if getattr(proof, name) is not None})
+                PP._proof(raw, candidate)
+                status, note = PL.stage_badge(item, today)
+                if status:
+                    badge = _status_badge(status)
+                if note:
+                    details.append(escape(note))
+                proof_href = _safe_href(proof.source)
+                if proof_href:
+                    details.append(f'<a href="{proof_href}" target="_blank" rel="noopener noreferrer">Geprüfter Quellenbeleg ↗</a>')
+            except (PP.C.CollectionError, AttributeError, TypeError, ValueError):
+                pass  # An unsupported direct-view proof earns no legal badge.
+        rows.append(_regulation_row(f"{published:%d.%m.%Y}", candidate["title"], details, "", "", "publiziert", badge=badge, source_link=link))
+    if not items:
+        rows.append(_note("Keine freigegebenen Publikationen für diese Gemeinde in der lokalen Vorschau. "
+                          "Ungeprüfte und zurückgestellte Treffer bleiben in der Prüfung; dies bedeutet nicht, dass keine Änderungen geplant sind."))
+    return rows
 
 
 @st.fragment(run_every=1)
@@ -668,28 +1139,134 @@ def _regulation_news_poll():
     st.rerun()
 
 
-def _regulation_block(own, own_note, news_error):
-    """The one part of block E that belongs on paper.
+def _planning_rows(planning, municipality, today=None):
+    """What the sheet says about procedures under way — in each of the three
+    states, because "not tracked", "could not read" and "none" are different
+    answers on paper too."""
+    link = AB.municipal_planning_link(municipality) if municipality else AB.BASE
+    if planning is None or planning.status == "off":
+        return [("Verfahren (Amtsblatt)", "nicht automatisch erfasst (Übergangslösung) – "
+                                       f"im Amtsblatt prüfen: {link}")]
+    if planning.status == "uncovered":
+        return [("Verfahren (Amtsblatt)",
+                 f"für diese Gemeinde nicht erfasst – im Amtsblatt prüfen: {link}")]
+    if planning.status == "error":
+        return [("Verfahren (Amtsblatt)",
+                 f"Verfahrensliste nicht lesbar ({planning.error}) – im Amtsblatt prüfen: {link}")]
 
-    Only the parcel's own regulation: the canton-wide change list is news rather
-    than a fact about this parcel, and 227 rows would bury a one-page data sheet.
-    A printed analysis that does not say which edition of the building
-    regulation it assumed cannot be checked a year later, which is why the
-    not-found and could-not-ask cases print a line of their own instead of the
-    block quietly disappearing.
+    if not planning.inference:
+        # Use the card's Swiss calendar date even when UTC is still yesterday.
+        today = today or PP.swiss_today()
+
+        def printed(pubs, label):
+            # A row each, so that a long list runs over pages: reportlab cannot
+            # split one row, and sixty in one cell are taller than a page.
+            return [(label if i == 0 else "", _printed_publication(p, today)) for i, p in enumerate(pubs)]
+
+        covered, warnings = _store_state(planning, today)
+        rows = [("Verzeichnis (Amtsblatt)", " ".join([covered + "."] + warnings))]
+        if planning.publications:
+            rows += printed(planning.publications, "Publikationen (Amtsblatt)")
+        if planning.unattributed:
+            rows.append(("Nicht zuordenbar" if planning.publications else "Publikationen (Amtsblatt)",
+                         f"{planning.unattributed} nicht zuordenbare Publikation(en) – "
+                         f"im Amtsblatt prüfen: {link}"))
+        elif not planning.publications:
+            covered = ", ".join(filter(None, [
+                f"erfasst seit {planning.since:%d.%m.%Y}" if planning.since
+                else "Erfassungsbeginn nicht angegeben",
+                f"Stand {planning.stand:%d.%m.%Y}" if planning.stand else ""]))
+            rows.append(("Publikationen (Amtsblatt)", f"keine im Amtsblatt-Verzeichnis ({covered})"))
+        if planning.canton_publications:
+            rows += printed(planning.canton_publications, "Kanton (Amtsblatt)")
+        if planning.publications or planning.canton_publications:
+            rows.append(("Hinweis zu den Publikationen",
+                         "Titel und Datum wie publiziert — nicht der heutige Stand des "
+                         "Verfahrens; ein Schritt nur, wenn an einer Quelle geprüft und am "
+                         "Druckdatum belegt"))
+        return rows
+
+    def dates(r):
+        return ", ".join(filter(None, [
+            f"Entscheid vom {r.decided_on:%d.%m.%Y}" if r.decided_on else "",
+            f"publiziert {r.published_on:%d.%m.%Y}",
+            (f"in Kraft {'seit' if r.status == 'in_kraft' else 'ab'} {r.effective_on:%d.%m.%Y}"
+             if r.effective_on and r.status in ("in_kraft", "genehmigt", "inkraft_festgelegt")
+             else ""),
+            f"Inkrafttreten vorgesehen ab {r.planned_on:%d.%m.%Y}" if r.planned_on else "",
+            (f"ÖREB-Auszug vom {r.oereb.checked_on:%d.%m.%Y}"
+             if r.oereb and r.oereb.checked_on else "")]))
+
+    def listed(revisions):
+        # Plain text: these values reach the PDF's markup, and a title from
+        # a data file must not turn into a link there.
+        return "; ".join(
+            re.sub(r"[\[\]*]", "", f"{r.status_label}: {r.title} ({r.scope_label}, {dates(r)})")
+            for r in revisions)
+
+    rows = []
+    if planning.in_force:
+        # In force by a date the Amtsblatt gives, possibly before OEREBlex
+        # lists it: on paper, too, the BNO above is not the whole of what is
+        # in force. The parcel's ÖREB extract never puts a plan here.
+        rows.append(("In Kraft getreten (Amtsblatt)", listed(planning.in_force)))
+    pending = planning.pending()
+    if pending:
+        rows.append(("Verfahren (Amtsblatt)", listed(pending)))
+    if planning.unattributed:
+        # Beside the list too: without it, the list reads as complete.
+        rows.append(("Nicht zuordenbar" if pending else "Verfahren (Amtsblatt)",
+                     f"{planning.unattributed} nicht zuordenbare Publikation(en) – "
+                     f"im Amtsblatt prüfen: {link}"))
+    elif not pending:
+        covered = ", ".join(filter(None, [
+            f"erfasst seit {planning.since:%d.%m.%Y}" if planning.since
+            else "Erfassungsbeginn nicht angegeben",
+            f"Stand {planning.stand:%d.%m.%Y}" if planning.stand else ""]))
+        rows.append(("Verfahren (Amtsblatt)", f"keine im Amtsblatt-Verzeichnis ({covered})"))
+    if planning.ended:
+        rows.append(("Beendet (Amtsblatt)", listed(planning.ended)))
+    if planning.canton:
+        rows.append(("Kanton (Amtsblatt)", listed(planning.canton)))
+    return rows
+
+
+def _regulation_block(own, own_note, news_error, *, planning=None, municipality="",
+                      edicts=(), today=None):
+    """The part of block E that belongs on paper.
+
+    What the card shows, as text: the parcel's own regulation and an edition
+    approved for later, its municipality's procedures and the canton-wide
+    changes — never another municipality's. A printed
+    analysis that does not say which edition of the building regulation it
+    assumed — and whether a revision was under way — cannot be checked a year
+    later, which is why the not-found and could-not-ask cases print a line of
+    their own instead of the block quietly disappearing.
     """
     if news_error:
-        return ("Stand der Rechtsvorschrift",
-                [("Nicht abrufbar", f"OEREBlex antwortete nicht: {news_error}")])
-    if not own:
-        return ("Stand der Rechtsvorschrift",
-                [("Rechtsvorschrift", "in OEREBlex keine gültige Vorschrift für "
-                                      "diese Gemeinde verzeichnet")])
-    rows = [(own.label or "Rechtsvorschrift",
-             " ".join(filter(None, [f"in Kraft seit {own.when}", own.document])))]
-    if own_note:
-        rows.append(("Hinweis", own_note))
-    return ("Stand der Rechtsvorschrift", rows)
+        rows = [("Nicht abrufbar", f"OEREBlex antwortete nicht: {news_error}")]
+    elif not own:
+        rows = [("Rechtsvorschrift", "in OEREBlex keine gültige Vorschrift für "
+                                     "diese Gemeinde verzeichnet")]
+    else:
+        approval = planning.approvals.get(own) if planning is not None and planning.inference else None
+        rows = [(own.label or "Rechtsvorschrift", " ".join(filter(None, [
+            f"in Kraft seit {own.when}",
+            f"· Genehmigung publiziert {approval.published_on:%d.%m.%Y}" if approval else "",
+            own.document])))]
+        if own_note:
+            rows.append(("Hinweis", own_note))
+    # An edition OEREBlex lists with its date ahead: on the card, so on paper.
+    # The sheet and card must use the same Swiss calendar date.
+    today = today or PP.swiss_today()
+    approvals = planning.approvals if planning is not None and planning.inference else {}
+    rows += [(edict.label or "Rechtsvorschrift", " ".join(filter(None, [
+                 f"in Kraft ab {edict.when} (OEREBlex)",
+                 f"· Genehmigung publiziert {approvals[edict].published_on:%d.%m.%Y}"
+                 if edict in approvals else "",
+                 edict.document])))
+             for edict in edicts if edict.in_force > today]
+    return ("Stand der Rechtsvorschrift", rows + _planning_rows(planning, municipality, today))
 
 
 def _links(row):
@@ -1101,10 +1678,6 @@ PAGE_CSS = """
       line-height:16px; }
   .detail-reference-summary-meta { color:#b0b0b8; font-size:11.5px;
       line-height:15px; }
-  .detail-reference-badge, .detail-regulation-impact { display:inline-flex;
-      align-items:center; width:max-content; padding:2px 8px; border-radius:20px;
-      background:#fdf5e7; color:#8a5a12; font-size:10.5px; font-weight:500;
-      line-height:15px; }
   .detail-reference-sign::before { content:'+'; color:#9a9aa6;
       font-family:"IBM Plex Mono",monospace; font-size:11px; }
   .detail-reference-card[open] > summary .detail-reference-sign::before {
@@ -1135,25 +1708,46 @@ PAGE_CSS = """
       margin:9px 0 0; padding-left:18px; color:#77777f; font-size:11px;
       line-height:15px; }
   .detail-regulation-row { display:grid;
-      grid-template-columns:96px minmax(0,1fr) 92px 72px; gap:16px;
+      grid-template-columns:96px minmax(0,1fr) 172px 64px; gap:16px;
       align-items:center; padding:11px 0; border-bottom:1px solid #f5f5f7; }
   .detail-regulation-date { color:#9a9aa6; font-family:"IBM Plex Mono",monospace;
       font-size:11.5px; font-variant-numeric:tabular-nums; }
-  .detail-regulation-source { color:#a0a0aa; font-size:10px; font-weight:600;
-      line-height:12px; letter-spacing:.07em; text-transform:uppercase; }
-  .detail-regulation-impact { justify-self:end; }
-  .detail-regulation-impact--neutral { background:#f4f4f6; color:#77777f; }
+  .detail-regulation-status--step { background:#ffffff; color:#55555f;
+      box-shadow:inset 0 0 0 1px #d8d8de; font-style:normal; }
+  .detail-regulation-date-kind { display:block; font-family:inherit; font-size:10px;
+      letter-spacing:.02em; color:#b4b4be; }
+  .detail-regulation-row .detail-reference-detail a { color:inherit; }
+  /* Philipp's status colours (2026-10-05): a draft amber, an approval yellow,
+     what is in force grey; a decision awaiting approval and anything
+     unverified stay uncoloured. */
+  .detail-regulation-status { justify-self:end; max-width:100%; padding:2px 8px;
+      border-radius:20px; font-size:10.5px; font-weight:500; line-height:15px;
+      text-align:right; }
+  .detail-regulation-status--amber { background:#fdecd3; color:#8a4f0b; }
+  .detail-regulation-status--yellow { background:#fbf3c6; color:#6b5a06; }
+  .detail-regulation-status--grey { background:#ededf0; color:#55555f; }
+  .detail-regulation-status--neutral { background:#ffffff; color:#4a4a54;
+      box-shadow:inset 0 0 0 1px #dcdce3; }
+  .detail-regulation-status--open { background:#ffffff; color:#77777f;
+      outline:1px dashed #c4c4cd; outline-offset:-1px; }
+  .detail-regulation-arrow { display:flex; justify-content:flex-end; }
+  .detail-regulation-open { display:inline-flex; align-items:center;
+      justify-content:center; width:26px; height:26px; border:1px solid #e2e2e8;
+      border-radius:5px; color:#3a3a44; font-size:13px; line-height:1;
+      text-decoration:none; }
+  .detail-regulation-open:hover { border-color:#c9c9d2; color:#17171b; }
+  /* A search is not the publication: it says so, in words. */
+  .detail-regulation-open--search { width:auto; padding:0 7px; font-size:11px;
+      white-space:nowrap; }
   .detail-regulation-note { margin-top:12px; max-width:90ch; color:#b0b0b8;
       font-size:11px; line-height:15px; text-wrap:pretty; }
-  .detail-regulation-more { padding-top:10px; }
-  .detail-regulation-more > summary { color:#4a4a54; cursor:pointer;
-      font-size:11.5px; font-weight:500; }
-  .detail-regulation-more ul { margin:10px 0 0; padding:0; list-style:none; }
-  .detail-regulation-more li { display:grid; grid-template-columns:96px 1fr;
-      gap:16px; padding:7px 0; border-top:1px solid #f5f5f7; color:#77777f;
-      font-size:11.5px; line-height:16px; }
-  .detail-regulation-more li span:first-child { color:#9a9aa6;
-      font-family:"IBM Plex Mono",monospace; }
+  .detail-regulation-group { margin-top:16px; color:#8a8a94; font-size:10px;
+      font-weight:600; line-height:12px; letter-spacing:.08em;
+      text-transform:uppercase; }
+  .detail-regulation-group:first-child { margin-top:12px; }
+  .detail-regulation-links { margin:0; padding:0 0 4px 18px; color:#77777f;
+      font-size:11.5px; line-height:20px; }
+  .detail-regulation-links a { color:#3a3a44; }
   .detail-final-note { margin:20px 0 0; max-width:80ch; color:#b0b0b8;
       font-size:11px; line-height:15px; text-wrap:pretty; }
 
@@ -1184,9 +1778,11 @@ PAGE_CSS = """
         > [data-testid="stColumn"] { min-width:calc(50% - 8px); }
     .detail-reference-row { grid-template-columns:1fr; gap:5px; }
     .detail-reference-actions { justify-content:flex-start; }
-    .detail-regulation-row { grid-template-columns:82px minmax(0,1fr); gap:8px 12px; }
-    .detail-regulation-impact, .detail-regulation-row .detail-reference-actions {
-        grid-column:2; justify-self:start; }
+    .detail-regulation-row { grid-template-columns:82px minmax(0,1fr) auto;
+        gap:8px 12px; }
+    .detail-regulation-row > .detail-regulation-arrow { grid-column:3; grid-row:1; }
+    .detail-regulation-row > .detail-regulation-status { grid-column:2; grid-row:2;
+        justify-self:start; text-align:left; }
     .detail-assumptions ul { grid-template-columns:1fr; }
   }
 </style>
@@ -1758,10 +2354,22 @@ def page(parcels, cache, price_of, db=None):
     #: than off the status: during a twelve-hour refresh a fetch *is* running
     #: and the previous list is still the best answer there is.
     have_news = news_result is not None
+    place = _text(row["municipality"])
+    # Capture one Swiss date for the governing edition, procedure status and PDF.
+    regulation_today = PP.swiss_today()
     own, own_note = (
         (None, "") if not have_news or news_error
-        else R.for_municipality(edicts, _text(row["municipality"]), int(row["bfs"]))
+        else R.for_municipality(edicts, place, int(row["bfs"]),
+                                today=regulation_today)
     )
+    # Procedures under way come from a local file, not the network, so they
+    # are read on the render path. Off unless a store is configured; see
+    # `planning.load_store` for why "off", "unreadable" and "none" differ.
+    # None, not empty: without OEREBlex the editions in force are unknown,
+    # and a Planungszone cannot be shown in force (`planning._zone_verdict`).
+    planning_view = PL.state_for(
+        place, R.in_municipality(edicts, place) if have_news and not news_error else None,
+        today=regulation_today, parcel=extract)
     regulation_card = _regulation_card_html(
         row,
         edicts,
@@ -1769,6 +2377,9 @@ def page(parcels, cache, price_of, db=None):
         own_note,
         loading=not have_news,
         error=news_error if have_news else "",
+        planning=planning_view,
+        preview=PP.state_for(place, today=regulation_today),
+        today=regulation_today,
     )
     with st.container(key="detail_references"):
         with st.container(key="detail_legal"):
@@ -1826,23 +2437,27 @@ def page(parcels, cache, price_of, db=None):
                 )
                 for doc in entries
             ]))
-    # Only the parcel's own half of block E reaches the paper. The canton-wide
-    # change list is news, not a fact about this parcel, and 227 rows would bury
-    # a one-page data sheet. What belongs here is the date the sheet was
-    # computed under: a printed analysis that does not say which edition of the
-    # building regulation it assumed cannot be checked later.
-    blocks.append(_regulation_block(own, own_note, news_error))
+    # Block E on paper: the edition of the building regulation the sheet was
+    # computed under, and whether a revision was under way at the time.
+    blocks.append(_regulation_block(
+        own, own_note, news_error, planning=planning_view, municipality=place,
+        edicts=R.in_municipality(edicts, place) if have_news and not news_error else (),
+        today=regulation_today))
 
-    document = report.build(
-        title=address,
-        subtitle=(
-            f"{row['municipality']} · Parzelle {row['parcel']} · "
-            f"{_text(row.get('zone')) or 'ohne Zone'} · Datenblatt Verdichtungspotenzial"
-        ),
-        blocks=blocks,
-        steps=steps,
-        notes=["Annahmen und Quellen:"] + notes,
-    )
+    try:
+        document = report.build(
+            title=address,
+            subtitle=(
+                f"{row['municipality']} · Parzelle {row['parcel']} · "
+                f"{_text(row.get('zone')) or 'ohne Zone'} · Datenblatt Verdichtungspotenzial"
+            ),
+            blocks=blocks,
+            steps=steps,
+            notes=["Annahmen und Quellen:"] + notes,
+        )
+        failure = ""
+    except Exception as exc:  # the sheet fails, not the analysis drawn above it
+        document, failure = b"", f"PDF konnte nicht erstellt werden ({type(exc).__name__})."
     pdf_action.download_button(
         "Als PDF exportieren",
         data=document,
@@ -1850,5 +2465,6 @@ def page(parcels, cache, price_of, db=None):
         mime="application/pdf",
         type="primary",
         width="content",
-        help="Alle drei Blöcke samt vollständigem Rechenweg und Quellen.",
+        disabled=bool(failure),
+        help=failure or "Alle drei Blöcke samt vollständigem Rechenweg und Quellen.",
     )

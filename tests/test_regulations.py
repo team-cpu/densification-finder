@@ -107,6 +107,29 @@ class JoinTest(unittest.TestCase):
         edict, _ = R.for_municipality(self.edicts, "Möhlin", 4254)
         self.assertEqual(edict.in_force.year, 2023)
 
+    def test_a_regulation_not_yet_in_force_does_not_govern(self):
+        """A BNO approved for next January is not the one this parcel is
+        computed under today; block E lists it as decided instead."""
+        def edict(day):
+            return {"title": "Bau- und Nutzungsordnung", "abbreviation": "BNO", "syst_nr": "1",
+                    "inaction_date": day, "is_active": True, "main_document": {}}
+        today = date(2026, 10, 5)
+        both = R.parse([{"name": "Zukunft", "edicts": [edict("2023-01-01"), edict("2027-01-01")]}])
+        governing, _ = R.for_municipality(both, "Zukunft", today=today)
+        self.assertEqual(governing.in_force, date(2023, 1, 1))
+        only_future = R.parse([{"name": "Neu", "edicts": [edict("2027-01-01")]}])
+        self.assertEqual(R.for_municipality(only_future, "Neu", today=today), (None, ""))
+
+    def test_a_municipality_gets_its_own_regulations_and_nobody_elses(self):
+        """Block E lists one municipality's regulations, out of a canton-wide
+        feed."""
+        towns = TOWNS + [{"name": "Möhlin-Nord", "edicts": [
+            {"title": "Bau- und Nutzungsordnung", "abbreviation": "BNO", "syst_nr": "1",
+             "inaction_date": "2025-01-01", "is_active": True, "main_document": {}}]}]
+        mine = R.in_municipality(R.parse(towns), "Möhlin")
+        self.assertEqual([(e.municipality, e.in_force.year) for e in mine], [("Möhlin", 2023)])
+        self.assertEqual(R.in_municipality(R.parse(towns), "Nirgendwo"), [])
+
 
 
 class NewsCacheFreshnessTest(unittest.TestCase):

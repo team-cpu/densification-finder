@@ -576,6 +576,19 @@ def require_write(db: str | None = None) -> dict | None:
     return None
 
 
+def may_write(db: str | None = None) -> bool:
+    """Whether to offer a write at all. Never stops the page: the write itself
+    checks again (`require_write`, then `check_transaction` under its lock)."""
+    if not enabled():
+        return True
+    try:
+        member = current(db)
+        _require_second_factor(member, mfa_required(db or paths.DB))
+    except AuthError:
+        return False
+    return member["role"] in ("Inhaber", "Bearbeiter")
+
+
 def check_transaction(con: sqlite3.Connection, actor: dict | None, *, owner: bool = False) -> None:
     """Recheck local revocation/role under the same lock as the domain write."""
     if actor is None:

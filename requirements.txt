@@ -8,3 +8,8 @@ streamlit==1.61.1
 # The parcel data sheet. Pure Python, no system libraries, so the slim image
 # stays slim.
 reportlab==5.0.0
+# Not imported here: streamlit brings it in through requests. 2.8.0 fixes
+# PYSEC-2026-4175/-4176/-4177 (HTTPS-proxy TLS settings ignored, endless loop
+# and unbounded buffering in chunked responses). A fresh resolution picked it
+# on 2026-10-06; the floor keeps a rebuild from picking anything older.
+urllib3>=2.8.0
