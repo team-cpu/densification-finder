@@ -200,3 +200,42 @@ Pre-production correction, applied before any push/deploy of release commit
   card-vs-PDF contradiction in a regulated statement (which edition of the
   BNO governs; whether a checked Auflage runs today). No deployment, push or
   live provider call is performed or claimed by this addendum.
+
+## 9. Addendum — base-image pip/setuptools upgrade, 7 October 2026
+
+Post-deploy audit of the running production image (evidence:
+`pip-audit-production-20261007.json`) found the base-image tooling vulnerable —
+pip 24.0 (GHSA-qwm4-qh6w-59xr, fixed >=26.2.0) and setuptools 79.0.1
+(GHSA-h35f-9h28-mq5c, fixed >=83.0.0) — while all 40 application
+dependencies are clean.
+
+- Correction (`Dockerfile` only): the single dependency `RUN` step now first
+  runs `python -m pip install --no-cache-dir --upgrade "pip>=26.2"
+  "setuptools>=83.0.0"`, then installs `requirements.txt` via
+  `python -m pip install --no-cache-dir -r` (joined with `&&`). Base image,
+  COPY ordering, CMD, volume path, environment, auth and feed-off behavior
+  are untouched; no new runtime dependency and no package-index change.
+  Rationale: upgrading the vulnerable build tooling before requirements
+  installation removes the findings for these two tools at the layer that
+  introduced them, without altering any application code or configuration.
+- Verification (Docker daemon available locally; image built from this
+  checkout, tagged `scope-image-security-check:20261007`):
+  - `docker build` exit 0. Evidence: `image-build-20261007.log`.
+  - In-image: pip 26.2.1, setuptools 84.0.0; `pip check` exit 0 (no broken
+    requirements); import smoke (`streamlit, pandas, shapely, reportlab,
+    requests, numpy, altair`) exit 0. Evidence: `image-pipcheck-smoke-20261007.log`.
+  - In-image audit `pip_audit --no-deps --disable-pip` over the full
+    `pip freeze --all` list (43 entries, incl. pip/setuptools): exit 0, no
+    known vulnerabilities; pip 26.2.1 and setuptools 84.0.0 each report
+    `vulns: []`. Evidence: `image-pip-audit-20261007.log`.
+  - Official PyPI JSON metadata cross-check (isolated temp venv, since
+    removed): latest pip 26.2.1 and setuptools 84.0.0 both declare
+    `requires_python >=3.10`, compatible with the `python:3.11-slim` base;
+    both satisfy the advisory fix floors.
+  - `git diff --check` exit 0; the working diff touches exactly
+    `Dockerfile` and this document.
+- Limitations: this verifies a locally built image from this checkout, not
+  the Railway-deployed image; the lead verifies the deployed image
+  separately. No commit, push, deploy, production/config/auth/schema/data
+  change, or provider fetch was performed; the shared local `.venv` was not
+  modified.
