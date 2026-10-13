@@ -358,6 +358,139 @@ def test_only_successful_municipal_search_marks_municipality_as_queried(tmp_path
     assert not P.state_for("Seon", path).municipality_queried
 
 
+# --- SCOPE_PLANNING_AUTO_MUNICIPAL: automatic municipal publications ---
+
+@pytest.mark.parametrize("value,expected", [("1", True), ("", False), ("0", False), ("true", False), (" 1", False), ("1 ", False)])
+def test_auto_env_flag_only_the_exact_value_one_is_on(monkeypatch, value, expected):
+    monkeypatch.setenv(P.AUTO_ENV, value)
+    assert P._auto_enabled() is expected
+
+
+def test_auto_env_unset_is_off(monkeypatch):
+    monkeypatch.delenv(P.AUTO_ENV, raising=False)
+    assert P._auto_enabled() is False
+
+
+def test_auto_off_leaves_pending_municipal_item_unshown_explicit_and_env(tmp_path, monkeypatch):
+    monkeypatch.delenv(P.AUTO_ENV, raising=False)
+    path = seed(tmp_path, [amts_snapshot()])
+    assert not P.state_for("Seon", path, today=NOW.date()).items  # env unset
+    assert not P.state_for("Seon", path, today=NOW.date(), auto=False).items  # explicit off
+    monkeypatch.setenv(P.AUTO_ENV, "1")
+    assert not P.state_for("Seon", path, today=NOW.date(), auto=False).items  # explicit off beats env
+
+
+def test_auto_on_shows_pending_municipal_member_with_no_proof_and_not_absent(tmp_path):
+    path = seed(tmp_path, [amts_snapshot()])
+    view = P.state_for("Seon", path, today=NOW.date(), auto=True)
+    assert len(view.items) == 1
+    item = view.items[0]
+    assert item.auto is True and item.verified is None and item.coverage is None and item.absent is False
+    assert view.pending == 0 and view.changed == 0
+
+
+def test_auto_on_does_not_show_canton_approval_or_consultation_only_items(tmp_path):
+    municipal_empty = amts_snapshot(count=0)
+    approvals = amts_snapshot(kind="canton-approvals", count=1)
+    canton = canton_snapshot(count=1)
+    path = seed(tmp_path, [municipal_empty, approvals, canton])
+    view = P.state_for("Seon", path, today=NOW.date(), auto=True)
+    assert not view.items
+    assert view.pending == 2  # Both still queued for manual review.
+
+
+def test_auto_on_excludes_items_from_another_municipalitys_own_search(tmp_path):
+    foreign = amts_snapshot(name="Baden")
+    own_empty = amts_snapshot(count=0)
+    path = seed(tmp_path, [foreign, own_empty])
+    assert not P.state_for("Seon", path, today=NOW.date(), auto=True).items
+    assert len(P.state_for("Baden", path, today=NOW.date(), auto=True).items) == 1
+
+
+def test_auto_on_hides_excluded_and_held_items(tmp_path):
+    snapshot = amts_snapshot(count=1)
+    candidate = snapshot["candidates"][0]
+    for action in ("exclude", "hold"):
+        sub = tmp_path / action
+        sub.mkdir()
+        path = seed(sub, [snapshot])
+        P.apply_reviews(path, [review(candidate, action=action, stamp=NOW + timedelta(minutes=1))], now=NOW + timedelta(minutes=1))
+        assert not P.state_for("Seon", path, today=NOW.date(), auto=True).items
+
+
+def test_auto_on_stale_exclude_stays_hidden_stale_include_is_shown(tmp_path):
+    excluded_path = tmp_path / "excluded"
+    excluded_path.mkdir()
+    snapshot = amts_snapshot(count=1)
+    path = seed(excluded_path, [snapshot])
+    candidate = snapshot["candidates"][0]
+    P.apply_reviews(path, [review(candidate, action="exclude", stamp=NOW + timedelta(minutes=1))], now=NOW + timedelta(minutes=1))
+    corrected = amts_snapshot(stamp=NOW + timedelta(hours=1))
+    corrected["candidates"][0]["title"] += "; Korrektur"
+    P.import_snapshots(path, [corrected], now=NOW + timedelta(hours=1))
+    assert P.review_state(next(iter(P.validate_store(P._read(path))["items"].values()))) == "changed"
+    assert not P.state_for("Seon", path, today=NOW.date(), auto=True).items
+
+    included_path = tmp_path / "included"
+    included_path.mkdir()
+    snapshot = amts_snapshot(count=1)
+    path = seed(included_path, [snapshot])
+    candidate = snapshot["candidates"][0]
+    P.apply_reviews(path, [review(candidate, municipalities=["Baden"], stamp=NOW + timedelta(minutes=1))], now=NOW + timedelta(minutes=1))
+    corrected = amts_snapshot(stamp=NOW + timedelta(hours=1))
+    corrected["candidates"][0]["title"] += "; Korrektur"
+    P.import_snapshots(path, [corrected], now=NOW + timedelta(hours=1))
+    view = P.state_for("Seon", path, today=NOW.date(), auto=True)
+    assert len(view.items) == 1 and view.items[0].auto is True
+
+
+def test_auto_on_included_scoped_item_shows_once_without_auto_flag_and_keeps_proof(tmp_path):
+    path, candidate = included(tmp_path)
+    P.apply_verifications(path, [legal(candidate)], now=NOW + timedelta(minutes=2))
+    view = P.state_for("Seon", path, today=NOW.date(), auto=True)
+    assert len(view.items) == 1
+    item = view.items[0]
+    assert item.auto is False and isinstance(item.verified, PL.Verified)
+
+
+def test_auto_on_item_dropped_from_latest_snapshot_is_not_shown(tmp_path):
+    original = amts_snapshot(count=1)
+    path = seed(tmp_path, [original])
+    P.import_snapshots(path, [amts_snapshot(count=0, stamp=NOW + timedelta(hours=1))], now=NOW + timedelta(hours=1))
+    assert not P.state_for("Seon", path, today=NOW.date(), auto=True).items
+
+
+def test_auto_on_municipal_selection_with_only_failed_attempts_shows_nothing(tmp_path):
+    approvals = amts_snapshot(kind="canton-approvals", count=1)
+    path = seed(tmp_path, [approvals])
+    municipal_selection = {"provider": "amtsblatt.ag.ch", "kind": "municipal", "municipality": "Seon"}
+    P._transaction(path, lambda store: P._merge(store, [], [(municipal_selection, "Source timed out")], C._now(NOW + timedelta(minutes=1))))
+    stored = P.validate_store(P._read(path))
+    key = P.selection_key(municipal_selection)
+    assert stored["selections"][key]["last_success_at"] is None
+    assert not P.state_for("Seon", path, today=NOW.date(), auto=True).items
+
+
+def test_auto_on_authorities_gate_blocks_auto_even_for_a_known_municipality(tmp_path, monkeypatch):
+    path = seed(tmp_path, [amts_snapshot(count=1)])
+    assert P._office_search("Seon")
+    assert len(P.state_for("Seon", path, today=NOW.date(), auto=True).items) == 1
+    monkeypatch.setattr(P, "_office_search", lambda name: False)
+    view = P.state_for("Seon", path, today=NOW.date(), auto=True)
+    assert view.status == "ok" and not view.items
+
+
+def test_auto_shown_items_excluded_from_pending_and_changed_counts(tmp_path):
+    municipal = amts_snapshot(count=1)
+    approvals = amts_snapshot(kind="canton-approvals", count=2)
+    path = seed(tmp_path, [municipal, approvals])
+    view_auto = P.state_for("Seon", path, today=NOW.date(), auto=True)
+    view_manual = P.state_for("Seon", path, today=NOW.date(), auto=False)
+    assert len(view_auto.items) == 1 and view_auto.items[0].auto is True
+    assert not view_manual.items
+    assert view_manual.pending == view_auto.pending + 1
+
+
 def test_publication_version_label_is_reviewed_metadata_and_invalidates_old_review(tmp_path):
     snapshot = amts_snapshot()
     path = seed(tmp_path, [snapshot])
@@ -421,6 +554,16 @@ def legal(candidate, *, municipality="Seon", canton_wide=False, stage="auflage",
              "method": "Exact source item and municipal section checked."}
     proof.update(dates or {"auflage_from": "2026-10-01", "auflage_to": "2026-10-10"})
     return {"source_id": candidate["source_id"], "fingerprint": P.fingerprint(candidate), **scope, "verified": proof}
+
+
+def coverage(candidate, *, municipality="Seon", kind="gebiet", **extra):
+    proof = {"kind": kind, "source": candidate["url"], "checked_on": "2026-10-06",
+             "method": "Exact source item and municipal section checked."}
+    if kind == "gebiet":
+        proof.setdefault("area", "Heidegrabe")
+    proof.update(extra)
+    return {"source_id": candidate["source_id"], "fingerprint": P.fingerprint(candidate),
+            "municipality": municipality, "coverage": proof}
 
 
 def included(tmp_path, *, canton=False, municipalities=None, canton_wide=False):
@@ -704,3 +847,122 @@ def test_legal_verification_cli_uses_same_item_pdf_and_swiss_day(tmp_path, monke
     assert "candidates" in capsys.readouterr().out
     assert P.state_for("Seon", path).items[0].verified.source.endswith("/pdf/")
     assert P.swiss_today(datetime(2026, 7, 1, 22, 30, tzinfo=timezone.utc)) == date(2026, 7, 2)
+
+
+def test_coverage_proof_is_explicit_and_municipality_specific(tmp_path):
+    path, candidate = included(tmp_path, municipalities=["Seon", "Baden"])
+    assert P.state_for("Seon", path).items[0].coverage is None  # Existing schema v1 remains valid.
+    P.apply_coverage(path, [coverage(candidate)], now=NOW + timedelta(minutes=2))
+    proof = P.state_for("Seon", path, today=NOW.date()).items[0].coverage
+    assert isinstance(proof, PL.Coverage) and proof.kind == "gebiet" and proof.area == "Heidegrabe"
+    assert P.state_for("Baden", path, today=NOW.date()).items[0].coverage is None
+    assert not P.state_for("Menziken", path).items
+
+
+def test_coverage_refuses_municipality_outside_included_scope(tmp_path):
+    path, candidate = included(tmp_path, municipalities=["Seon"])
+    with pytest.raises(C.CollectionError, match="territorial scope"):
+        P.apply_coverage(path, [coverage(candidate, municipality="Baden")], now=NOW + timedelta(minutes=2))
+
+
+def test_coverage_refuses_stale_fingerprint(tmp_path):
+    path, candidate = included(tmp_path)
+    batch = coverage(candidate)
+    batch["fingerprint"] = "a" * 64
+    with pytest.raises(C.CollectionError, match="Stale"):
+        P.apply_coverage(path, [batch], now=NOW + timedelta(minutes=2))
+
+
+def test_coverage_refuses_evidence_url_of_another_publication(tmp_path):
+    path, candidate = included(tmp_path)
+    batch = coverage(candidate)
+    batch["coverage"]["source"] = "https://amtsblatt.ag.ch/ekab/00.999.999/pdf/"
+    with pytest.raises(C.CollectionError):
+        P.apply_coverage(path, [batch], now=NOW + timedelta(minutes=2))
+
+
+def test_coverage_refuses_canton_wide_or_unknown_municipality(tmp_path):
+    path, candidate = included(tmp_path)
+    for bad_municipality in ("*", "Unknown"):
+        with pytest.raises(C.CollectionError):
+            P.apply_coverage(path, [coverage(candidate, municipality=bad_municipality)], now=NOW + timedelta(minutes=2))
+    batch = coverage(candidate)
+    batch["canton_wide"] = True
+    with pytest.raises(C.CollectionError):
+        P.apply_coverage(path, [batch], now=NOW + timedelta(minutes=2))
+
+
+def test_coverage_refuses_repeated_item_territory_in_one_batch(tmp_path):
+    path, candidate = included(tmp_path)
+    batch = coverage(candidate)
+    with pytest.raises(C.CollectionError, match="Repeated"):
+        P.apply_coverage(path, [batch, dict(batch)], now=NOW + timedelta(minutes=2))
+
+
+def test_coverage_out_of_order_is_refused(tmp_path):
+    path, candidate = included(tmp_path)
+    P.apply_coverage(path, [coverage(candidate, checked_on="2026-10-07")], now=NOW + timedelta(days=1))
+    with pytest.raises(C.CollectionError, match="Out-of-order"):
+        P.apply_coverage(path, [coverage(candidate, checked_on="2026-10-06")], now=NOW + timedelta(days=2))
+
+
+def test_coverage_invalidated_by_metadata_change_even_after_fingerprint_reverts(tmp_path):
+    path, candidate = included(tmp_path)
+    P.apply_coverage(path, [coverage(candidate)], now=NOW + timedelta(minutes=2))
+    corrected = amts_snapshot(stamp=NOW + timedelta(hours=1))
+    corrected["candidates"][0]["title"] += " Korrektur"
+    P.import_snapshots(path, [corrected], now=NOW + timedelta(hours=1))
+    reverted = amts_snapshot(stamp=NOW + timedelta(hours=2))
+    P.import_snapshots(path, [reverted], now=NOW + timedelta(hours=2))
+    P.apply_reviews(path, [review(candidate, municipalities=["Seon"], stamp=NOW + timedelta(hours=2, minutes=1))],
+                    now=NOW + timedelta(hours=2, minutes=1))
+    assert P.state_for("Seon", path).items[0].coverage is None
+    P.apply_coverage(path, [coverage(candidate)], now=NOW + timedelta(hours=2, minutes=2))
+    assert P.state_for("Seon", path).items[0].coverage is not None
+
+
+def test_coverage_review_change_removing_municipality_invalidates(tmp_path):
+    path, candidate = included(tmp_path, municipalities=["Seon", "Baden"])
+    P.apply_coverage(path, [coverage(candidate), coverage(candidate, municipality="Baden")], now=NOW + timedelta(minutes=2))
+    P.apply_reviews(path, [review(candidate, municipalities=["Seon"], stamp=NOW + timedelta(minutes=3))], now=NOW + timedelta(minutes=3))
+    # Removed, then re-included: the proof taken while Baden was out of scope
+    # stays invalidated — it is not revived by scope coming back.
+    P.apply_reviews(path, [review(candidate, municipalities=["Seon", "Baden"], stamp=NOW + timedelta(days=10))],
+                    now=NOW + timedelta(days=10))
+    assert P.state_for("Baden", path).items[0].coverage is None
+    assert P.state_for("Seon", path, today=date(2026, 10, 16)).items[0].coverage is not None
+
+
+def test_validate_store_rejects_a_noncanonical_stored_coverage_municipality(tmp_path):
+    path, candidate = included(tmp_path)
+    P.apply_coverage(path, [coverage(candidate)], now=NOW + timedelta(minutes=2))
+    store = json.loads(path.read_text())
+    item = next(iter(store["items"].values()))
+    entry = item["coverage"].pop("Seon")
+    item["coverage"]["seon"] = entry
+    with pytest.raises(C.CollectionError, match="Noncanonical coverage review municipality"):
+        P.validate_store(store)
+    # An invalidated entry skips the territory check, so only the canonical
+    # name check stands between it and the store.
+    entry["invalidated_at"] = store["updated_at"]
+    with pytest.raises(C.CollectionError, match="Noncanonical coverage review municipality"):
+        P.validate_store(store)
+
+
+def test_old_preview_store_without_coverage_collection_still_validates(tmp_path):
+    path, candidate = included(tmp_path)
+    P.apply_verifications(path, [legal(candidate)], now=NOW + timedelta(minutes=2))
+    store = P.validate_store(P._read(path))
+    assert all("coverage" not in item for item in store["items"].values())
+
+
+def test_coverage_verification_cli_uses_same_item_pdf_and_swiss_day(tmp_path, monkeypatch, capsys):
+    path, candidate = included(tmp_path)
+    monkeypatch.setattr(P, "_time", lambda now=None: C._now(NOW + timedelta(minutes=2)))
+    batch = coverage(candidate)
+    batch["coverage"]["source"] = candidate["url"].replace("/publikation/", "/pdf/")
+    source = tmp_path / "coverage.json"
+    source.write_text(json.dumps([batch]))
+    assert P.main(["coverage", str(path), str(source)]) == 0
+    assert "candidates" in capsys.readouterr().out
+    assert P.state_for("Seon", path).items[0].coverage.source.endswith("/pdf/")

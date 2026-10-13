@@ -562,16 +562,20 @@ def _status_badge(status):
             f'{escape(PL.STATUS_LABELS[status])}</span>')
 
 
-def _regulation_row(date_text, title, details, status, href, date_kind="", badge=None, source_link=None):
+def _regulation_row(date_text, title, details, status, href, date_kind="", badge=None, source_link=None,
+                    scope_tag=""):
     """Date, title with what the sources say about it, status badge, arrow.
     `details` are HTML fragments, each already escaped. `date_kind` says
     which date the row is dated by: the notice's publication or the
-    regulation's entry into force — never one for the other."""
+    regulation's entry into force — never one for the other. `scope_tag`
+    shown only when a person checked the publication's Geltungsbereich —
+    never read from the title."""
     kind = f'<span class="detail-regulation-date-kind">{escape(date_kind)}</span>' if date_kind else ""
+    tag = f'<span class="detail-regulation-scope">{escape(scope_tag)}</span>' if scope_tag else ""
     return (
         '<div class="detail-regulation-row">'
         f'<span class="detail-regulation-date">{escape(date_text)}{kind}</span>'
-        f'<div><div class="detail-reference-title">{escape(title)}</div>'
+        f'<div><div class="detail-reference-title">{escape(title)}{tag}</div>'
         f'<div class="detail-reference-detail">{" · ".join(details)}</div></div>'
         f'{_status_badge(status) if badge is None else badge}'
         f'<div class="detail-regulation-arrow">{_open_link(href) if source_link is None else source_link}</div></div>'
@@ -613,12 +617,17 @@ def _publication_row(pub, today):
         href = _safe_href(pub.verified.source)
         details.append(escape(note) + (f' · <a href="{href}" target="_blank" rel="noopener noreferrer">'
                                        'Nachweis ↗</a>' if href else ""))
+    tag, scope_note = PL.coverage_tag(pub.coverage, today)
+    if scope_note:
+        href = _safe_href(pub.coverage.source)
+        details.append(escape(scope_note) + (f' · <a href="{href}" target="_blank" rel="noopener noreferrer">'
+                                             'Nachweis ↗</a>' if href else ""))
     badge = None if status else (
         f'<span class="detail-regulation-status detail-regulation-status--step" '
         f'title="{escape(_STEP_NOTE)}">{_PUBLICATION}</span>')
     return (pub.published_on, _regulation_row(
         f"{pub.published_on:%d.%m.%Y}", _publication_title(pub), details, status or "", pub.url,
-        "publiziert", badge=badge))
+        "publiziert", badge=badge, scope_tag=tag))
 
 
 def _store_state(planning, today):
@@ -663,7 +672,12 @@ def _printed_publication(pub, today):
     if checked and pub.verified and _printed_link(pub.verified.source):
         checked += f" · Nachweis {_printed_link(pub.verified.source)}"
     label = PL.STATUS_LABELS[status] if status else _PUBLICATION
-    return " — ".join(filter(None, [f"{pub.published_on:%d.%m.%Y} {label}: {title}", source, checked]))
+    title_line = f"{pub.published_on:%d.%m.%Y} {label}: {title}"
+    tag, _ = PL.coverage_tag(pub.coverage, today)
+    if tag:
+        tag = re.sub(r"[\[\]*]", "", tag)
+        title_line += f" — {tag} (geprüft {pub.coverage.checked_on:%d.%m.%Y})"
+    return " — ".join(filter(None, [title_line, source, checked]))
 
 
 def _edict_row(edict, approval, today):
@@ -902,7 +916,18 @@ def _regulation_card_html(row, edicts, own, own_note, *, loading=False, error=""
             meta += " · Verfahren nicht lesbar"
         elif not preview_enabled:
             meta += " · Verfahren: Übergangslösung"
-        if preview_enabled:
+        if preview_enabled and preview.auto:
+            count = len(preview_items)
+            # "0 Publikationen" for a Gemeinde nobody queried would read as
+            # "nothing is changing".
+            meta += (" · Amtsblatt-Abfrage nicht lesbar" if preview.status != "ok" else
+                     " · Verfahren: Übergangslösung" if not preview.municipality_queried else
+                     f" · {count} {'Publikation' if count == 1 else 'Publikationen'} im Amtsblatt")
+            if any(source["error"] for source in preview.sources):
+                meta += " · Amtsblatt-Abfrage fehlgeschlagen"
+            if any(source["stale"] for source in preview.sources):
+                meta += " · Amtsblatt-Stand veraltet"
+        elif preview_enabled:
             meta += (f" · lokale Vorschau: {len(preview_items)} ausgewählte Publikationen" if preview.status == "ok"
                      else " · lokale Vorschau nicht lesbar")
             if any(source["error"] for source in preview.sources):
@@ -1042,19 +1067,37 @@ def _publication_card_rows(planning, place, local, in_force, today, loading, err
 
 
 def _preview_card_rows(preview, items, place, today=None):
-    """Local review selections, with no legal-stage inference or PDF promotion."""
+    """Local review selections, with no legal-stage inference or PDF promotion.
+
+    `preview.auto` switches the group heading, intro note, per-item rows and
+    empty-case message to the automatic-municipal-publications wording; a
+    reviewed, scoped item still renders through the original branch even in
+    auto mode (`item.auto` distinguishes the two within one items list)."""
     if preview.status == "off":
         return []
     today = today or PP.swiss_today()
-    rows = ['<div class="detail-regulation-group">Lokale Vorschau · ausgewählte Publikationen</div>']
-    rows.append(_note("Nach Relevanz und Bezug zur Gemeinde ausgewählt. Diese Suchauswahl ist keine "
-                      "vollständige Rechtsgeschichte. Einen bestätigten heutigen Verfahrensstand zeigt sie "
-                      "nur mit einem ausdrücklich geprüften, für diese Gemeinde und diesen Tag gültigen Quellenbeleg. "
-                      "Ob ein Gebietsplan diese Parzelle betrifft, muss am Original geprüft werden."))
+    escaped_place = escape(place)
+    if preview.auto:
+        rows = [f'<div class="detail-regulation-group">Gemeinde {escaped_place} · Publikationen im Amtsblatt</div>']
+        if preview.municipality_queried or preview.status != "ok":
+            rows.append(_note("Publikationen der Gemeinde in der Amtsblatt-Rubrik «Bau- und Nutzungsordnung», "
+                              "automatisch übernommen: Titel und Datum wie publiziert, mit Link zum Original. "
+                              "Kein geprüfter Verfahrensstand; ob ein Gebietsplan diese Parzelle betrifft, zeigt "
+                              "das Original."))
+    else:
+        rows = ['<div class="detail-regulation-group">Lokale Vorschau · ausgewählte Publikationen</div>']
+        rows.append(_note("Nach Relevanz und Bezug zur Gemeinde ausgewählt. Diese Suchauswahl ist keine "
+                          "vollständige Rechtsgeschichte. Einen bestätigten heutigen Verfahrensstand zeigt sie "
+                          "nur mit einem ausdrücklich geprüften, für diese Gemeinde und diesen Tag gültigen Quellenbeleg. "
+                          "Ob ein Gebietsplan diese Parzelle betrifft, muss am Original geprüft werden."))
     if preview.status == "error":
-        return rows + [_note(escape(preview.error), error=True)]
-    if not preview.municipality_queried:
-        rows.append(_note(f"Für {escape(place)} wurde die Gemeindesuche noch nicht erfolgreich abgefragt. "
+        if not preview.auto:
+            rows.append(_note(escape(preview.error), error=True))
+        rows.append(_note("Amtsblatt-Abfrage nicht lesbar — direkt im Amtsblatt prüfen:"))
+        rows.append(_amtsblatt_links(place))
+        return rows
+    if not preview.municipality_queried and not preview.auto:
+        rows.append(_note(f"Für {escaped_place} wurde die Gemeindesuche noch nicht erfolgreich abgefragt. "
                           "Allfällige kantonale Publikationen sind separat ausgewählt."))
     for source in preview.sources:
         selection = source["selection"]
@@ -1071,12 +1114,26 @@ def _preview_card_rows(preview, items, place, today=None):
         if source["error"]:
             text += f" Letzte Abfrage am {source['last_attempt_at']:%d.%m.%Y %H:%M} UTC fehlgeschlagen; die letzten gültigen Daten bleiben erhalten."
         rows.append(_note(escape(text), error=bool(source["error"] or source["stale"])))
-    if preview.pending or preview.changed:
+    if (preview.pending or preview.changed) and not preview.auto:
         rows.append(_note(escape(f"Noch zu prüfen: {preview.pending} Publikationen. "
                                  f"Nach Quellenänderung erneut zu prüfen: {preview.changed}. "
                                  "Diese Einträge werden nicht als relevante Publikationen gezeigt.")))
     for item in items:
         candidate = item.candidate
+        if item.auto:
+            published = date.fromisoformat(candidate["published_on"])
+            details = [escape(f"Amtsblatt · publiziert {published:%d.%m.%Y}"), escape(candidate["authority"])]
+            href = _safe_href(PP.source_href(candidate))
+            source_label = f"Amtsblatt-Publikation öffnen: {candidate['title']}"
+            link = (f'<a class="detail-regulation-open" href="{href}" target="_blank" rel="noopener noreferrer" '
+                    f'title="{escape(source_label, quote=True)}" aria-label="{escape(source_label, quote=True)}">'
+                    '↗</a>') if href else ""
+            badge = ('<span class="detail-regulation-status detail-regulation-status--step" '
+                     'title="Automatisch übernommen — Titel und Datum wie publiziert, kein geprüfter '
+                     'Verfahrensstand">Publikation</span>')
+            rows.append(_regulation_row(f"{published:%d.%m.%Y}", candidate["title"], details, "", "", "publiziert",
+                                        badge=badge, source_link=link))
+            continue
         canton = candidate["source_id"]["namespace"] == PP.NS_CANTON
         published = datetime.fromisoformat(candidate["publication_date"].replace("Z", "+00:00")).date() if canton else date.fromisoformat(candidate["published_on"])
         label = "ag.ch · Anhörung" if canton else "Amtsblatt"
@@ -1108,10 +1165,40 @@ def _preview_card_rows(preview, items, place, today=None):
                     details.append(f'<a href="{proof_href}" target="_blank" rel="noopener noreferrer">Geprüfter Quellenbeleg ↗</a>')
             except (PP.C.CollectionError, AttributeError, TypeError, ValueError):
                 pass  # An unsupported direct-view proof earns no legal badge.
-        rows.append(_regulation_row(f"{published:%d.%m.%Y}", candidate["title"], details, "", "", "publiziert", badge=badge, source_link=link))
+        tag = ""
+        if item.coverage is not None:
+            try:
+                proof = item.coverage
+                raw = {"kind": proof.kind, "source": proof.source,
+                       "checked_on": proof.checked_on.isoformat(), "method": proof.method}
+                if proof.area:
+                    raw["area"] = proof.area
+                PP._coverage_proof(raw, candidate)
+                tag, scope_note = PL.coverage_tag(proof, today)
+                if scope_note:
+                    scope_href = _safe_href(proof.source)
+                    details.append(escape(scope_note) + (f' · <a href="{scope_href}" target="_blank" '
+                                                          'rel="noopener noreferrer">Nachweis ↗</a>' if scope_href else ""))
+            except (PP.C.CollectionError, AttributeError, TypeError, ValueError):
+                tag = ""  # An unsupported direct-view proof earns no scope tag.
+        rows.append(_regulation_row(f"{published:%d.%m.%Y}", candidate["title"], details, "", "", "publiziert",
+                                    badge=badge, source_link=link, scope_tag=tag))
     if not items:
-        rows.append(_note("Keine freigegebenen Publikationen für diese Gemeinde in der lokalen Vorschau. "
-                          "Ungeprüfte und zurückgestellte Treffer bleiben in der Prüfung; dies bedeutet nicht, dass keine Änderungen geplant sind."))
+        if preview.auto:
+            if preview.municipality_queried:
+                success = next((source["last_success_at"] for source in preview.sources
+                                if source["selection"].get("provider") == "amtsblatt.ag.ch"
+                                and source["selection"].get("kind") == "municipal"), None)
+                if success:
+                    rows.append(_note(f"Keine Publikationen von {escaped_place} in der Amtsblatt-Rubrik "
+                                      f"«Bau- und Nutzungsordnung» (zuletzt abgefragt {success:%d.%m.%Y})."))
+        else:
+            rows.append(_note("Keine freigegebenen Publikationen für diese Gemeinde in der lokalen Vorschau. "
+                              "Ungeprüfte und zurückgestellte Treffer bleiben in der Prüfung; dies bedeutet nicht, dass keine Änderungen geplant sind."))
+    if not preview.municipality_queried:
+        rows.append(_note(f"Für {escaped_place} noch nicht automatisch abgefragt. Übergangslösung: direkt im "
+                          "Amtsblatt prüfen:"))
+        rows.append(_amtsblatt_links(place))
     return rows
 
 
@@ -1717,6 +1804,11 @@ PAGE_CSS = """
   .detail-regulation-date-kind { display:block; font-family:inherit; font-size:10px;
       letter-spacing:.02em; color:#b4b4be; }
   .detail-regulation-row .detail-reference-detail a { color:inherit; }
+  /* A checked Geltungsbereich — never a stage, so a neutral outlined pill of
+     its own, not one of Philipp's status colours below. */
+  .detail-regulation-scope { margin-left:6px; padding:0 6px; border:1px solid #d8d8de;
+      border-radius:10px; font-size:10.5px; color:#55555f; display:inline-block;
+      max-width:100%; overflow-wrap:anywhere; vertical-align:1px; }
   /* Philipp's status colours (2026-10-05): a draft amber, an approval yellow,
      what is in force grey; a decision awaiting approval and anything
      unverified stay uncoloured. */

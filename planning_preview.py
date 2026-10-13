@@ -24,6 +24,7 @@ import planning_collect as C
 import planning as PL
 
 ENV = "SCOPE_PLANNING_PREVIEW"
+AUTO_ENV = "SCOPE_PLANNING_AUTO_MUNICIPAL"
 SCHEMA = "scope.planning-preview"
 VERSION = 1
 MAX_STORE_BYTES = 16 * 1024 * 1024
@@ -244,6 +245,26 @@ def _proof(raw, candidate):
     return normalized, verified
 
 
+def _coverage_proof(raw, candidate):
+    """Use the production Geltungsbereich verifier, with a stricter
+    same-source-item boundary."""
+    _keys(raw, {"kind", "source", "checked_on", "method"}, {"area"})
+    _require(isinstance(raw["checked_on"], str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw["checked_on"]),
+             "Malformed coverage verification date")
+    method = C._text(raw["method"], "coverage verification method")
+    if "area" in raw:
+        C._text(raw["area"], "coverage area")
+    _require(len(method) <= 500, "Coverage verification method must be short")
+    _evidence(raw["source"], candidate)
+    coverage, error = PL._coverage(raw)
+    _require(coverage is not None and not error, error or "Invalid coverage verification")
+    normalized = {"kind": coverage.kind, "source": coverage.source,
+                  "checked_on": coverage.checked_on.isoformat(), "method": method}
+    if coverage.area:
+        normalized["area"] = coverage.area
+    return normalized, coverage
+
+
 def _legal_scope(item, scope):
     if review_state(item) != "included":
         return False
@@ -252,9 +273,10 @@ def _legal_scope(item, scope):
 
 
 def _invalidate_legal(item, stamp, *, removed_only=False):
-    for scope, proof in item.get("legal", {}).items():
-        if not removed_only or not _legal_scope(item, scope):
-            proof["invalidated_at"] = stamp
+    for collection in ("legal", "coverage"):
+        for scope, proof in item.get(collection, {}).items():
+            if not removed_only or not _legal_scope(item, scope):
+                proof["invalidated_at"] = stamp
 
 
 def _legal_for(item, municipality, today):
@@ -264,6 +286,17 @@ def _legal_for(item, municipality, today):
             verified = _proof(entry["verified"], item["candidate"])[1]
             if verified.verified_on <= today:
                 return verified
+    return None
+
+
+def _coverage_for(item, municipality, today):
+    """Like `_legal_for`, but for a Geltungsbereich check — scoped to this
+    municipality only: a Geltungsbereich is never canton-wide."""
+    entry = item.get("coverage", {}).get(municipality)
+    if entry and "invalidated_at" not in entry and entry["fingerprint"] == item["fingerprint"] and _legal_scope(item, municipality):
+        coverage = _coverage_proof(entry["checked"], item["candidate"])[1]
+        if coverage.checked_on <= today:
+            return coverage
     return None
 
 
@@ -292,7 +325,8 @@ def validate_store(store):
                  and len(members) == len(set(members)) and all(k in items for k in members), "Source membership is invalid")
         _require(success is not None or (not members and bool(source["error"])), "Missing source success/error state")
     for key, item in items.items():
-        _keys(item, {"candidate", "fingerprint", "metadata_at", "last_seen_at", "seen_in", "audit"}, {"review", "review_invalidated_at", "legal"})
+        _keys(item, {"candidate", "fingerprint", "metadata_at", "last_seen_at", "seen_in", "audit"},
+              {"review", "review_invalidated_at", "legal", "coverage"})
         _require(validate_candidate(item["candidate"]) == key and fingerprint(item["candidate"]) == item["fingerprint"], "Item identity/fingerprint mismatch")
         _require(_stamp(item["metadata_at"]) <= _stamp(item["last_seen_at"]) <= updated, "Invalid item metadata dates")
         seen = item["seen_in"]
@@ -325,6 +359,20 @@ def validate_store(store):
             else:
                 _require(entry["fingerprint"] == item["fingerprint"] and _legal_scope(item, scope)
                          and verified.verified_on >= swiss_today(_stamp(item["metadata_at"])), "Legal proof is stale or outside reviewed territory")
+        coverage = item.get("coverage", {})
+        _require(isinstance(coverage, dict) and len(coverage) <= 201, "Invalid coverage review collection")
+        for scope, entry in coverage.items():
+            _require(_municipality(scope) == scope, "Noncanonical coverage review municipality")
+            _keys(entry, {"fingerprint", "checked"}, {"invalidated_at"})
+            _require(isinstance(entry["fingerprint"], str) and re.fullmatch(r"[0-9a-f]{64}", entry["fingerprint"]), "Invalid coverage fingerprint")
+            normalized, checked = _coverage_proof(entry["checked"], item["candidate"])
+            _require(normalized == entry["checked"] and checked.checked_on <= swiss_today(updated), "Noncanonical or future coverage review")
+            if "invalidated_at" in entry:
+                _require(checked.checked_on <= swiss_today(_stamp(entry["invalidated_at"]))
+                         and _stamp(entry["invalidated_at"]) <= updated, "Invalid coverage invalidation date")
+            else:
+                _require(entry["fingerprint"] == item["fingerprint"] and _legal_scope(item, scope)
+                         and checked.checked_on >= swiss_today(_stamp(item["metadata_at"])), "Coverage proof is stale or outside reviewed territory")
     for key, source in selections.items():
         _require(all(key in items[member]["seen_in"] for member in source["members"]), "Inconsistent source/item membership")
     return store
@@ -538,6 +586,40 @@ def apply_verifications(path, verifications, *, now=None):
     return _transaction(path, update)
 
 
+def apply_coverage(path, checks, *, now=None):
+    """Explicit source-checked Geltungsbereich, independently entered for
+    each reviewed municipality — never canton-wide: a Geltungsbereich names
+    an area or the Gemeinde it is in, not the canton."""
+    _require(isinstance(checks, list) and checks, "Coverage verification batch must be a nonempty list")
+    operation_at = _time(now)
+
+    def update(store):
+        seen = set()
+        for raw in checks:
+            _keys(raw, {"source_id", "fingerprint", "municipality", "coverage"})
+            key = identity(raw["source_id"])
+            _require(key in store["items"], "Unknown coverage verification item")
+            scope = _municipality(raw["municipality"])
+            _require((key, scope) not in seen, "Repeated coverage verification item/territory")
+            seen.add((key, scope))
+            item = store["items"][key]
+            _require(raw["fingerprint"] == item["fingerprint"], "Stale coverage metadata fingerprint")
+            _require(_legal_scope(item, scope), "Coverage proof requires current included territorial scope")
+            proof, coverage = _coverage_proof(raw["coverage"], item["candidate"])
+            _require(swiss_today(_stamp(item["metadata_at"])) <= coverage.checked_on <= swiss_today(_stamp(operation_at)),
+                     "Coverage verification date is outside the current metadata period")
+            previous = item.get("coverage", {}).get(scope)
+            if previous:
+                earliest = date.fromisoformat(previous["checked"]["checked_on"])
+                if "invalidated_at" in previous:
+                    earliest = max(earliest, swiss_today(_stamp(previous["invalidated_at"])))
+                _require(coverage.checked_on >= earliest, "Out-of-order coverage verification")
+            item.setdefault("coverage", {})[scope] = {"fingerprint": item["fingerprint"], "checked": proof}
+        store["updated_at"] = operation_at
+        return store
+    return _transaction(path, update)
+
+
 def review_state(item):
     review = item.get("review")
     if not review:
@@ -568,6 +650,8 @@ class PreviewItem:
     candidate: dict
     absent: bool = False
     verified: PL.Verified | None = None
+    coverage: PL.Coverage | None = None
+    auto: bool = False
 
 
 @dataclass
@@ -579,13 +663,35 @@ class View:
     pending: int = 0
     changed: int = 0
     municipality_queried: bool = False
+    auto: bool = False
 
 
 def _scope(review, municipality):
     return review.get("action") == "include" and (review.get("canton_wide") is True or municipality in review.get("municipalities", []))
 
 
-def state_for(municipality, path=None, *, today=None):
+def _auto_enabled():
+    """Fail closed: only the exact value "1" turns automatic municipal
+    publications on; any typo or unset variable is off."""
+    return os.environ.get(AUTO_ENV, "") == "1"
+
+
+def _office_search(municipality):
+    """Auto only behind the Gemeinde's own office filter — never the
+    name-search fallback, which also finds other Gemeinden's notices."""
+    return bool(A.authorities_for(municipality))
+
+
+def _auto_eligible(item, state):
+    """Rule: never reviewed, or the only review on file is now stale and was
+    itself an inclusion. A reviewer's exclude/hold — current or stale —
+    always wins, so neither state qualifies."""
+    if state == "pending":
+        return True
+    return state == "changed" and item["review"]["action"] == "include"
+
+
+def state_for(municipality, path=None, *, today=None, auto=None):
     path = (os.environ.get(ENV, "") if path is None else str(path or "")).strip()
     if not path:
         return View()
@@ -593,9 +699,10 @@ def state_for(municipality, path=None, *, today=None):
         municipality = _municipality(municipality)
         store = validate_store(_read(path))
         today = today or swiss_today()
+        auto_mode = _auto_enabled() if auto is None else bool(auto)
         source_keys = {key for key, source in store["selections"].items()
                        if source["selection"]["provider"] == "www.ag.ch" or source["selection"].get("municipality") == municipality}
-        view = View(status="ok")
+        view = View(status="ok", auto=auto_mode)
         for key in sorted(source_keys):
             source = store["selections"][key]
             selection = source["selection"]
@@ -606,16 +713,27 @@ def state_for(municipality, path=None, *, today=None):
                                  "last_attempt_at": _stamp(source["last_attempt_at"]), "error": source["error"],
                                  "stale": bool(success and (today - success.date()).days > STALE_DAYS),
                                  "empty": success is not None and not source["members"]})
+        municipal_key = selection_key({"provider": "amtsblatt.ag.ch", "kind": "municipal", "municipality": municipality})
+        municipal_source = store["selections"].get(municipal_key)
+        auto_ready = (auto_mode and _office_search(municipality) and municipal_source is not None
+                      and municipal_source["last_success_at"] is not None)
+        municipal_members = set(municipal_source["members"]) if municipal_source else set()
         for key, item in store["items"].items():
             state = review_state(item)
             queried = bool(source_keys.intersection(item["seen_in"]))
             scoped = _scope(item.get("review", {}), municipality)
-            view.pending += queried and state in ("pending", "held")
-            view.changed += state == "changed" and (queried or scoped)
+            auto_shown = auto_ready and key in municipal_members and _auto_eligible(item, state)
+            view.pending += queried and state in ("pending", "held") and not auto_shown
+            view.changed += state == "changed" and (queried or scoped) and not auto_shown
             if state == "included" and scoped:
                 absent = any(store["selections"][source]["last_success_at"] is not None
                              and key not in store["selections"][source]["members"] for source in item["seen_in"])
-                view.items.append(PreviewItem(copy.deepcopy(item["candidate"]), absent=absent, verified=_legal_for(item, municipality, today)))
+                view.items.append(PreviewItem(copy.deepcopy(item["candidate"]), absent=absent,
+                                              verified=_legal_for(item, municipality, today),
+                                              coverage=_coverage_for(item, municipality, today)))
+            elif auto_shown:
+                view.items.append(PreviewItem(copy.deepcopy(item["candidate"]), absent=False,
+                                              verified=None, coverage=None, auto=True))
         view.items.sort(key=lambda item: item.candidate.get("published_on", item.candidate.get("publication_date", "")), reverse=True)
         return view
     except (C.CollectionError, OSError, TypeError, ValueError):
@@ -642,6 +760,9 @@ def main(argv=None):
     verify = commands.add_parser("verify", help="Apply explicit source-proven legal verification per reviewed territory")
     verify.add_argument("store")
     verify.add_argument("batch")
+    coverage = commands.add_parser("coverage", help="Apply explicit source-checked Geltungsbereich per reviewed municipality")
+    coverage.add_argument("store")
+    coverage.add_argument("batch")
     args = parser.parse_args(argv)
     try:
         if args.command == "import":
@@ -650,6 +771,8 @@ def main(argv=None):
             store = apply_reviews(args.store, _read(args.batch))
         elif args.command == "verify":
             store = apply_verifications(args.store, _read(args.batch))
+        elif args.command == "coverage":
+            store = apply_coverage(args.store, _read(args.batch))
         elif args.command == "queue":
             print(json.dumps(queue(args.store, all_items=args.all_items), ensure_ascii=False, indent=2))
             return 0

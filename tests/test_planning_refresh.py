@@ -232,3 +232,148 @@ def test_scheduler_planning_config_errors_and_provider_bodies_are_not_silent_or_
         scheduler.planning_tick()
     err = capsys.readouterr().err
     assert "RuntimeError" in err and "SECRET" not in err
+
+
+def test_attempt_cap_limits_passes_per_day_then_resets_next_day(tmp_path):
+    env, calls = environment(tmp_path), []
+    fail = ("Seon", "municipal")  # A deterministic failure (e.g. search exceeds max-pages).
+    for attempt in range(R.MAX_ATTEMPTS_PER_DAY):
+        when = NOW + timedelta(hours=2 * attempt, seconds=1)
+        result = R.run_once(environ=env, collectors=collectors(calls, fail=fail), clock=ticking(when))
+        assert result["status"] == "partial" and result["sources_failed"] == 1
+    assert len(calls) == 5 * R.MAX_ATTEMPTS_PER_DAY
+    count = len(calls)
+    capped = NOW + timedelta(hours=2 * R.MAX_ATTEMPTS_PER_DAY, seconds=1)
+    assert R.run_once(environ=env, collectors=collectors(calls, fail=fail), clock=ticking(capped)) == {"status": "not-due"}
+    assert len(calls) == count  # Capped: no provider contacted.
+    tomorrow = R.run_once(environ=env, collectors=collectors(calls, fail=fail), clock=ticking(NOW + timedelta(days=1)))
+    assert tomorrow["status"] == "partial" and len(calls) == count + 5
+
+
+def test_successful_pass_remains_not_due_for_rest_of_day_well_under_the_cap(tmp_path):
+    env, calls = environment(tmp_path), []
+    assert R.run_once(environ=env, collectors=collectors(calls), clock=ticking())["status"] == "success"
+    assert R._read_state(R.configuration(env).state_path)["attempts"] == 1
+    assert R.run_once(environ=env, collectors=collectors(calls), clock=ticking(NOW + timedelta(hours=2))) == {"status": "not-due"}
+    assert len(calls) == 5  # Only the first, successful pass contacted providers.
+
+
+def test_config_change_after_cap_runs_again_same_day_with_a_fresh_count(tmp_path):
+    env, calls = environment(tmp_path), []
+    fail = ("Seon", "municipal")
+    for attempt in range(R.MAX_ATTEMPTS_PER_DAY):
+        when = NOW + timedelta(hours=2 * attempt, seconds=1)
+        assert R.run_once(environ=env, collectors=collectors(calls, fail=fail), clock=ticking(when))["status"] == "partial"
+    capped = NOW + timedelta(hours=2 * R.MAX_ATTEMPTS_PER_DAY, seconds=1)
+    assert R.run_once(environ=env, collectors=collectors(calls, fail=fail), clock=ticking(capped)) == {"status": "not-due"}
+    changed = environment(tmp_path, **{R.PREFIX + "MAX_PAGES": "4"})  # Any config change hashes differently.
+    after = capped + timedelta(hours=2)  # Clear any cooldown left over from the capped config's last claim.
+    result = R.run_once(environ=changed, collectors=collectors(calls, fail=fail), clock=ticking(after))
+    assert result["status"] == "partial"
+    assert R._read_state(R.configuration(changed).state_path)["attempts"] == 1
+
+
+def test_crash_after_claim_counts_toward_attempt_cap(tmp_path):
+    env, calls = environment(tmp_path), []
+    config = R.configuration(env)
+    fail = ("Seon", "municipal")
+
+    class Crash(BaseException):
+        pass
+
+    def crashed(*args, **kwargs):
+        raise Crash()
+
+    with pytest.raises(Crash):
+        R.run_once(environ=env, collectors=(crashed, crashed), clock=ticking())
+    assert R._read_state(config.state_path)["attempts"] == 1
+    for attempt in (1, 2):
+        when = NOW + timedelta(hours=2 * attempt, seconds=1)
+        result = R.run_once(environ=env, collectors=collectors(calls, fail=fail), clock=ticking(when))
+        assert result["status"] == "partial"
+    assert R._read_state(config.state_path)["attempts"] == R.MAX_ATTEMPTS_PER_DAY
+    count = len(calls)
+    capped = NOW + timedelta(hours=2 * (R.MAX_ATTEMPTS_PER_DAY + 1), seconds=1)
+    assert R.run_once(environ=env, collectors=collectors(calls, fail=fail), clock=ticking(capped)) == {"status": "not-due"}
+    assert len(calls) == count
+
+
+def test_version_one_state_is_read_as_one_attempt_and_cap_still_applies(tmp_path):
+    env, calls = environment(tmp_path), []
+    config = R.configuration(env)
+    fail = ("Seon", "municipal")
+    assert R.run_once(environ=env, collectors=collectors(calls, fail=fail), clock=ticking())["status"] == "partial"
+    stored = json.loads(config.state_path.read_text())
+    assert stored["schema_version"] == 2 and stored.pop("attempts") == 1
+    stored["schema_version"] = 1  # A pre-cap state file, as left by an older deployment.
+    config.state_path.write_text(json.dumps(stored, indent=2) + "\n")
+    assert R._read_state(config.state_path)["attempts"] == 1
+    for attempt in (1, 2):
+        when = NOW + timedelta(hours=2 * attempt, seconds=1)
+        result = R.run_once(environ=env, collectors=collectors(calls, fail=fail), clock=ticking(when))
+        assert result["status"] == "partial"
+    count = len(calls)
+    capped = NOW + timedelta(hours=2 * 3, seconds=1)
+    assert R.run_once(environ=env, collectors=collectors(calls, fail=fail), clock=ticking(capped)) == {"status": "not-due"}
+    assert len(calls) == count
+
+
+@pytest.mark.parametrize("bad", [-1, 4, "2", None])
+def test_malformed_state_attempts_are_refused(tmp_path, bad):
+    env, calls = environment(tmp_path), []
+    config = R.configuration(env)
+    R.run_once(environ=env, collectors=collectors(calls), clock=ticking())
+    stored = json.loads(config.state_path.read_text())
+    stored["attempts"] = bad
+    config.state_path.write_text(json.dumps(stored, indent=2) + "\n")
+    with pytest.raises(C.CollectionError):
+        R._read_state(config.state_path)
+
+
+@pytest.mark.parametrize("raw, expected", [
+    (None, R.KINDS),
+    ("", R.KINDS),
+    ("municipal", ("municipal",)),
+    (" municipal ", ("municipal",)),
+    ("municipal,canton-approvals", ("municipal", "canton-approvals")),
+    ("canton-approvals,municipal", ("municipal", "canton-approvals")),
+])
+def test_kinds_parsing_accepts_canonical_subsets(tmp_path, raw, expected):
+    changes = {} if raw is None else {R.PREFIX + "KINDS": raw}
+    assert R.configuration(environment(tmp_path, **changes)).kinds == expected
+
+
+@pytest.mark.parametrize("raw", ["foo", "municipal,", "municipal,municipal"])
+def test_kinds_parsing_rejects_unknown_blank_and_duplicate_entries(tmp_path, raw):
+    with pytest.raises(R.ConfigError):
+        R.configuration(environment(tmp_path, **{R.PREFIX + "KINDS": raw}))
+
+
+def test_kinds_municipal_only_skips_canton_approvals_and_narrows_selections(tmp_path):
+    env, calls = environment(tmp_path, **{R.PREFIX + "KINDS": "municipal"}), []
+    config = R.configuration(env)
+    selections = R._selections(config)
+    assert len(selections) == 3  # Seon + Menziken (municipal only) + the shared consultation selection.
+    assert all(selection.get("kind") != "canton-approvals" for selection in selections)
+    result = R.run_once(environ=env, collectors=collectors(calls), clock=ticking())
+    assert result == {"status": "success", "sources_succeeded": 3, "sources_failed": 0}
+    assert all(kind != "canton-approvals" for _, kind, _ in calls)
+
+
+def test_page_budget_scales_with_configured_kinds(tmp_path):
+    names = "Seon,Menziken,Baden,Reinach,Oberrohrdorf,Hausen AG,Beinwil am See,Aarau,Egliswil,Dintikon"
+    base = environment(tmp_path, **{R.PREFIX + "MUNICIPALITIES": names})
+    assert R.configuration({**base, R.PREFIX + "MAX_PAGES": "4"}).max_pages == 4
+    with pytest.raises(R.ConfigError):
+        R.configuration({**base, R.PREFIX + "MAX_PAGES": "5"})
+    only_municipal = {**base, R.PREFIX + "KINDS": "municipal"}
+    assert R.configuration({**only_municipal, R.PREFIX + "MAX_PAGES": "9"}).max_pages == 9
+    with pytest.raises(R.ConfigError):
+        R.configuration({**only_municipal, R.PREFIX + "MAX_PAGES": "10"})
+
+
+def test_digest_differs_between_kinds_settings(tmp_path):
+    env = environment(tmp_path)
+    default_digest = R.configuration(env).digest
+    municipal_only_digest = R.configuration({**env, R.PREFIX + "KINDS": "municipal"}).digest
+    assert default_digest != municipal_only_digest

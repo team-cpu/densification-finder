@@ -30,6 +30,10 @@ the notice's text:
                      verified_method and the dates it needs: auflage_from,
                      auflage_to, decided_on, approved_on, appeal_until,
                      rechtskraft_on, effective_on (`planning.Verified`)
+    coverage         a checked Geltungsbereich — gebiet or gemeinde —      optional
+                     with coverage_area (gebiet only), coverage_source,
+                     coverage_checked_on, coverage_method
+                     (`planning.Coverage`)
 
 A batch states what it covers: every publication of its Gemeinden — all of
 them only with an explicit `alle` — published from `covers_from` to
@@ -69,9 +73,11 @@ import planning as P
 #: A batch row's columns, in the order a spreadsheet template lists them.
 COLUMNS = ("pub_nr", "published_on", "authority", "rubric", "title", "url", "municipality",
            "canton_wide", "part", "part_nr", "stage", "stage_source", "verified_on", "verified_method",
-           *P._STAGE_DATES)
+           *P._STAGE_DATES, "coverage", "coverage_area", "coverage_source", "coverage_checked_on",
+           "coverage_method")
 _REQUIRED = ("pub_nr", "published_on", "authority", "title", "url")
 _CHECK_COLUMNS = ("stage_source", "verified_on", "verified_method", *P._STAGE_DATES)
+_COVERAGE_COLUMNS = ("coverage_area", "coverage_source", "coverage_checked_on", "coverage_method")
 _YES, _NO = {"ja", "yes", "true", "1", "x"}, {"", "nein", "no", "false", "0"}
 #: How many past imports the store's log keeps.
 LOG_LENGTH = 50
@@ -175,6 +181,30 @@ def normalise(raw, where="Zeile"):
                     except ValueError:
                         problems.append(f"{label}: {name} «{checked[name]}» ist kein Datum")
             record["verified"] = checked
+    scope = raw.get("coverage")
+    if isinstance(scope, str):
+        kind = scope.strip()
+        if kind:
+            scope = {"kind": kind, "area": text("coverage_area"), "source": text("coverage_source"),
+                     "checked_on": text("coverage_checked_on"), "method": text("coverage_method")}
+        elif any(text(name) for name in _COVERAGE_COLUMNS):
+            problems.append(f"{label}: Geltungsbereich-Angaben ohne coverage")
+            scope = None
+        else:
+            scope = None
+    elif scope is None and any(text(name) for name in _COVERAGE_COLUMNS):
+        problems.append(f"{label}: Geltungsbereich-Angaben ohne coverage")
+    if scope is not None:
+        if not isinstance(scope, dict):
+            problems.append(f"{label}: coverage ist kein Objekt")
+        else:
+            scope = {key: value for key, value in scope.items() if value not in (None, "")}
+            if "checked_on" in scope:
+                try:
+                    scope["checked_on"] = _day(scope["checked_on"])
+                except ValueError:
+                    problems.append(f"{label}: coverage checked_on «{scope['checked_on']}» ist kein Datum")
+            record["coverage"] = scope
     return {key: value for key, value in record.items() if value not in ("", None)}, problems
 
 

@@ -35,6 +35,67 @@ def render(preview=None, planning=None):
                                         preview=preview, planning=planning or PL.View(status="off"), today=NOW.date())
 
 
+def auto_view(*, items=None, municipality_queried=True, status="ok", sources=None):
+    return P.View(status=status, auto=True, municipality_queried=municipality_queried,
+                 items=[] if items is None else items,
+                 sources=[{"selection": {"provider": "amtsblatt.ag.ch", "kind": "municipal", "municipality": "Seon"},
+                          "last_success_at": NOW, "last_attempt_at": NOW, "error": "", "stale": False, "empty": False}]
+                 if sources is None else sources)
+
+
+def test_auto_mode_heading_intro_badge_link_and_meta_wording():
+    candidate = candidates()[0]
+    html = render(auto_view(items=[P.PreviewItem(candidate, auto=True)]))
+    assert "Gemeinde Seon · Publikationen im Amtsblatt" in html
+    assert "automatisch übernommen: Titel und Datum wie publiziert" in html
+    assert "Lokale Vorschau" not in html and "ausgewählte Publikationen" not in html
+    assert ('title="Automatisch übernommen — Titel und Datum wie publiziert, kein geprüfter '
+            'Verfahrensstand">Publikation</span>') in html
+    assert f'href="{candidate["url"]}" target="_blank" rel="noopener noreferrer"' in html
+    assert ">↗</a>" in html
+    assert "· 1 Publikation im Amtsblatt" in html
+    assert "ausgewählte Publikationen" not in html
+
+
+def test_auto_mode_empty_case_uses_municipal_last_success_date():
+    html = render(auto_view(items=[]))
+    assert ("Keine Publikationen von Seon in der Amtsblatt-Rubrik «Bau- und Nutzungsordnung» "
+            "(zuletzt abgefragt 06.10.2026).") in html
+
+
+def test_auto_mode_meta_uses_amtsblatt_wording_for_failed_or_stale_sources():
+    sources = [{"selection": {"provider": "amtsblatt.ag.ch", "kind": "municipal", "municipality": "Seon"},
+               "last_success_at": NOW, "last_attempt_at": NOW, "error": "boom", "stale": True, "empty": False}]
+    html = render(auto_view(sources=sources))
+    assert "Amtsblatt-Abfrage fehlgeschlagen" in html and "Amtsblatt-Stand veraltet" in html
+    assert "Vorschau-Abfrage fehlgeschlagen" not in html and "Vorschau veraltet" not in html
+
+
+def test_fallback_links_appear_when_municipality_not_queried_in_both_modes():
+    html_auto = render(auto_view(items=[], municipality_queried=False, sources=[]))
+    assert "Für Seon noch nicht automatisch abgefragt" in html_auto
+    assert "Amtsblatt-Suche: Seon, Bau- und Nutzungsordnung" in html_auto
+    html_manual = render(P.View(status="ok", municipality_queried=False))
+    assert "Für Seon noch nicht automatisch abgefragt" in html_manual
+    assert "Amtsblatt-Suche: Seon, Bau- und Nutzungsordnung" in html_manual
+
+
+def test_fallback_links_appear_on_preview_error_in_both_modes():
+    html_manual = render(P.View(status="error", error="Lokale Vorschau nicht lesbar."))
+    assert "Amtsblatt-Abfrage nicht lesbar" in html_manual
+    assert "Amtsblatt-Suche: Seon, Bau- und Nutzungsordnung" in html_manual
+    html_auto = render(P.View(status="error", error="x", auto=True))
+    assert "Amtsblatt-Abfrage nicht lesbar" in html_auto
+    assert "Amtsblatt-Suche: Seon, Bau- und Nutzungsordnung" in html_auto
+
+
+def test_auto_row_title_and_url_are_escaped():
+    candidate = {**candidates()[0], "title": '<script>"\'&'}
+    html = render(auto_view(items=[P.PreviewItem(candidate, auto=True)]))
+    assert "<script>" not in html
+    assert escape(candidate["title"]) in html
+
+
 def test_preview_off_preserves_existing_fallback_html_exactly():
     assert render() == render(P.View())
     assert "sind noch nicht angebunden" in render()
@@ -160,3 +221,87 @@ def test_regulation_card_defaults_to_swiss_calendar_after_utc_midnight_boundary(
     html = detail._regulation_card_html({"municipality": "Seon"}, [], None, "", preview=preview, planning=PL.View(status="off"))
     assert "beendet — heutiger Stand nicht geprüft" in html
     assert "Entwurf in Auflage" not in html
+
+
+def test_preview_unchecked_coverage_renders_no_scope_tag():
+    assert "detail-regulation-scope" not in render(view())
+
+
+@pytest.mark.parametrize("kind,area,label", [
+    ("gebiet", "Heidegrabe", "Nur Gebiet «Heidegrabe»"),
+    ("gemeinde", "", "Ganze Gemeinde"),
+])
+def test_preview_coverage_renders_the_scope_tag(kind, area, label):
+    preview = view()
+    candidate = preview.items[0].candidate
+    preview.items[0].coverage = PL.Coverage(kind, area, candidate["url"], NOW.date(), "Original checked <script>")
+    html = render(preview)
+    assert f'<span class="detail-regulation-scope">{escape(label)}</span>' in html
+    assert "Geltungsbereich geprüft am 06.10.2026: Original checked &lt;script&gt;" in html
+    assert "<script>" not in html
+    assert "Nachweis ↗" in html
+
+
+def test_preview_coverage_area_containing_markup_and_quotes_is_escaped():
+    preview = view()
+    candidate = preview.items[0].candidate
+    preview.items[0].coverage = PL.Coverage("gebiet", '<script>"\'&', candidate["url"], NOW.date(), "checked")
+    html = render(preview)
+    assert "<script>" not in html
+    assert escape("Nur Gebiet «<script>\"'&»") in html
+
+
+def test_preview_future_coverage_check_has_no_tag_but_the_note():
+    preview = view()
+    candidate = preview.items[0].candidate
+    preview.items[0].coverage = PL.Coverage("gemeinde", "", candidate["url"], NOW.date() + timedelta(days=1), "checked")
+    html = render(preview)
+    assert "detail-regulation-scope" not in html
+    assert "datiert nach dem" in html
+
+
+def test_preview_coverage_evidence_of_another_item_cannot_supply_a_scope_tag():
+    preview = view()
+    preview.items[0].coverage = PL.Coverage("gemeinde", "", "https://evil.invalid/proof.pdf", NOW.date(), "Unrelated")
+    html = render(preview)
+    assert "detail-regulation-scope" not in html
+    assert "evil.invalid" not in html
+
+
+def test_auto_mode_hides_operator_notes_from_readers():
+    # Nobody reviews the canton consultations in production: their queue,
+    # the store's own error text and a second "not queried" note are the
+    # operator's business, not the investor's.
+    html = render(auto_view(items=[], municipality_queried=False, sources=[]).__class__(
+        status="ok", auto=True, municipality_queried=False, pending=3, changed=1))
+    assert "Noch zu prüfen" not in html
+    assert "Gemeindesuche noch nicht erfolgreich abgefragt" not in html
+    assert html.count("noch nicht automatisch abgefragt") == 1
+    error = render(P.View(status="error", error="Lokale Vorschau nicht lesbar.", auto=True))
+    assert "Lokale Vorschau nicht lesbar." not in error
+    assert "Amtsblatt-Abfrage nicht lesbar" in error
+
+
+def test_auto_meta_counts_publications_in_german_plural():
+    one = P.PreviewItem(dict(candidates()[0], title="Eins"), auto=True)
+    two = P.PreviewItem(dict(candidates()[0], title="Zwei", source_id={"namespace": P.NS_AMTSBLATT, "value": "00.999.702"},
+                             url="https://amtsblatt.ag.ch/ekab/00.999.702/publikation/"), auto=True)
+    assert "· 1 Publikation im Amtsblatt" in render(auto_view(items=[one]))
+    assert "· 2 Publikationen im Amtsblatt" in render(auto_view(items=[one, two]))
+    assert "Amtsblatt-Abfrage nicht lesbar" in render(P.View(status="error", error="x", auto=True))
+
+
+def test_auto_row_authority_is_escaped():
+    item = P.PreviewItem(dict(candidates()[0], authority='Gemeinde <b>Seon</b> "&'), auto=True)
+    html = render(auto_view(items=[item]))
+    assert "<b>Seon</b>" not in html
+    assert escape('Gemeinde <b>Seon</b> "&') in html
+
+
+def test_auto_mode_never_counts_zero_for_a_gemeinde_nobody_queried():
+    html = render(auto_view(items=[], municipality_queried=False, sources=[]))
+    assert "0 Publikationen" not in html and "Verfahren: Übergangslösung" in html
+    assert "automatisch übernommen" not in html
+    assert "Amtsblatt-Suche: Seon, Bau- und Nutzungsordnung" in html
+    queried = render(auto_view(items=[]))
+    assert "· 0 Publikationen im Amtsblatt" in queried and "automatisch übernommen" in queried

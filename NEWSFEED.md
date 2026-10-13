@@ -668,6 +668,81 @@ in the local row; expired/unsupported current stages remain neutral
 local capabilities, not a production enablement, legal-coverage claim or new
 email subscription.
 
+## 9. Explicit Geltungsbereich (coverage) source proofs (2026-10-12)
+
+Besides a checked legal stage, a publication's checked Geltungsbereich — does
+a change concern only a named area (e.g. Gestaltungsplan «Heidegrabe» between
+Aarauerstrasse and Lenzburgerstrasse) or the whole Gemeinde — is shown only
+when a person checked it against a source, never read from a title or the
+existing `_INSTRUMENTS`/`_area` inference machinery, which stays off. Both
+data paths carry it: the store path's `planning.Coverage`/`planning._coverage`
+(set by `amtsblatt_import`'s `coverage`/`coverage_*` CSV columns or a nested
+JSON `coverage` object), and the separate `planning_preview coverage` batch,
+parallel to `planning_preview verify` — same per-item-and-source evidence
+boundary (`_evidence`), same batch atomicity, same CLI shape.
+
+Unlike a legal proof, a Geltungsbereich is never canton-wide: `coverage`
+requires an exact municipality, and a batch entry naming `"*"` or asserting
+canton-wide scope is refused. A row shows a small neutral pill next to its
+title — "Nur Gebiet «…»" for `kind: "gebiet"`, "Ganze Gemeinde" for
+`kind: "gemeinde"` — deliberately not styled with Philipp's stage colours, so
+it is never mistaken for a legal stage badge (`planning.coverage_tag`,
+`detail-regulation-scope`). It appears only while the check is not dated after
+the day shown; otherwise the row carries the "datiert nach" note and no tag.
+
+Metadata changes, exclusion/hold and territory removal invalidate
+Geltungsbereich proof exactly like legal proof (both collections share
+`_invalidate_legal`'s invalidation pass). Existing preview files without a
+`coverage` collection remain valid under the same schema version. Coverage
+rows, like legal proof, still do not enter PDF exports for the preview path;
+the store path's printed sheet carries the tag next to the title.
+
+## 10. Automatic municipal publications (2026-10-13)
+
+Philipp wants a Gemeinde's own planning publications shown automatically —
+headline, date and a link to the original — without a manual relevance review
+per publication, while a canton notice naming several Gemeinden (risk:
+attaching Reinach's plan to Seon's parcels) stays manual. `state_for` gets a
+second, independent gate behind `SCOPE_PLANNING_AUTO_MUNICIPAL`, exact value
+`"1"` only (fail closed on anything else, including a typo or unset).
+
+An item qualifies only when all of: the flag is on; the municipality has its
+own office IDs (`amtsblatt.authorities_for`) — a Gemeinde without one only gets
+a name `searchQuery`, which is not office-filtered and does not qualify; the
+item is a current member of that municipality's own `{"provider":
+"amtsblatt.ag.ch", "kind": "municipal", "municipality": M}` selection's last
+successful snapshot (never canton-approvals, never a www.ag.ch consultation);
+and the review state is "pending" (never reviewed) or "changed" with a stale
+review whose action was "include". A current or stale exclude/hold always
+wins — held and changed-with-stale-exclude are never auto-shown. An item
+already shown through the existing included-and-scoped path is never
+duplicated; the two states are mutually exclusive by construction, since
+"included" is not one of the two auto-eligible states. Auto items carry no
+legal-stage or Geltungsbereich proof (`verified=None, coverage=None`) and do
+not count toward `pending`/`changed` — the counts describe what is still
+queued for a person, and an auto-shown item is not.
+
+In `detail.py`, `preview.auto` (recorded on the `View` for the whole card) and
+`item.auto` (per item, since a reviewed-and-scoped item can appear in the same
+auto-mode card as auto items) switch the group heading, intro note, meta
+wording, badge title and the empty-case message to the automatic wording; a
+reviewed row keeps its original legal/coverage rendering unchanged either way.
+Fixed separately: the filtered Amtsblatt search links that `_fallback_rows`
+gives when there is no store at all had gone missing once any preview was
+enabled, even for a Gemeinde the preview never queried — `_preview_card_rows`
+now appends the same links, with a short note, whenever the municipality's own
+search has not yet succeeded or the preview itself cannot be read, in both the
+reviewed and the automatic display mode.
+
+The daily refresh fetches less for it (`planning_refresh.py`): at most three
+passes per Swiss day and configuration — before, one source that always failed
+(a Gemeinde whose search exceeds the page budget) made every source re-fetch
+every hour, all day — and `SCOPE_PLANNING_REFRESH_KINDS=municipal` drops the
+canton-approval searches that automatic mode never shows without review, which
+also lets ten Gemeinden use 9 pages each instead of 4. In automatic mode the
+card no longer shows the operator's review queue, the store's own error text or
+a second "not queried" note to readers.
+
 ## Open questions for Philipp
 
 * **Planned changes are requested.** Philipp has already asked for revisions

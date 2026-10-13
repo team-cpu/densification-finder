@@ -297,6 +297,52 @@ class ImporterTest(unittest.TestCase):
         self.assertEqual([P.stage_badge(p, TODAY)[0] for p in view.publications], ["genehmigt"])
         self.assertEqual([p.title for p in view.canton_publications], ["Teilrevision Baugesetz (BauG); Anhörung"])
 
+    def test_a_row_with_coverage_columns_is_nested_and_reaches_the_view(self):
+        result = self.run_import(self.batch([row(
+            "00.900.860", "2026-09-10", "Öffentliche Mitwirkung zum Gestaltungsplan «Heidegrabe»",
+            coverage="gebiet", coverage_area="Heidegrabe",
+            coverage_source="https://amtsblatt.ag.ch/ekab/00.900.860/pdf/",
+            coverage_checked_on="06.10.2026", coverage_method="Publikation gelesen")]))
+        self.assertTrue(result.ok, result.message)
+        stored = self.stored()["records"][0]
+        self.assertEqual(stored["coverage"], {
+            "kind": "gebiet", "area": "Heidegrabe",
+            "source": "https://amtsblatt.ag.ch/ekab/00.900.860/pdf/",
+            "checked_on": "2026-10-06", "method": "Publikation gelesen"})
+        view = P.state_for("Seon", [], path=self.store)
+        self.assertEqual([(p.coverage.kind, p.coverage.area) for p in view.publications],
+                         [("gebiet", "Heidegrabe")])
+
+    def test_coverage_columns_without_coverage_is_a_problem(self):
+        result = self.run_import(self.batch([row("00.900.861", "2026-09-10", "Gestaltungsplan Rain",
+                                                  coverage_area="Heidegrabe")]))
+        self.assertFalse(result.ok)
+        self.assertIn("Geltungsbereich-Angaben ohne coverage", result.message)
+
+    def test_a_json_batch_passes_through_a_nested_coverage_object(self):
+        path = os.path.join(self.folder.name, "batch.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"covers_from": "2026-09-01", "covers_until": "2026-10-05", "municipalities": ["Seon"],
+                       "source": "Adapter",
+                       "records": [dict(row("00.900.862", "2026-09-10", "Gestaltungsplan Rain"),
+                                        coverage={"kind": "gemeinde",
+                                                  "source": "https://amtsblatt.ag.ch/ekab/00.900.862/pdf/",
+                                                  "checked_on": "2026-10-06",
+                                                  "method": "Publikation gelesen"})]}, handle)
+        result = self.run_import(I.read_batch(path))
+        self.assertTrue(result.ok, result.message)
+        stored = self.stored()["records"][0]
+        self.assertEqual(stored["coverage"]["kind"], "gemeinde")
+        self.assertNotIn("area", stored["coverage"])
+
+    def test_a_bad_coverage_date_is_refused(self):
+        result = self.run_import(self.batch([row(
+            "00.900.863", "2026-09-10", "Gestaltungsplan Rain", coverage="gemeinde",
+            coverage_source="https://amtsblatt.ag.ch/ekab/00.900.863/pdf/",
+            coverage_checked_on="31.02.2026", coverage_method="Publikation gelesen")]))
+        self.assertFalse(result.ok)
+        self.assertIn("kein Datum", result.message)
+
     def test_a_json_batch_as_any_other_channel_would_write_it(self):
         path = os.path.join(self.folder.name, "batch.json")
         with open(path, "w", encoding="utf-8") as handle:

@@ -1245,6 +1245,138 @@ class VerifiedStageTest(unittest.TestCase):
         self.assertTrue(all(p.verified is None for p in pubs))
 
 
+def coverage_proof(kind, checked_on="2026-10-06", **extra):
+    base = {"kind": kind, "source": "https://amtsblatt.ag.ch/ekab/00.100.001/pdf/",
+            "checked_on": checked_on, "method": "Publikation gelesen"}
+    base.update(extra)
+    return base
+
+
+class CoverageFieldTest(unittest.TestCase):
+    """A Geltungsbereich a person checked against a source, for one
+    publication and one Gemeinde — never one read from a title."""
+
+    def test_a_valid_gebiet_check_is_accepted(self):
+        coverage, why = P._coverage(coverage_proof("gebiet", area="Heidegrabe"))
+        self.assertEqual(why, "")
+        self.assertEqual((coverage.kind, coverage.area), ("gebiet", "Heidegrabe"))
+
+    def test_a_valid_gemeinde_check_is_accepted(self):
+        coverage, why = P._coverage(coverage_proof("gemeinde"))
+        self.assertEqual(why, "")
+        self.assertEqual((coverage.kind, coverage.area), ("gemeinde", ""))
+
+    def test_gebiet_without_an_area_is_refused(self):
+        coverage, why = P._coverage(coverage_proof("gebiet"))
+        self.assertIsNone(coverage)
+        self.assertIn("area", why)
+
+    def test_gemeinde_with_an_area_is_refused(self):
+        coverage, why = P._coverage(coverage_proof("gemeinde", area="Heidegrabe"))
+        self.assertIsNone(coverage)
+        self.assertIn("nur für «gebiet»", why)
+
+    def test_an_area_over_60_characters_is_refused(self):
+        coverage, why = P._coverage(coverage_proof("gebiet", area="x" * 61))
+        self.assertIsNone(coverage)
+        self.assertIn("60", why)
+        ok, _ = P._coverage(coverage_proof("gebiet", area="x" * 60))
+        self.assertIsNotNone(ok)
+
+    def test_a_bad_source_is_refused(self):
+        coverage, why = P._coverage(coverage_proof("gemeinde", source="javascript:alert(1)"))
+        self.assertIsNone(coverage)
+        self.assertIn("source", why)
+
+    def test_method_is_required(self):
+        coverage, why = P._coverage(coverage_proof("gemeinde", method=""))
+        self.assertIsNone(coverage)
+        self.assertIn("method", why)
+
+    def test_checked_on_is_required_and_must_be_valid(self):
+        missing = {k: v for k, v in coverage_proof("gemeinde").items() if k != "checked_on"}
+        for raw in (missing, coverage_proof("gemeinde", checked_on="gestern")):
+            coverage, why = P._coverage(raw)
+            self.assertIsNone(coverage, raw)
+            self.assertIn("checked_on", why, raw)
+
+    def test_an_unknown_kind_lists_what_is_allowed(self):
+        coverage, why = P._coverage(coverage_proof("teil"))
+        self.assertIsNone(coverage)
+        self.assertIn("gebiet", why)
+        self.assertIn("gemeinde", why)
+
+    def test_a_non_dict_is_kein_objekt(self):
+        for raw in ("", [], 5, None):
+            coverage, why = P._coverage(raw)
+            self.assertIsNone(coverage, raw)
+            self.assertEqual(why, "kein Objekt", raw)
+
+
+class CoveragePublicationTest(unittest.TestCase):
+    """A publication's checked Geltungsbereich reaches the row only for a
+    municipality's own line — a kantonsweite row already covers the canton."""
+
+    def test_a_municipality_rows_coverage_is_carried_to_the_publication(self):
+        rec = dict(explicit("00.900.730", "2026-09-01", "Gemeinde Seon",
+                            "Öffentliche Mitwirkung zum Gestaltungsplan «Heidegrabe»",
+                            municipality="Seon"),
+                   coverage=coverage_proof("gebiet", area="Heidegrabe"))
+        pubs, problems = P.publications([rec])
+        self.assertEqual(problems, [])
+        self.assertEqual(len(pubs), 1)
+        self.assertEqual((pubs[0].coverage.kind, pubs[0].coverage.area), ("gebiet", "Heidegrabe"))
+
+    def test_a_canton_wide_row_refuses_coverage_and_reports_it(self):
+        rec = dict(explicit("00.900.731", "2026-09-15", "Departement Bau, Verkehr und Umwelt",
+                            "Teilrevision Baugesetz (BauG); Anhörung", canton_wide=True,
+                            rubric="Kanton / Anhörungs- und Mitwirkungsverfahren"),
+                   coverage=coverage_proof("gemeinde"))
+        pubs, problems = P.publications([rec])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("kantonsweite Zeile gilt für den Kanton", problems[0])
+        self.assertEqual(len(pubs), 1)
+        self.assertIsNone(pubs[0].coverage)
+
+    def test_an_invalid_coverage_is_a_problem_the_row_still_shown(self):
+        rec = dict(explicit("00.900.732", "2026-09-01", "Gemeinde Seon", "Gestaltungsplan «Rain»",
+                            municipality="Seon"),
+                   coverage=coverage_proof("gebiet"))  # gebiet without area
+        pubs, problems = P.publications([rec])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("geprüfter Geltungsbereich nicht übernommen", problems[0])
+        self.assertEqual(len(pubs), 1)
+        self.assertIsNone(pubs[0].coverage)
+
+
+class CoverageTagTest(unittest.TestCase):
+    """What the row shows for a checked Geltungsbereich, on the day drawn."""
+
+    def test_no_coverage_no_tag(self):
+        self.assertEqual(P.coverage_tag(None, TODAY), ("", ""))
+
+    def test_a_gebiet_check_is_tagged_with_its_area(self):
+        coverage = P.Coverage("gebiet", "Heidegrabe", "https://amtsblatt.ag.ch/ekab/00.100.001/pdf/",
+                              date(2026, 10, 1), "Publikation gelesen")
+        tag, note = P.coverage_tag(coverage, TODAY)
+        self.assertEqual(tag, "Nur Gebiet «Heidegrabe»")
+        self.assertIn("Geltungsbereich geprüft am 01.10.2026: Publikation gelesen", note)
+
+    def test_a_gemeinde_check_is_tagged_ganze_gemeinde(self):
+        coverage = P.Coverage("gemeinde", "", "https://amtsblatt.ag.ch/ekab/00.100.001/pdf/",
+                              date(2026, 10, 1), "Publikation gelesen")
+        tag, note = P.coverage_tag(coverage, TODAY)
+        self.assertEqual(tag, "Ganze Gemeinde")
+        self.assertIn("Geltungsbereich geprüft am 01.10.2026", note)
+
+    def test_a_check_dated_after_today_is_no_tag_but_a_note(self):
+        coverage = P.Coverage("gemeinde", "", "https://amtsblatt.ag.ch/ekab/00.100.001/pdf/",
+                              date(2026, 10, 6), "Publikation gelesen")
+        tag, note = P.coverage_tag(coverage, TODAY)
+        self.assertEqual(tag, "")
+        self.assertIn("Prüfung des Geltungsbereichs datiert nach dem 05.10.2026", note)
+
+
 class StoreSafetyTest(unittest.TestCase):
     def test_a_record_the_parser_trips_on_leaves_the_page_up(self):
         """Fields only the inference path uses are still parsed as the store
@@ -2119,6 +2251,14 @@ class CheckTest(unittest.TestCase):
         ok, lines = P.check(self.path, today=TODAY)
         self.assertFalse(ok)
         self.assertTrue(any("Stand 31.12.2026 liegt nach heute" in line for line in lines), lines)
+
+    def test_a_coverage_check_dated_after_today_fails_the_check(self):
+        self.write([dict(explicit("00.900.713", "2026-09-01", "Gemeinde Seon", "Gestaltungsplan «Rain»",
+                                  municipality="Seon"),
+                         coverage=coverage_proof("gemeinde", checked_on="2026-10-07"))])
+        ok, lines = P.check(self.path, today=TODAY)
+        self.assertFalse(ok)
+        self.assertTrue(any("Geltungsbereich geprüft am 07.10.2026, nach heute" in line for line in lines), lines)
 
     def test_a_clean_store_passes_and_says_what_it_holds(self):
         self.write(SEON)

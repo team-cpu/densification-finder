@@ -542,6 +542,21 @@ def stage_badge(pub, today) -> tuple:
     return None, f"Genehmigung verweigert am {proof.decided_on:%d.%m.%Y} · {checked}"
 
 
+def coverage_tag(coverage, today) -> tuple:
+    """(short tag, note) for a publication's checked Geltungsbereich on
+    `today` — only while the check is not dated after it. Never read from a
+    title: a named area («gebiet») or the whole Gemeinde («gemeinde»), only
+    for a Geltungsbereich a person checked against a source."""
+    if coverage is None:
+        return "", ""
+    if coverage.checked_on > today:
+        return "", f"Prüfung des Geltungsbereichs datiert nach dem {today:%d.%m.%Y} — für diesen Tag kein Beleg"
+    note = f"Geltungsbereich geprüft am {coverage.checked_on:%d.%m.%Y}: {coverage.method}"
+    if coverage.kind == "gebiet":
+        return f"Nur Gebiet «{coverage.area}»", note
+    return "Ganze Gemeinde", note
+
+
 def _decided(text, step, published_on) -> Optional[date]:
     """When the act a notice reports was decided: the date in "hat … am …"
     followed by this step's verb ("genehmigt" for an approval), else one in
@@ -744,6 +759,10 @@ _STAGE_DATES = ("auflage_from", "auflage_to", "decided_on", "approved_on", "appe
 _STAGE_NEEDS = {"auflage": ("auflage_from", "auflage_to"), "genehmigt": ("approved_on",),
                 "in_kraft": ("effective_on",), "verweigert": ("decided_on",)}
 
+#: What a person can check a publication's Geltungsbereich against: a named
+#: area only, or the whole Gemeinde.
+COVERAGE_KINDS = ("gebiet", "gemeinde")
+
 
 @dataclass(frozen=True)
 class Verified:
@@ -804,6 +823,48 @@ def _verified(raw):
 
 
 @dataclass(frozen=True)
+class Coverage:
+    """A Geltungsbereich a person checked against a source, for one
+    publication and one Gemeinde — never one read from a title: whether the
+    change concerns only a named area («gebiet», with `area`) or the whole
+    Gemeinde («gemeinde», `area` empty). `source` is the document that shows
+    it; `checked_on` says when, `method` how it was checked."""
+
+    kind: str
+    area: str
+    source: str
+    checked_on: date
+    method: str
+
+
+def _coverage(raw):
+    """(Coverage, "") — or (None, what is wrong with the check)."""
+    if not isinstance(raw, dict):
+        return None, "kein Objekt"
+    kind = str(raw.get("kind") or "").strip()
+    if kind not in COVERAGE_KINDS:
+        return None, f"kind «{kind}» unbekannt (erlaubt: {', '.join(COVERAGE_KINDS)})"
+    source = str(raw.get("source") or "").strip()
+    if not web_link(source):
+        return None, "source ist kein Web-Link"
+    method = _clean(raw.get("method"))
+    if not method:
+        return None, "method fehlt"
+    checked = _date(raw.get("checked_on"))
+    if not checked:
+        return None, "checked_on fehlt oder ist ungültig"
+    area = _clean(raw.get("area"))
+    if kind == "gebiet":
+        if not area:
+            return None, "area fehlt für «gebiet»"
+        if len(area) > 60:
+            return None, "area ist länger als 60 Zeichen"
+    elif area:
+        return None, "area nur für «gebiet»"
+    return Coverage(kind, area, source, checked, method), ""
+
+
+@dataclass(frozen=True)
 class Notice:
     """One Amtsblatt publication as the store holds it."""
 
@@ -826,6 +887,10 @@ class Notice:
     verified: Optional[Verified] = None
     #: Why a check on this row was not taken — reported, the row still shown.
     verification_problem: Optional[str] = None
+    coverage: Optional[Coverage] = None
+    #: Why a Geltungsbereich check on this row was not taken — reported, the
+    #: row still shown.
+    coverage_problem: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -855,6 +920,9 @@ class Publication:
     decided_on: Optional[date] = None
     #: A stage a person checked for this publication and this Gemeinde.
     verified: Optional[Verified] = None
+    #: A Geltungsbereich a person checked for this publication and this
+    #: Gemeinde.
+    coverage: Optional[Coverage] = None
 
     @property
     def key(self) -> str:
@@ -918,6 +986,16 @@ def _notice(record):
             why = "nur für eine Zeile mit Gemeinde (municipality) oder kantonsweit (canton_wide)"
         else:
             verified, why = _verified(record.get("verified"))
+    coverage, cov_why = None, ""
+    if record.get("coverage") is not None:
+        if not municipality or canton_wide:
+            # A Geltungsbereich names an area or "the whole Gemeinde" — only
+            # meaningful for a row that is one Gemeinde's; a kantonsweit row
+            # already covers the whole canton.
+            cov_why = ("nur für eine Zeile mit Gemeinde (municipality) — eine kantonsweite "
+                      "Zeile gilt für den Kanton")
+        else:
+            coverage, cov_why = _coverage(record.get("coverage"))
     return Notice(
         pub_nr=_clean(record.get("pub_nr")),
         published_on=published,
@@ -933,6 +1011,9 @@ def _notice(record):
         part_nr=part_nr,
         verified=verified,
         verification_problem=Problem(f"{label}: geprüfter Schritt nicht übernommen — {why}") if why else None,
+        coverage=coverage,
+        coverage_problem=(Problem(f"{label}: geprüfter Geltungsbereich nicht übernommen — {cov_why}")
+                          if cov_why else None),
     ), None
 
 
@@ -970,6 +1051,7 @@ def _publication(notice, municipality, level, subject, text, context="", decisio
         term_end=(_term_end(text) or _term_end(context)) if step == "planungszone" else None,
         decided_on=decided,
         verified=notice.verified,
+        coverage=notice.coverage,
     )
 
 
@@ -1107,6 +1189,8 @@ def publications(records):
             continue
         if notice.verification_problem:
             problems.append(notice.verification_problem)
+        if notice.coverage_problem:
+            problems.append(notice.coverage_problem)
         attributed, problem = _attribute(notice)
         if problem:
             problems.append(problem)
@@ -1961,6 +2045,10 @@ def check(path, today=None, stale_ok=False):
             ok = False
             lines.append(f"Problem: {pub.pub_nr} ({pub.municipality or 'kantonsweit'}): geprüft am "
                          f"{pub.verified.verified_on:%d.%m.%Y}, nach heute")
+        if pub.coverage and pub.coverage.checked_on > today:
+            ok = False
+            lines.append(f"Problem: {pub.pub_nr} ({pub.municipality or 'kantonsweit'}): Geltungsbereich "
+                         f"geprüft am {pub.coverage.checked_on:%d.%m.%Y}, nach heute")
     if store.stand > today:
         ok = False
         lines.append(f"Problem: Stand {store.stand:%d.%m.%Y} liegt nach heute")

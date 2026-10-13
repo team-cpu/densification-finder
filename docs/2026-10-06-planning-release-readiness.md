@@ -121,14 +121,24 @@ Configuration to prepare after that basis exists:
 
 ```text
 SCOPE_PLANNING_PREVIEW=/data/planning-preview.json
+SCOPE_PLANNING_AUTO_MUNICIPAL=1
 SCOPE_PLANNING_REFRESH_ENABLED=1
 SCOPE_PLANNING_REFRESH_MUNICIPALITIES=Seon,Menziken
+SCOPE_PLANNING_REFRESH_KINDS=municipal
 SCOPE_PLANNING_REFRESH_HOUR=8
 SCOPE_PLANNING_REFRESH_MAX_PAGES=5
 SCOPE_PLANNING_REFRESH_TIMEOUT=20
 SCOPE_PLANNING_REUSE_AUTHORIZED=1
 SCOPE_PLANNING_REUSE_REFERENCE=<actual approval or reviewed legal-basis reference>
 ```
+
+`SCOPE_PLANNING_AUTO_MUNICIPAL=1` shows a Gemeinde's own office-filtered
+Amtsblatt municipal publications on the card automatically, without a manual
+per-item relevance review; canton notices naming several Gemeinden still
+require the existing manual review either way.
+`SCOPE_PLANNING_REFRESH_KINDS=municipal` stops the daily canton-approval
+searches nobody reviews in that mode (unset = both kinds) and doubles the page
+budget per Gemeinde; at most three passes run per Swiss day.
 
 Leave `SCOPE_PLANNING_PUBLICATIONS` and `SCOPE_PLANNING_INFERENCE` unset for this
 preview path. Do not copy an invented permission reference or enable a live

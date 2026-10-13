@@ -359,9 +359,16 @@ Philipp's own rate settles it.
   store (`SCOPE_PLANNING_PUBLICATIONS`) the publication rows appear, filled by
   `python -m amtsblatt_import` from a batch an operator wrote (below); the card
   says what the list covers and since when, and warns when it is more than a
-  week old or its last update failed — the last valid list stays. Tested with
+  week old or its last update failed — the last valid list stays. Whether a
+  row concerns only a named area or the whole Gemeinde is shown (a neutral
+  pill next to the title) only when a person checked it against the source
+  (`coverage`), never read from the title. Tested with
   real publications for Seon, Oberrüti, Killwangen and Hallwil on 2026-10-06
-  (`NEWSFEED.md` §5); the store is not configured in production.
+  (`NEWSFEED.md` §5); the store is not configured in production. The opt-in
+  local preview below can instead show a Gemeinde's own municipal
+  publications automatically, without this per-item review, behind a
+  separate flag (`SCOPE_PLANNING_AUTO_MUNICIPAL`); canton notices still
+  require manual review either way.
 
   **The inference path is OFF.** It chains publications into revisions,
   derives a status of today from them (Philipp's "Entwurf in Auflage" and
@@ -488,8 +495,9 @@ whether Scope's use is such a case remains an open legal question
 Block E is built on both: OEREBlex live, the Amtsblatt as links until a
 publication store is configured. A store is filled by the importer from a CSV or
 JSON batch — one row per publication and Gemeinde, only number, office,
-Gemeinde, date, title, link and an optional checked stage; the contract is in
-`amtsblatt_import.py`:
+Gemeinde, date, title, link and an optional checked stage and an optional
+checked Geltungsbereich (does the change cover only a named area or the whole
+Gemeinde — never read from the title); the contract is in `amtsblatt_import.py`:
 
 ```bash
 .venv/bin/python -m amtsblatt_import path/to/publications.json batch.csv --von 2026-09-01 --bis 2026-10-05 --gemeinden Seon,Oberrüti --quelle "manuell aus amtsblatt.ag.ch"
@@ -620,6 +628,25 @@ directly. Existing OEREBlex rows and production publications continue to work;
 the same Amtsblatt ID is shown once when it is in both stores. The local preview
 is excluded from PDF exports.
 
+With `SCOPE_PLANNING_AUTO_MUNICIPAL=1` (any other or missing value, including a
+typo, is off — fail closed), a pending municipal notice can be shown
+automatically, without this per-item relevance review. It applies only to the
+municipality's own office-filtered Amtsblatt search (`amtsblatt.authorities_for`)
+— never its name-only search fallback for a Gemeinde without office IDs — and
+only to a notice that is a current member of that search's last successful
+result; a canton-approval or canton-consultation selection never qualifies, so
+a canton notice naming several Gemeinden still needs a person to attach it to
+the right one (the Reinach/Seon risk). A reviewer's exclude or hold, current or
+stale, always wins; a never-reviewed notice, or one whose only review is now
+stale and was itself an inclusion, is shown. An auto-shown row carries no legal
+stage or Geltungsbereich tag and does not count toward the pending/changed
+queue; a manually included and scoped notice still renders through the
+existing reviewed path once, never duplicated. The card's heading, intro and
+meta line read as Amtsblatt publications rather than a reviewed selection; the
+filtered Amtsblatt search links reappear as a fallback whenever the
+municipality's own search has not yet succeeded or the local preview itself
+cannot be read, in both display modes.
+
 An explicit refresh is available; it makes no requests during page rendering:
 
 ```bash
@@ -692,6 +719,34 @@ explicit verification is required. Proof for one municipality is never exposed
 to another. Existing version-1 preview files without legal proofs remain valid,
 and all preview rows remain excluded from PDF export.
 
+Explicit Geltungsbereich (coverage) verification is a separate operator command,
+parallel to `verify`:
+
+```bash
+python -m planning_preview coverage /tmp/scope-planning-preview-20261006/preview.json /tmp/scope-preview-coverage.json
+```
+
+The batch is a JSON list. Each entry is `{"source_id", "fingerprint",
+"municipality", "coverage"}` — `coverage` is `{"kind", "source", "checked_on",
+"method"}` plus `area` (required, at most 60 characters) when `kind` is
+`"gebiet"`; `kind: "gemeinde"` takes no `area`. There is no canton-wide
+Geltungsbereich: `municipality` is always required, one proof per reviewed
+municipality, and a batch naming `"*"` or asserting canton-wide scope is
+refused as a whole. Evidence must be the same Amtsblatt ID's publication/PDF
+or the same ag.ch consultation ID, exactly as for `verify`. `checked_on` is the
+actual Swiss review day, on or after the current metadata day and no later
+than the operation day; held, excluded, unreviewed, stale, duplicate or
+unscoped batches are refused. A row's Geltungsbereich is never read from its
+title — only from a person's checked source, shown as a neutral pill next to
+the title ("Nur Gebiet «…»" or "Ganze Gemeinde") and only while the check still
+supports it on the day shown (`planning.coverage_tag`).
+
+Metadata edits, exclusion, hold or territory removal invalidate Geltungsbereich
+proof exactly like legal proof; a new explicit `coverage` verification is
+required afterwards. Existing preview files without Geltungsbereich proofs
+remain valid (schema version unchanged), and coverage rows remain excluded
+from PDF export like every other preview row.
+
 `planning_refresh.py` is the prepared daily metadata scheduler. The existing
 `python -m scheduler` sidecar launches one background refresh worker independently
 of personal authentication and email settings. Collection remains **off** by
@@ -701,14 +756,23 @@ existing directory, 1–10 explicit comma-separated
 both `SCOPE_PLANNING_REUSE_AUTHORIZED=1` and a nonempty
 `SCOPE_PLANNING_REUSE_REFERENCE` documenting an obtained operational source-use
 basis. Setting these fields does not itself obtain permission. Do not enable
-them while that basis remains unresolved.
+them while that basis remains unresolved. `SCOPE_PLANNING_AUTO_MUNICIPAL` is
+independent of this scheduler: it only changes how `state_for` reads an
+already-collected store at render time and requires no collection, refresh or
+reuse-basis configuration of its own, and enabling the refresh does not turn
+it on.
 
 The daily hour defaults to 08:00 Europe/Zurich (including DST), with
 `SCOPE_PLANNING_REFRESH_HOUR` in 0–23. `SCOPE_PLANNING_REFRESH_MAX_PAGES` defaults
 to 5 (at most 20 per source and 100 search pages for the whole pass);
 `SCOPE_PLANNING_REFRESH_TIMEOUT` defaults to 20 seconds (at most 30). Each town
-gets its municipal and canton-approval searches; current canton consultations
-are fetched once for the entire pass. Each source has a fresh observation time
+gets its municipal and canton-approval searches — or only the kinds named in
+`SCOPE_PLANNING_REFRESH_KINDS` (comma-separated `municipal`, `canton-approvals`;
+unset = both); current canton consultations are fetched once for the entire
+pass. The page budget is `(kinds × towns + 1) × max pages ≤ 100`, so with
+`SCOPE_PLANNING_REFRESH_KINDS=municipal` ten towns may use 9 pages each instead
+of 4. Nobody reviews canton approvals in automatic mode, and the Amtsblatt's
+`robots.txt` disallows automated reading — fetch only what is shown. Each source has a fresh observation time
 and commits independently, so a failed source preserves its last good data,
 memberships and reviews. Sources still require manual queue review and legal
 verification. No provider bodies or credentials are written to scheduler logs.
@@ -717,7 +781,12 @@ verification. No provider bodies or credentials are written to scheduler logs.
 time; `STORE.refresh.lock` takes a nonblocking process lock. Successful passes
 are skipped for the same configuration/Swiss day after restarts. Failure or
 interrupted claims have at least a one-hour cooldown; completed failures wait
-one hour from completion. One refresh worker per scheduler loop avoids delaying
+one hour from completion. At most three passes run per Swiss day and
+configuration (the first plus two retries), counted when the claim is written,
+before any request — so a source that always fails (a search longer than the
+page budget) cannot re-fetch every source every hour. A configuration change
+starts a fresh count. The state file is schema version 2 (`attempts`); a
+version-1 file is read as one spent attempt. One refresh worker per scheduler loop avoids delaying
 reminders/digests. Existing explicit `planning_preview sync` is unchanged.
 
 ```bash

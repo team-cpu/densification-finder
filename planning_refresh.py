@@ -29,6 +29,9 @@ MAX_MUNICIPALITIES = 10
 MAX_SOURCE_PAGES = 20
 MAX_TOTAL_PAGES = 100
 RETRY_SECONDS = 3600
+# Robots.txt disallows automated reading; cap deterministic-failure retries per Swiss day.
+MAX_ATTEMPTS_PER_DAY = 3
+KINDS = ("municipal", "canton-approvals")
 
 
 class ConfigError(ValueError):
@@ -51,6 +54,7 @@ class Config:
     enabled: bool = False
     store: Path | None = None
     municipalities: tuple = ()
+    kinds: tuple = KINDS
     hour: int = 8
     max_pages: int = 5
     timeout: float = 20.0
@@ -66,7 +70,7 @@ class Config:
 
     @property
     def digest(self):
-        values = [str(self.store), self.municipalities, self.hour, self.max_pages, self.timeout, self.reference]
+        values = [str(self.store), self.municipalities, self.kinds, self.hour, self.max_pages, self.timeout, self.reference]
         return hashlib.sha256(json.dumps(values, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
@@ -89,6 +93,14 @@ def configuration(environ=None):
     except C.CollectionError as exc:
         raise ConfigError("Unknown refresh municipality") from exc
     _config_require(len(set(names)) == len(names), "Duplicate refresh municipality")
+    raw_kinds = env.get(PREFIX + "KINDS", "").strip()
+    if raw_kinds:
+        requested = [item.strip() for item in raw_kinds.split(",")]
+        _config_require(all(item in KINDS for item in requested) and len(set(requested)) == len(requested),
+                        "SCOPE_PLANNING_REFRESH_KINDS must be distinct values from municipal, canton-approvals")
+        kinds = tuple(sorted(requested, key=KINDS.index))
+    else:
+        kinds = KINDS
     try:
         hour = int(env.get(PREFIX + "HOUR", "8"))
         pages = int(env.get(PREFIX + "MAX_PAGES", "5"))
@@ -96,21 +108,27 @@ def configuration(environ=None):
     except (ValueError, TypeError) as exc:
         raise ConfigError("Invalid refresh hour/pages/timeout") from exc
     _config_require(0 <= hour <= 23, "Refresh hour must be 0–23 (Europe/Zurich)")
-    _config_require(1 <= pages <= MAX_SOURCE_PAGES and (2 * len(names) + 1) * pages <= MAX_TOTAL_PAGES,
-                    "Refresh page budget must be 1–20 per source and at most 100 pages per pass")
+    _config_require(1 <= pages <= MAX_SOURCE_PAGES and (len(kinds) * len(names) + 1) * pages <= MAX_TOTAL_PAGES,
+                    "Refresh page budget must be 1–20 per source and at most 100 pages per pass across configured kinds")
     _config_require(math.isfinite(timeout) and 0 < timeout <= 30, "Refresh timeout must be greater than 0 and at most 30 seconds")
     try:
         ZoneInfo("Europe/Zurich")
     except ZoneInfoNotFoundError as exc:
         raise ConfigError("Europe/Zurich timezone data is required") from exc
-    return Config(True, store, names, hour, pages, timeout, reference)
+    return Config(True, store, names, kinds, hour, pages, timeout, reference)
 
 
 def _state(value):
     P._keys(value, {"schema", "schema_version", "config_hash", "day", "status", "last_attempt_at", "last_finished_at",
-                    "retry_at", "successful_date", "successes", "failures"})
-    P._require(value["schema"] == SCHEMA and type(value["schema_version"]) is int and value["schema_version"] == 1,
+                    "retry_at", "successful_date", "successes", "failures"}, {"attempts"})
+    P._require(value["schema"] == SCHEMA and type(value["schema_version"]) is int and value["schema_version"] in (1, 2),
                "Refusing unrelated refresh state")
+    if value["schema_version"] == 1:
+        P._require("attempts" not in value, "Invalid refresh state version")
+        value = {**value, "attempts": 1}  # Legacy passes predate the cap; treat as one spent attempt for their day.
+    else:
+        P._require("attempts" in value, "Invalid refresh state version")
+    P._require(type(value["attempts"]) is int and 0 <= value["attempts"] <= MAX_ATTEMPTS_PER_DAY, "Invalid refresh attempts")
     P._require(isinstance(value["config_hash"], str) and re.fullmatch(r"[0-9a-f]{64}", value["config_hash"]), "Invalid refresh configuration hash")
     for name in ("day", "successful_date"):
         raw = value[name]
@@ -157,7 +175,8 @@ def check(config):
         except FileNotFoundError:
             continue
         P._require(stat.S_ISREG(info.st_mode), "Refresh/preview locks must be regular files; symlinks refused")
-    return {"status": "configured", "municipalities": len(config.municipalities), "maximum_pages": (2 * len(config.municipalities) + 1) * config.max_pages}
+    return {"status": "configured", "municipalities": len(config.municipalities),
+            "maximum_pages": (len(config.kinds) * len(config.municipalities) + 1) * config.max_pages}
 
 
 def _write_state(path, value, expected):
@@ -186,7 +205,7 @@ def _write_state(path, value, expected):
 
 def _selections(config):
     return [{"provider": "amtsblatt.ag.ch", "kind": kind, "municipality": name}
-            for name in config.municipalities for kind in ("municipal", "canton-approvals")] + [
+            for name in config.municipalities for kind in config.kinds] + [
                 {"provider": "www.ag.ch", "mode": "current", "term": ""}]
 
 
@@ -211,14 +230,22 @@ def run_once(*, environ=None, clock=None, collectors=None):
         check(config)
         previous = _read_state(config.state_path)
         day = local.date().isoformat()
+        attempts_today = 0
         if previous:
-            if previous["status"] == "success" and previous["day"] == day and previous["config_hash"] == config.digest:
+            same_pass = previous["day"] == day and previous["config_hash"] == config.digest
+            if previous["status"] == "success" and same_pass:
                 return {"status": "not-due"}
+            if same_pass:
+                attempts_today = previous["attempts"]
+                # A config change starts a fresh count, exactly like it already bypasses the success skip above.
+                if attempts_today >= MAX_ATTEMPTS_PER_DAY:
+                    return {"status": "not-due"}
             if now < P._stamp(previous["retry_at"]):
                 return {"status": "cooldown"}
-        claim = {"schema": SCHEMA, "schema_version": 1, "config_hash": config.digest, "day": day, "status": "running",
+        claim = {"schema": SCHEMA, "schema_version": 2, "config_hash": config.digest, "day": day, "status": "running",
                  "last_attempt_at": P._time(now), "last_finished_at": None, "retry_at": P._time(now + timedelta(seconds=RETRY_SECONDS)),
-                 "successful_date": previous["successful_date"] if previous else None, "successes": 0, "failures": 0}
+                 "successful_date": previous["successful_date"] if previous else None, "successes": 0, "failures": 0,
+                 "attempts": attempts_today + 1}
         _write_state(config.state_path, claim, previous)
         municipal, canton = collectors or (C.collect_amtsblatt, C.collect_consultations)
         transport = C.Transport(timeout=config.timeout) if collectors is None else None

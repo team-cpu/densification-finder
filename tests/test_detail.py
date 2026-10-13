@@ -2496,6 +2496,73 @@ class RegulationOnPaperTest(unittest.TestCase):
         self.assertIn("13.12.2023", text)
 
 
+class CoverageScopeTagTest(unittest.TestCase):
+    """A publication's checked Geltungsbereich — never read from a title —
+    shown as a neutral pill next to the title, store path and PDF alike."""
+
+    def pub(self, coverage=None, **extra):
+        record = dict({
+            "pub_nr": "00.900.960", "published_on": "2026-09-10", "authority": "Gemeinde Möhlin",
+            "rubric": "Gemeinden / Bau- und Nutzungsordnung",
+            "title": "Öffentliche Mitwirkung zum Gestaltungsplan «Heidegrabe»", "text": "",
+            "url": "https://amtsblatt.ag.ch/ekab/00.900.960/pdf/", "municipality": "Möhlin",
+        }, **extra)
+        if coverage is not None:
+            record["coverage"] = coverage
+        pubs, problems = planning.publications([record])
+        self.assertEqual(problems, [], problems)
+        return planning.listing(pubs, "Möhlin")
+
+    def card(self, view, today=datetime.date(2026, 10, 6)):
+        return detail._regulation_card_html({"municipality": "Möhlin"}, [], None, "",
+                                             planning=view, today=today)
+
+    def test_a_gebiet_check_renders_the_scope_tag_and_the_nachweis_link(self):
+        view = self.pub(coverage={"kind": "gebiet", "area": "Heidegrabe",
+                                  "source": "https://amtsblatt.ag.ch/ekab/00.900.960/pdf/",
+                                  "checked_on": "2026-10-01", "method": "Publikation gelesen"})
+        card = self.card(view)
+        self.assertIn('<span class="detail-regulation-scope">Nur Gebiet «Heidegrabe»</span>', card)
+        self.assertIn("Geltungsbereich geprüft am 01.10.2026: Publikation gelesen", card)
+        self.assertIn('target="_blank" rel="noopener noreferrer">Nachweis ↗</a>', card)
+
+    def test_a_gemeinde_check_renders_ganze_gemeinde(self):
+        view = self.pub(coverage={"kind": "gemeinde",
+                                  "source": "https://amtsblatt.ag.ch/ekab/00.900.960/pdf/",
+                                  "checked_on": "2026-10-01", "method": "Publikation gelesen"})
+        card = self.card(view)
+        self.assertIn('<span class="detail-regulation-scope">Ganze Gemeinde</span>', card)
+
+    def test_an_unchecked_row_has_no_scope_tag(self):
+        card = self.card(self.pub())
+        self.assertNotIn("detail-regulation-scope", card)
+
+    def test_a_future_check_has_no_tag_but_the_datiert_nach_note(self):
+        view = self.pub(coverage={"kind": "gemeinde",
+                                  "source": "https://amtsblatt.ag.ch/ekab/00.900.960/pdf/",
+                                  "checked_on": "2026-10-07", "method": "Publikation gelesen"})
+        card = self.card(view)
+        self.assertNotIn("detail-regulation-scope", card)
+        self.assertIn("datiert nach dem 06.10.2026", card)
+
+    def test_an_area_containing_markup_and_quotes_is_escaped(self):
+        view = self.pub(coverage={"kind": "gebiet", "area": '<script>"\'&',
+                                  "source": "https://amtsblatt.ag.ch/ekab/00.900.960/pdf/",
+                                  "checked_on": "2026-10-01", "method": "Publikation gelesen"})
+        card = self.card(view)
+        self.assertNotIn("<script>", card)
+        self.assertIn(escape('Nur Gebiet «<script>"\'&»'), card)
+
+    def test_the_printed_line_carries_the_tag_without_brackets_or_asterisks_from_the_area(self):
+        view = self.pub(coverage={"kind": "gebiet", "area": "Heidegrabe [1]*",
+                                  "source": "https://amtsblatt.ag.ch/ekab/00.900.960/pdf/",
+                                  "checked_on": "2026-10-01", "method": "Publikation gelesen"})
+        printed = detail._printed_publication(view.publications[0], datetime.date(2026, 10, 6))
+        self.assertIn("Nur Gebiet «Heidegrabe 1» (geprüft 01.10.2026)", printed)
+        self.assertNotIn("[1]*", printed)
+        self.assertNotIn("Heidegrabe [1]", printed)
+
+
 class SwissDateBoundaryTest(unittest.TestCase):
     """Late in the UTC evening Switzerland can already be on the next day.
     Every block-E answer has to be computed on the Swiss
