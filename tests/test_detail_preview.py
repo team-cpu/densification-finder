@@ -305,3 +305,21 @@ def test_auto_mode_never_counts_zero_for_a_gemeinde_nobody_queried():
     assert "Amtsblatt-Suche: Seon, Bau- und Nutzungsordnung" in html
     queried = render(auto_view(items=[]))
     assert "· 0 Publikationen im Amtsblatt" in queried and "automatisch übernommen" in queried
+
+
+def test_auto_card_before_the_first_refresh_and_on_a_broken_store_through_state_for(tmp_path):
+    # Through the real state_for, not a hand-made View: production runs with a
+    # configured path whose file the first refresh has not written yet.
+    missing = P.state_for("Seon", tmp_path / "planning-preview.json", today=NOW.date(), auto=True)
+    assert missing.status == "ok" and missing.auto and not missing.municipality_queried
+    html = render(missing)
+    assert "Lokale Vorschau" not in html and "nicht lesbar" not in html
+    assert "Verfahren: Übergangslösung" in html and "Amtsblatt-Suche: Seon, Bau- und Nutzungsordnung" in html
+    assert P.state_for("Seon", tmp_path / "planning-preview.json", today=NOW.date(), auto=False).status == "error"
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json")
+    view = P.state_for("Seon", broken, today=NOW.date(), auto=True)
+    assert view.status == "error" and view.auto
+    html = render(view)
+    assert "Lokale Vorschau" not in html and "Amtsblatt-Abfrage nicht lesbar" in html
+    assert "Amtsblatt-Suche: Seon, Bau- und Nutzungsordnung" in html

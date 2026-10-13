@@ -695,11 +695,14 @@ def state_for(municipality, path=None, *, today=None, auto=None):
     path = (os.environ.get(ENV, "") if path is None else str(path or "")).strip()
     if not path:
         return View()
+    auto_mode = _auto_enabled() if auto is None else bool(auto)
     try:
         municipality = _municipality(municipality)
-        store = validate_store(_read(path))
+        # In automatic mode the first refresh writes the store: until then
+        # nothing has been queried, which is not an unreadable store. A
+        # missing file for a hand-run local preview stays an error.
+        store = validate_store(_read(path, missing=auto_mode))
         today = today or swiss_today()
-        auto_mode = _auto_enabled() if auto is None else bool(auto)
         source_keys = {key for key, source in store["selections"].items()
                        if source["selection"]["provider"] == "www.ag.ch" or source["selection"].get("municipality") == municipality}
         view = View(status="ok", auto=auto_mode)
@@ -737,7 +740,8 @@ def state_for(municipality, path=None, *, today=None, auto=None):
         view.items.sort(key=lambda item: item.candidate.get("published_on", item.candidate.get("publication_date", "")), reverse=True)
         return view
     except (C.CollectionError, OSError, TypeError, ValueError):
-        return View(status="error", error="Lokale Vorschau nicht lesbar. Die Quellen müssen erneut geprüft werden.")
+        return View(status="error", error="Lokale Vorschau nicht lesbar. Die Quellen müssen erneut geprüft werden.",
+                    auto=auto_mode)
 
 
 def main(argv=None):
