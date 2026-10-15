@@ -49,8 +49,14 @@ check, and both work.
    it.
 
 Step 3 is required: `paths.ensure_db()` will not overwrite a populated volume, so
-without it the deployment keeps the old data. Leaving the variable set would
-discard every cached ÖREB answer on each restart.
+without it the deployment keeps the old data. The reseed replaces only the
+parcel data (`parcel_results`, `runs`) with the image's copy. Everything people
+entered stays as it was — the team and its invitations, saved leads and contact
+progress, settings, saved searches, shared calculations, the mail outbox — and
+so do the ÖREB answers already paid for; the seed only adds answers the volume
+lacks. (Before October 2026 the reseed copied the whole file over the volume's,
+which wiped all of that.) Leaving the variable set only redoes the same swap on
+every restart.
 
 Before Streamlit starts, `bootstrap.py` seeds the volume when requested and
 applies additive schema migrations. Railway therefore cannot mark a deployment
