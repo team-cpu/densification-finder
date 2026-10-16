@@ -58,6 +58,24 @@ lacks. (Before October 2026 the reseed copied the whole file over the volume's,
 which wiped all of that.) Leaving the variable set only redoes the same swap on
 every restart.
 
+**Before the reseed, check which saved leads it would drop from the board.**
+The board joins saved leads back onto the parcel results, so a lead whose
+municipality was not part of the recompute — or whose parcel fell out of the
+new data — loses its card even though its row survives. To list those leads
+first, copy the volume's database and the freshly computed `results.sqlite`
+somewhere local and run, against the copies (never the live volume):
+
+    python3 scripts/report_unmatched_leads.py \
+        --live-db /path/to/volume-copy.sqlite \
+        --seed-db /path/to/new-results.sqlite \
+        --output /secure/path/unmatched-leads.csv
+
+It opens both files strictly read-only and prints only the count and the CSV
+path. The CSV contains names, phone numbers and e-mail addresses — personal
+data under the GDPR — so treat it like one: it is written with 0600
+permissions, never overwritten, and belongs in whatever secured channel the
+team already uses for lead data, not in the repository, a ticket, or a chat.
+
 Before Streamlit starts, `bootstrap.py` seeds the volume when requested and
 applies additive schema migrations. Railway therefore cannot mark a deployment
 healthy while its persistent database still has an older application schema.
