@@ -1,0 +1,8 @@
+{
+  "name": "densification-finder-railway-iac",
+  "private": true,
+  "description": "Local SDK for .railway/railway.ts (railway config plan/apply). Not part of the Streamlit app.",
+  "devDependencies": {
+    "railway": "3.16.0"
+  }
+}

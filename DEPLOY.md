@@ -6,8 +6,19 @@ local.
 
 ## Railway service settings
 
-The `Dockerfile` and `railway.json` are picked up automatically. Two things have
-to be set by hand.
+The `Dockerfile` is picked up automatically. Build, health check and restart
+settings, the volume mount and the variable names live in `.railway/railway.ts`
+(Railway Infrastructure as Code; it replaces `railway.json`, which Railway stops
+reading on 2026-12-01). Preview and apply it with the Railway CLI (Node >= 22.6):
+
+    cd .railway && npm ci --ignore-scripts && cd ..
+    railway config plan     # read-only
+    railway config apply    # changes the linked environment
+
+Variables are listed by name only. A variable added in the dashboard must be added
+to `.railway/railway.ts` too, or the next `railway config apply` deletes it.
+
+Two things have to be set by hand.
 
 **A volume, mounted at `/data`.** `DENSIFICATION_DB` and `DENSIFICATION_DATA`
 already point inside it from the Dockerfile, so nothing else needs configuring.

@@ -9,3 +9,4 @@ out/
 .env.*
 .streamlit/secrets.toml
 artifacts/
+.railway/
